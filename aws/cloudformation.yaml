@@ -1,14 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Full Subscriber Migration Portal Infrastructure
-
-Parameters:
-  DomainName:
-    Type: String
-    Description: Your domain name for frontend
-
 Resources:
-
-  # Frontend S3 bucket
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -16,37 +8,6 @@ Resources:
       AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
-
-  # Backend Lambda role
-  BackendLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
-
-  # Backend Lambda function
-  BackendLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}"
-      Handler: app.lambda_handler
-      Runtime: python3.11
-      Role: !GetAtt BackendLambdaRole.Arn
-      Code:
-        S3Bucket: !Ref FrontendBucket
-        S3Key: dummy.zip   # Placeholder, will update from GitHub Actions
-
-  # DynamoDB table for subscribers
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -58,8 +19,6 @@ Resources:
         - AttributeName: subscriberId
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
-
-  # DynamoDB table for audit logs
   AuditLogTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -75,20 +34,7 @@ Resources:
         - AttributeName: timestamp
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
-
 Outputs:
   FrontendURL:
     Description: URL for frontend S3 bucket
     Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
-
-  BackendLambdaName:
-    Description: Lambda function name
-    Value: !Ref BackendLambda
-
-  SubscriberTableName:
-    Description: DynamoDB table name
-    Value: !Ref SubscriberTable
-
-  AuditLogTableName:
-    Description: DynamoDB table name
-    Value: !Ref AuditLogTable
