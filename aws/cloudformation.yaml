@@ -12,7 +12,7 @@ Resources:
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"  # shorter
       AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
