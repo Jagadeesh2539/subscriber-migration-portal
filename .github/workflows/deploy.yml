@@ -1,52 +1,56 @@
-name: Deploy Full Project to AWS
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Subscriber Migration Portal Infrastructure (Minimal Working)
 
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+Resources:
 
-jobs:
-  deploy:
-    name: Deploy Subscriber Migration Portal
-    runs-on: ubuntu-latest
+  # Frontend S3 bucket (unique name)
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-subscriber-frontend-bucket"
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
 
-    steps:
-      # Step 1: Checkout the repository
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  # DynamoDB table for subscribers
+  SubscriberTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: SubscriberTable
+      AttributeDefinitions:
+        - AttributeName: subscriberId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: subscriberId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
 
-      # Step 2: Configure AWS credentials
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+  # DynamoDB table for audit logs
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AuditLogTable
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
 
-      # Step 3: Deploy CloudFormation stack
-      - name: Deploy Infrastructure
-        run: |
-          cd aws
-          aws cloudformation deploy \
-            --template-file cloudformation.yaml \
-            --stack-name subscriber-migration-stack \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
+Outputs:
+  FrontendURL:
+    Description: URL for frontend S3 bucket
+    Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
 
-      # Step 4: Deploy backend (example Lambda)
-      - name: Deploy Backend
-        run: |
-          cd backend
-          zip -r backend.zip .
-          aws lambda update-function-code \
-            --function-name subscriber-backend \
-            --zip-file fileb://backend.zip
+  SubscriberTableName:
+    Description: DynamoDB table name
+    Value: !Ref SubscriberTable
 
-      # Step 5: Deploy frontend to S3
-      - name: Deploy Frontend
-        run: |
-          cd frontend
-          npm install
-          npm run build
-          aws s3 sync build/ s3://${{ secrets.DOMAIN_NAME }}-frontend-bucket --delete
+  AuditLogTableName:
+    Description: DynamoDB table name
+    Value: !Ref AuditLogTable
