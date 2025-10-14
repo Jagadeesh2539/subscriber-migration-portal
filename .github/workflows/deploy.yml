@@ -1,28 +1,52 @@
-name: Deploy to AWS
+name: Deploy Full Project to AWS
 
 on:
   push:
     branches:
-      - main  # This runs whenever you push/commit to the main branch
+      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy Infrastructure
+    name: Deploy Subscriber Migration Portal
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout your GitHub repository
+      # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS credentials (uses your GitHub Secrets)
+      # Step 2: Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1  # 🔸 CHANGE THIS if your AWS region is different
+          aws-region: us-east-1
 
-      # Step 3: Verify AWS connection
-      - name: Verify AWS connection
-        run: aws sts get-caller-identity
+      # Step 3: Deploy AWS infrastructure (CloudFormation)
+      - name: Deploy Infrastructure
+        run: |
+          cd aws
+          aws cloudformation deploy \
+            --template-file infrastructure.yml \
+            --stack-name subscriber-migration-stack \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
+
+      # Step 4: Deploy backend (example Lambda)
+      - name: Deploy Backend
+        run: |
+          cd backend
+          zip -r backend.zip .
+          aws lambda update-function-code \
+            --function-name subscriber-backend \
+            --zip-file fileb://backend.zip
+
+      # Step 5: Deploy frontend (example S3)
+      - name: Deploy Frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+          aws s3 sync build/ s3://subscriber-frontend-bucket --delete
