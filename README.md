@@ -2,7 +2,7 @@
 
 This is a complete, production-ready full-stack application for managing and migrating subscriber data from a legacy system to a multi-region cloud environment. 
 
-## Features
+### Features
 
 - **Subscriber Provisioning:** CRUD operations on subscriber data.
 - **Intelligent Routing:** Automatically fetches data from either the cloud or the legacy system.
