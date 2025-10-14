@@ -29,7 +29,7 @@ jobs:
         run: |
           cd aws
           aws cloudformation deploy \
-            --template-file infrastructure.yml \
+            --template-file cloudformation.yaml \
             --stack-name subscriber-migration-stack \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
