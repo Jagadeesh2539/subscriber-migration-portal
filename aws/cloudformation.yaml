@@ -1,14 +1,166 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Subscriber Portal Infra (Global Tables, S3+Lambda, API, DNS Failover)'
+Description: 'Subscriber Portal - Multi-Region Infrastructure'
+
 Parameters:
+  Environment:
+    Type: String
+    Default: prod
+  
   DomainName:
     Type: String
-    Description: 'Your registered domain name (e.g., my-cool-portal.com)'
-  ApiSubdomain:
-    Type: String
-    Default: 'api'
-  PortalSubdomain:
-    Type: String
-    Default: 'portal'
+    Description: Your domain name for Route53
+
 Resources:
-  # ... [Paste the full cloudformation.yaml content here] ...
+  # Global DynamoDB Tables
+  SubscriberTable:
+    Type: AWS::DynamoDB::GlobalTable
+    Properties:
+      TableName: SubscriberTable
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      AttributeDefinitions:
+        - AttributeName: uid
+          AttributeType: S
+      KeySchema:
+        - AttributeName: uid
+          KeyType: HASH
+      Replicas:
+        - Region: us-east-1
+        - Region: us-west-2
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::GlobalTable
+    Properties:
+      TableName: AuditLogTable
+      BillingMode: PAY_PER_REQUEST
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      Replicas:
+        - Region: us-east-1
+        - Region: us-west-2
+
+  # Frontend hosting bucket
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'prod-frontend-${AWS::AccountId}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          ForwardedValues:
+            QueryString: false
+        PriceClass: PriceClass_100
+
+  # ECR Repository for backend
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: 'prod-subscriber-backend'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      
+  # Route53 Health Checks for failover
+  HealthCheckPrimary:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        FullyQualifiedDomainName: !Sub 'api-east.${DomainName}'
+        ResourcePath: /api/health
+        RequestInterval: 30
+        FailureThreshold: 3
+        Port: 443
+
+  HealthCheckSecondary:
+    Type: AWS::Route53::HealthCheck
+    Properties:
+      HealthCheckConfig:
+        Type: HTTPS
+        FullyQualifiedDomainName: !Sub 'api-west.${DomainName}'
+        ResourcePath: /api/health
+        RequestInterval: 30
+        FailureThreshold: 3
+        Port: 443
+
+  # Route53 Failover Records
+  PrimaryRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub '${DomainName}.'
+      Name: !Sub 'api.${DomainName}.'
+      Type: A
+      SetIdentifier: Primary
+      Failover: PRIMARY
+      AliasTarget:
+        HostedZoneId: Z35SXGWV525J0W # This is a placeholder HostedZoneId for a Load Balancer
+        DNSName: !Sub 'prod-alb-east.${DomainName}'
+      HealthCheckId: !Ref HealthCheckPrimary
+  
+  SecondaryRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub '${DomainName}.'
+      Name: !Sub 'api.${DomainName}.'
+      Type: A
+      SetIdentifier: Secondary
+      Failover: SECONDARY
+      AliasTarget:
+        HostedZoneId: Z35SXGWV525J0W # Placeholder
+        DNSName: !Sub 'prod-alb-west.${DomainName}'
+      HealthCheckId: !Ref HealthCheckSecondary
+
+Outputs:
+  FrontendURL:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Description: CloudFront URL for frontend
+  
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+    Description: S3 bucket name for frontend
+  
+  BackendRepositoryUri:
+    Value: !GetAtt BackendRepository.RepositoryUri
+    Description: ECR Repository URI for backend
