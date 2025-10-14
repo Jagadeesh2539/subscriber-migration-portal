@@ -1,0 +1,3 @@
+uid,imsi,msisdn,hlr_json,hss_json
+502122900002001,502122900002001,60132902001,"{""clip"":true}","{""subscriptionId"":""1""}"
+502122900002002,502122900002002,60132902002,"{""clip"":false}","{""subscriptionId"":""2""}"

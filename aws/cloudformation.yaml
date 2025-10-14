@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Subscriber Portal Infra (Global Tables, S3+Lambda, API, DNS Failover)'
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Your registered domain name (e.g., my-cool-portal.com)'
+  ApiSubdomain:
+    Type: String
+    Default: 'api'
+  PortalSubdomain:
+    Type: String
+    Default: 'portal'
+Resources:
+  # ... [Paste the full cloudformation.yaml content here] ...
