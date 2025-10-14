@@ -1,56 +1,30 @@
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Subscriber Migration Portal Infrastructure (Minimal Working)
+name: Deploy Subscriber Portal
 
-Resources:
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-  # Frontend S3 bucket (unique name)
-  FrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::AccountId}-subscriber-frontend-bucket"
-      AccessControl: PublicRead
-      WebsiteConfiguration:
-        IndexDocument: index.html
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
 
-  # DynamoDB table for subscribers
-  SubscriberTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: SubscriberTable
-      AttributeDefinitions:
-        - AttributeName: subscriberId
-          AttributeType: S
-      KeySchema:
-        - AttributeName: subscriberId
-          KeyType: HASH
-      BillingMode: PAY_PER_REQUEST
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-  # DynamoDB table for audit logs
-  AuditLogTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: AuditLogTable
-      AttributeDefinitions:
-        - AttributeName: id
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: S
-      KeySchema:
-        - AttributeName: id
-          KeyType: HASH
-        - AttributeName: timestamp
-          KeyType: RANGE
-      BillingMode: PAY_PER_REQUEST
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-Outputs:
-  FrontendURL:
-    Description: URL for frontend S3 bucket
-    Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
-
-  SubscriberTableName:
-    Description: DynamoDB table name
-    Value: !Ref SubscriberTable
-
-  AuditLogTableName:
-    Description: DynamoDB table name
-    Value: !Ref AuditLogTable
+      - name: Deploy CloudFormation
+        run: |
+          cd aws
+          aws cloudformation deploy \
+            --template-file cloudformation.yaml \
+            --stack-name subscriber-migration-stack \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
