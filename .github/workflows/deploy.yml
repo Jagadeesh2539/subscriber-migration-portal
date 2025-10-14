@@ -24,7 +24,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Step 3: Deploy AWS infrastructure (CloudFormation)
+      # Step 3: Deploy CloudFormation stack
       - name: Deploy Infrastructure
         run: |
           cd aws
@@ -43,10 +43,10 @@ jobs:
             --function-name subscriber-backend \
             --zip-file fileb://backend.zip
 
-      # Step 5: Deploy frontend (example S3)
+      # Step 5: Deploy frontend to S3
       - name: Deploy Frontend
         run: |
           cd frontend
           npm install
           npm run build
-          aws s3 sync build/ s3://subscriber-frontend-bucket --delete
+          aws s3 sync build/ s3://${{ secrets.DOMAIN_NAME }}-frontend-bucket --delete
