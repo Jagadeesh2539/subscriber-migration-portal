@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Subscriber Migration Portal Infrastructure
+Description: Full Subscriber Migration Portal Infrastructure
 
 Parameters:
   DomainName:
@@ -12,16 +12,45 @@ Resources:
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${DomainName}-frontend-bucket"
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
       AccessControl: PublicRead
       WebsiteConfiguration:
         IndexDocument: index.html
+
+  # Backend Lambda role
+  BackendLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  # Backend Lambda function
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref FrontendBucket
+        S3Key: dummy.zip   # Placeholder, will update from GitHub Actions
 
   # DynamoDB table for subscribers
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: SubscriberTable
+      TableName: !Sub "SubscriberTable-${AWS::AccountId}"
       AttributeDefinitions:
         - AttributeName: subscriberId
           AttributeType: S
@@ -34,7 +63,7 @@ Resources:
   AuditLogTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: AuditLogTable
+      TableName: !Sub "AuditLogTable-${AWS::AccountId}"
       AttributeDefinitions:
         - AttributeName: id
           AttributeType: S
@@ -47,34 +76,19 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
-  # Health check example (optional, can remove if not used)
-  HealthCheckPrimary:
-    Type: AWS::Route53::HealthCheck
-    Properties:
-      HealthCheckConfig:
-        IPAddress: "1.1.1.1"
-        Port: 80
-        Type: HTTP
-        ResourcePath: /
-
-  HealthCheckSecondary:
-    Type: AWS::Route53::HealthCheck
-    Properties:
-      HealthCheckConfig:
-        IPAddress: "1.1.1.2"
-        Port: 80
-        Type: HTTP
-        ResourcePath: /
-
 Outputs:
   FrontendURL:
     Description: URL for frontend S3 bucket
     Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
 
+  BackendLambdaName:
+    Description: Lambda function name
+    Value: !Ref BackendLambda
+
   SubscriberTableName:
-    Description: DynamoDB table name for subscribers
+    Description: DynamoDB table name
     Value: !Ref SubscriberTable
 
   AuditLogTableName:
-    Description: DynamoDB table name for audit logs
+    Description: DynamoDB table name
     Value: !Ref AuditLogTable
