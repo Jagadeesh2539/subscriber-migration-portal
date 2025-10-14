@@ -1,0 +1,28 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main  # This runs whenever you push/commit to the main branch
+
+jobs:
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout your GitHub repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Configure AWS credentials (uses your GitHub Secrets)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1  # 🔸 CHANGE THIS if your AWS region is different
+
+      # Step 3: Verify AWS connection
+      - name: Verify AWS connection
+        run: aws sts get-caller-identity
