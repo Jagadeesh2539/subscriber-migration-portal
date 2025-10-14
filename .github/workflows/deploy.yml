@@ -1,4 +1,4 @@
-name: Deploy Subscriber Portal
+name: Deploy Subscriber Migration Portal
 
 on:
   push:
@@ -11,9 +11,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # Step 1: Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Step 2: Configure AWS credentials
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -21,10 +23,30 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Deploy CloudFormation
+      # Step 3: Deploy CloudFormation stack
+      - name: Deploy CloudFormation Stack
         run: |
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
             --stack-name subscriber-migration-stack \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
+
+      # Step 4: Deploy backend Lambda code
+      - name: Deploy Backend Lambda
+        run: |
+          cd backend
+          zip -r backend.zip .
+          FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://backend.zip
+
+      # Step 5: Deploy frontend to S3
+      - name: Deploy Frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+          aws s3 sync build/ s3://${{ secrets.AWS_ACCOUNT_ID }}-subscriber-portal-us-east-1-${GITHUB_RUN_ID} --delete
