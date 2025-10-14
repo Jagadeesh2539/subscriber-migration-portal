@@ -1,6 +1,6 @@
 # Subscriber Migration Portal
 
-This is a complete, production-ready full-stack application for managing and migrating subscriber data from a legacy system to a multi-region cloud environment.
+This is a complete, production-ready full-stack application for managing and migrating subscriber data from a legacy system to a multi-region cloud environment. 
 
 ## Features
 
