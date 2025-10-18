@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+// REMOVED BrowserRouter from imports, leaving only routing components
+import { Routes, Route, Navigate, Link } from 'react-router-dom'; 
 import { AppBar, Toolbar, Typography, Button, Container, Box } from '@mui/material';
 import Login from './auth/Login';
 import SubscriberProvision from './provisioning/SubscriberProvision';
@@ -21,7 +22,8 @@ function App() {
   };
 
   return (
-    <BrowserRouter>
+    // Replaced <BrowserRouter> with a React Fragment <>
+    <> 
       <AppBar position="static">
         <Toolbar>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>Subscriber Portal</Typography>
@@ -61,7 +63,8 @@ function App() {
           </Routes>
         </Box>
       </Container>
-    </BrowserRouter>
+    </>
+    // Replaced </BrowserRouter> with a React Fragment </>
   );
 }
 
