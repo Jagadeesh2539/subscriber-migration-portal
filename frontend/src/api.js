@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+// CRITICAL FIX: Append /api here to ensure the full path 
+// (e.g., /prod/api/users/login) is correctly constructed 
+// even if the .env file only contains the stage (/prod).
+const baseURL = `${process.env.REACT_APP_API_URL}/api`;
+
 const API = axios.create({
-  baseURL: process.env.REACT_APP_API_URL
+  baseURL: baseURL
 });
 
 // Add Authorization header if token exists
