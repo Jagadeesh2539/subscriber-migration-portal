@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Paper, Button, Typography, LinearProgress, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, Alert, Box, Chip
+  TableCell, TableContainer, TableHead, TableRow, Alert, Box, Chip, IconButton
 } from '@mui/material';
 import { CloudUpload, Cancel } from '@mui/icons-material';
 import API from '../api';
