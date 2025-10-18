@@ -8,8 +8,10 @@ import os
 import serverless_wsgi
 
 # --- Configuration Constants (Must match frontend URL) ---
-# NOTE: This must be the HTTP (non-secure) origin since your S3 bucket uses HTTP website hosting.
-FRONTEND_ORIGIN = 'http://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com'
+# CRITICAL FIX: The origin is now read from the 'FRONTEND_DOMAIN_URL' environment variable.
+# This variable will be set by the CI/CD pipeline (see deploy.yml).
+# It must match the HTTPS URL of your CloudFront distribution (e.g., "https://portal.your-domain.com")
+FRONTEND_ORIGIN = os.getenv('FRONTEND_DOMAIN_URL')
 # -----------------------------------------------------------
 
 app = Flask(__name__)
@@ -19,8 +21,10 @@ app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'devsecret123')
 
 # 1. Function to attach ALL necessary CORS headers (used by both hooks)
 def add_cors_headers(response):
-    # Set explicit origin (required because Access-Control-Allow-Credentials is true)
-    response.headers['Access-Control-Allow-Origin'] = FRONTEND_ORIGIN
+    # CRITICAL FIX: Only set the Allow-Origin header if the environment variable is present.
+    if FRONTEND_ORIGIN:
+        response.headers['Access-Control-Allow-Origin'] = FRONTEND_ORIGIN
+        
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
