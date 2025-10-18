@@ -64,29 +64,28 @@ jobs:
             --zip-file fileb://backend/backend.zip
 
       # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX
-      # This forces API Gateway to recognize the new routing in app.py
-      # The API_ID is hardcoded based on the value provided (7rrghvsall).
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX (TEMPORARILY DISABLED)
+      # This step failed because the API ID was invalid/not found. 
+      # We skip it for now to let the code fixes proceed.
       # ---------------------
-      - name: Deploy API Gateway Stage
-        run: |
-          API_ID="7rrghvsall"
-          
-          # 1. Create a new deployment (Snapshot of the current API config)
-          DEPLOYMENT_ID=$(aws apigateway create-deployment \
-            --rest-api-id $API_ID \
-            --description "CI/CD route fix $(date +%s)" \
-            --query 'id' \
-            --output text --region us-east-1)
-
-          # 2. Update the 'prod' stage to point to the new deployment
-          aws apigateway update-stage \
-            --rest-api-id $API_ID \
-            --stage-name prod \
-            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
-            --region us-east-1
-            
-          echo "API Gateway Deployed: $DEPLOYMENT_ID to stage prod"
+      # - name: Deploy API Gateway Stage
+      #   run: |
+      #     API_ID="${{ secrets.REST_API_ID }}"
+      #     # 1. Create a new deployment (Snapshot of the current API config)
+      #     DEPLOYMENT_ID=$(aws apigateway create-deployment \
+      #       --rest-api-id $API_ID \
+      #       --description "CI/CD route fix $(date +%s)" \
+      #       --query 'id' \
+      #       --output text --region us-east-1)
+      #
+      #     # 2. Update the 'prod' stage to point to the new deployment
+      #     aws apigateway update-stage \
+      #       --rest-api-id $API_ID \
+      #       --stage-name prod \
+      #       --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
+      #       --region us-east-1
+      #
+      #     echo "API Gateway Deployed: $DEPLOYMENT_ID to stage prod"
 
       # ---------------------
       # Step 2: Build & Deploy Frontend
