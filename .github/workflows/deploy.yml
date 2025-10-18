@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS
+      # Step 2: Configure AWS credentials
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -33,32 +33,37 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # Step 4: Zip backend with dependencies
-      - name: Prepare Backend Lambda Package
+      # Step 4: Package backend Lambda
+      - name: Package Backend Lambda
+        working-directory: backend
         run: |
-          cd backend
-          # Clean previous packages
-          rm -rf lambda_package backend.zip
-          # Create folder for Lambda package
+          set -e
+          echo "Cleaning old package..."
+          rm -rf lambda_package backend.zip || true
           mkdir -p lambda_package
-          # Install dependencies into package
+
+          echo "Installing Python dependencies..."
           pip install --target ./lambda_package -r requirements.txt
-          # Copy all backend code
+
+          echo "Copying backend code..."
           cp *.py lambda_package/
-          # Zip everything
+
+          echo "Creating backend.zip..."
           cd lambda_package
           zip -r ../backend.zip .
           cd ..
-          # Update Lambda function
+
+          echo "Updating Lambda function..."
           FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://backend.zip
 
-      # Step 5: Build and deploy frontend
+      # Step 5: Deploy frontend
       - name: Deploy Frontend
+        working-directory: frontend
         run: |
-          cd frontend
+          set -e
           npm install
           npm run build
           aws s3 sync build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
