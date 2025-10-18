@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS credentials
+      # Step 2: Configure AWS
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -23,14 +23,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Step 3: Build & upload backend Lambda zip first
-      - name: Build & Upload Backend Lambda
-        run: |
-          cd backend
-          zip -r backend.zip .
-          aws s3 cp backend.zip s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1/backend.zip
-
-      # Step 4: Deploy CloudFormation stack (Lambda references uploaded zip)
+      # Step 3: Deploy CloudFormation stack
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -40,7 +33,29 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # Step 5: Deploy frontend static site
+      # Step 4: Zip backend with dependencies
+      - name: Prepare Backend Lambda Package
+        run: |
+          cd backend
+          # Clean previous packages
+          rm -rf lambda_package backend.zip
+          # Create folder for Lambda package
+          mkdir -p lambda_package
+          # Install dependencies into package
+          pip install --target ./lambda_package -r requirements.txt
+          # Copy all backend code
+          cp *.py lambda_package/
+          # Zip everything
+          cd lambda_package
+          zip -r ../backend.zip .
+          cd ..
+          # Update Lambda function
+          FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://backend.zip
+
+      # Step 5: Build and deploy frontend
       - name: Deploy Frontend
         run: |
           cd frontend
