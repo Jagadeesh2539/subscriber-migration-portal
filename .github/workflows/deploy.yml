@@ -64,6 +64,31 @@ jobs:
             --zip-file fileb://backend/backend.zip
 
       # ---------------------
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX
+      # This forces API Gateway to recognize the new routing in app.py
+      # The API_ID is hardcoded based on the value provided (7rrghvsall).
+      # ---------------------
+      - name: Deploy API Gateway Stage
+        run: |
+          API_ID="7rrghvsall"
+          
+          # 1. Create a new deployment (Snapshot of the current API config)
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id $API_ID \
+            --description "CI/CD route fix $(date +%s)" \
+            --query 'id' \
+            --output text --region us-east-1)
+
+          # 2. Update the 'prod' stage to point to the new deployment
+          aws apigateway update-stage \
+            --rest-api-id $API_ID \
+            --stage-name prod \
+            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
+            --region us-east-1
+            
+          echo "API Gateway Deployed: $DEPLOYMENT_ID to stage prod"
+
+      # ---------------------
       # Step 2: Build & Deploy Frontend
       # ---------------------
       - name: Install frontend dependencies
@@ -78,5 +103,5 @@ jobs:
 
       - name: Deploy frontend to S3
         run: |
-          # This step redeploys the frontend, which is needed to pick up the correct API URL
+          # This step redeploys the frontend, which is needed to pick up the correct API URL from the updated .env file
           aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
