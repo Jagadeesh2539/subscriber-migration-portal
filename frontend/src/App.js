@@ -20,8 +20,6 @@ function App() {
     setAuth(null);
   };
 
-  const PrivateRoute = ({ children }) => auth ? children : <Navigate to="/login" />;
-
   return (
     <BrowserRouter>
       <AppBar position="static">
@@ -36,13 +34,30 @@ function App() {
           )}
         </Toolbar>
       </AppBar>
+
       <Container>
         <Box sx={{ mt: 3 }}>
           <Routes>
             <Route path="/login" element={<Login setAuth={setAuth} />} />
-            <Route path="/provision" element={<PrivateRoute><SubscriberProvision /></PrivateRoute>} />
-            <Route path="/migration" element={<PrivateRoute><BulkMigration /></PrivateRoute>} />
-            <Route path="/" element={<Navigate to="/provision" />} />
+
+            {/* Protected routes */}
+            <Route
+              path="/provision"
+              element={auth ? <SubscriberProvision /> : <Navigate to="/login" />}
+            />
+            <Route
+              path="/migration"
+              element={auth ? <BulkMigration /> : <Navigate to="/login" />}
+            />
+
+            {/* Default route */}
+            <Route
+              path="/"
+              element={auth ? <Navigate to="/provision" /> : <Navigate to="/login" />}
+            />
+
+            {/* Catch-all 404 */}
+            <Route path="*" element={<Typography>Page Not Found</Typography>} />
           </Routes>
         </Box>
       </Container>
