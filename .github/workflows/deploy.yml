@@ -75,7 +75,7 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
 
-      # --- ★★★ ADD THIS DEBUGGING STEP ★★★ ---
+      # --- ★★★ THIS IS THE NEW DEBUGGING STEP ★★★ ---
       - name: DEBUG Check API_ID Structure
         run: |
           API_ID_VALUE="${{ secrets.REST_API_ID }}"
