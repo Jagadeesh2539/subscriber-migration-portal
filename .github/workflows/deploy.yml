@@ -23,7 +23,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Step 3: Deploy CloudFormation stack
+      # Step 3: Build & upload backend Lambda zip first
+      - name: Build & Upload Backend Lambda
+        run: |
+          cd backend
+          zip -r backend.zip .
+          aws s3 cp backend.zip s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1/backend.zip
+
+      # Step 4: Deploy CloudFormation stack (Lambda references uploaded zip)
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -33,17 +40,7 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # Step 4: Deploy backend Lambda code
-      - name: Deploy Backend Lambda
-        run: |
-          cd backend
-          zip -r backend.zip .
-          FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
-          aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
-            --zip-file fileb://backend.zip
-
-      # Step 5: Deploy frontend to S3
+      # Step 5: Deploy frontend static site
       - name: Deploy Frontend
         run: |
           cd frontend
