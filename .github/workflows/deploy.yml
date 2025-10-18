@@ -49,4 +49,4 @@ jobs:
           cd frontend
           npm install
           npm run build
-          aws s3 sync build/ s3://${{ secrets.AWS_ACCOUNT_ID }}-subscriber-portal-us-east-1-${GITHUB_RUN_ID} --delete
+          aws s3 sync build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
