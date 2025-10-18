@@ -1,6 +1,5 @@
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from auth import init_jwt
+# flask_cors is not imported here as CORS headers are handled by the after_request hook
+from flask import Flask, jsonify, request, current_app
 from users import user_bp
 from subscriber import prov_bp
 from migration import mig_bp
@@ -8,22 +7,48 @@ from audit import log_audit
 import os
 import serverless_wsgi
 
+# --- Configuration Constants (Must match frontend URL) ---
+# NOTE: This must be the HTTP (non-secure) origin since your S3 bucket uses HTTP website hosting.
+FRONTEND_ORIGIN = 'http://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com'
+# -----------------------------------------------------------
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'devsecret123')
 
-# We keep this for proper blueprint binding, but rely on @app.after_request for headers
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+# --- CORS & OPTIONS Preflight Fixes ---
 
-init_jwt(app)
+# 1. Function to attach ALL necessary CORS headers (used by both hooks)
+def add_cors_headers(response):
+    # Set explicit origin (required because Access-Control-Allow-Credentials is true)
+    response.headers['Access-Control-Allow-Origin'] = FRONTEND_ORIGIN
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    return response
 
-# Correct Blueprint paths
+# 2. BEFORE REQUEST hook to explicitly handle the browser's OPTIONS preflight check
+@app.before_request
+def handle_options_requests():
+    if request.method == 'OPTIONS':
+        # Create a default 200 response and apply the necessary headers
+        response = current_app.make_default_options_response()
+        return add_cors_headers(response)
+
+# 3. AFTER REQUEST hook to ensure all regular responses (GET/POST) also have headers
+@app.after_request
+def after_request_func(response):
+    return add_cors_headers(response)
+
+# --- Blueprint Registration (Corrected Pathing) ---
+# NOTE: The /api prefix is applied here to match the frontend URL structure: /prod/api/...
 app.register_blueprint(user_bp, url_prefix='/api/users')
 app.register_blueprint(prov_bp, url_prefix='/api/provision')
 app.register_blueprint(mig_bp, url_prefix='/api/migration')
 
-# Custom routes
+# --- Other App Routes (Corrected Pathing) ---
 @app.route('/api/provision/spml', methods=['POST'])
 def provision_spml_endpoint():
+    # This calls the method from the provision blueprint, ensuring it runs through the blueprint logic
     return prov_bp.add_spml_subscriber()
 
 @app.route('/api/health')
@@ -31,35 +56,13 @@ def health():
     log_audit('system', 'HEALTH_CHECK', {}, 'SUCCESS')
     return jsonify(status='OK', region=os.getenv('AWS_REGION', 'local')), 200
 
-# === ULTIMATE CORS FIX: Force headers onto every response ===
-@app.after_request
-def add_cors_headers(response):
-    # This guarantees the required header is returned in the Lambda response.
-    response.headers['Access-Control-Allow-Origin'] = 'http://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com, https://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, x-amz-date, x-api-key, x-amz-security-token'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, HEAD'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    return response
-
-# === MANDATORY ROBUST LAMBDA HANDLER ===
+# --- Lambda Handler (Entry Point Fix) ---
+# This is the function AWS Lambda executes (Handler: app.lambda_handler)
 def lambda_handler(event, context):
-    """
-    Entry point for AWS Lambda via serverless_wsgi. 
-    Includes guard against non-API Gateway events (like S3 or manual tests).
-    """
-    # Check if the event looks like an HTTP request (a quick check to bypass the manual test crash)
-    if 'resource' not in event and 'httpMethod' not in event:
-        print("Received non-HTTP event (likely manual test or S3 trigger). Skipping Flask execution.")
-        # If it's a non-HTTP event, we must return a valid Lambda response format if possible.
-        # But since it's a proxy integration, we just proceed with the serverless_wsgi call
-        # which will rely on the structure. The 'KeyError' still points to an event structure 
-        # that serverless_wsgi cannot parse, even after the guard.
-        
-        # We revert the explicit guard and stick to the standard, as the guard itself can break API Gateway flow.
-        pass
-
-    # Use the standard serverless_wsgi handler which expects API Gateway v1/v2 payload structure.
+    """Entry point for AWS Lambda."""
+    # Use serverless_wsgi to wrap the Flask app in the API Gateway environment
     return serverless_wsgi.handle_request(app, event, context)
 
 if __name__ == '__main__':
+    # Local development entry point
     app.run(host='0.0.0.0', port=5000, debug=True)
