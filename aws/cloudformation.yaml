@@ -1,4 +1,4 @@
-AWSTemplateFormatVersion: "2010-09-09"
+AWSTemplateFormatVersion: "2025-10-18"
 Description: Full Subscriber Migration Portal Infrastructure
 
 Parameters:
@@ -8,9 +8,9 @@ Parameters:
 
 Resources:
 
-  # ---------------------------------------------------------------------------
-  # S3 Bucket: Frontend static website hosting
-  # ---------------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # S3 Bucket: Frontend static website hosting (also stores Lambda zip)
+  # ----------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -23,6 +23,7 @@ Resources:
         IgnorePublicAcls: false
         RestrictPublicBuckets: false
 
+  # Public read policy for static website access
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -36,9 +37,9 @@ Resources:
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
-  # ---------------------------------------------------------------------------
-  # DynamoDB Tables
-  # ---------------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # DynamoDB Tables: Subscriber data & Audit logs
+  # ----------------------------------------------------------------------
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -67,9 +68,9 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
-  # ---------------------------------------------------------------------------
-  # IAM Role for Lambda
-  # ---------------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # IAM Role: Execution permissions for backend Lambda
+  # ----------------------------------------------------------------------
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -86,9 +87,9 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
 
-  # ---------------------------------------------------------------------------
-  # Lambda Function
-  # ---------------------------------------------------------------------------
+  # ----------------------------------------------------------------------
+  # Lambda Function: Backend business logic handler
+  # ----------------------------------------------------------------------
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -97,9 +98,12 @@ Resources:
       Runtime: python3.11
       Role: !GetAtt BackendLambdaRole.Arn
       Code:
-        S3Bucket: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
-        S3Key: backend.zip  # <-- points to the zip uploaded before CF deploy
+        S3Bucket: !Ref FrontendBucket
+        S3Key: backend.zip  # real uploaded backend zip
 
+# ----------------------------------------------------------------------
+# Outputs: Key resources exported for reference
+# ----------------------------------------------------------------------
 Outputs:
   FrontendURL:
     Description: URL of the deployed frontend (S3 static site)
