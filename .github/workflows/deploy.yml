@@ -63,29 +63,49 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend/backend.zip
 
+      # --- CRITICAL FIX: SET LAMBDA ENVIRONMENT VARIABLES ---
+      - name: Update Lambda Environment Variables
+        if: steps.cfn_outputs.outputs.function_name != ''
+        run: |
+          # This sets the frontend URL (for CORS) to the custom domain from secrets
+          # This MUST match the URL users access in their browser (e.g., https://portal.your-domain.com)
+          # I am assuming your full frontend URL is 'https://' + your domain name.
+          # If you use a subdomain like 'portal', change it to: "https://portal.${{ secrets.DOMAIN_NAME }}"
+          aws lambda update-function-configuration \
+            --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
+            --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
+
       # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX (TEMPORARILY DISABLED)
-      # This step failed because the API ID was invalid/not found. 
-      # We skip it for now to let the code fixes proceed.
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX (NOW ENABLED)
+      # This step is required to publish the new routes from app.py
       # ---------------------
-      # - name: Deploy API Gateway Stage
-      #   run: |
-      #     API_ID="${{ secrets.REST_API_ID }}"
-      #     # 1. Create a new deployment (Snapshot of the current API config)
-      #     DEPLOYMENT_ID=$(aws apigateway create-deployment \
-      #       --rest-api-id $API_ID \
-      #       --description "CI/CD route fix $(date +%s)" \
-      #       --query 'id' \
-      #       --output text --region us-east-1)
-      #
-      #     # 2. Update the 'prod' stage to point to the new deployment
-      #     aws apigateway update-stage \
-      #       --rest-api-id $API_ID \
-      #       --stage-name prod \
-      #       --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
-      #       --region us-east-1
-      #
-      #     echo "API Gateway Deployed: $DEPLOYMENT_ID to stage prod"
+      - name: Deploy API Gateway Stage
+        if: secrets.REST_API_ID != ''
+        run: |
+          API_ID="${{ secrets.REST_API_ID }}"
+          echo "Starting deployment for API Gateway: $API_ID"
+
+          # 1. Create a new deployment (Snapshot of the current API config)
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id $API_ID \
+            --description "CI/CD route fix $(date +%s)" \
+            --query 'id' \
+            --output text --region us-east-1)
+
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Failed to create deployment"
+            exit 1
+          fi
+          echo "Created Deployment ID: $DEPLOYMENT_ID"
+      
+          # 2. Update the 'prod' stage to point to the new deployment
+          aws apigateway update-stage \
+            --rest-api-id $API_ID \
+            --stage-name prod \
+            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
+            --region us-east-1
+      
+          echo "API Gateway stage 'prod' updated to deployment $DEPLOYMENT_ID"
 
       # ---------------------
       # Step 2: Build & Deploy Frontend
