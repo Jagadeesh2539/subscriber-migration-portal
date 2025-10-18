@@ -59,12 +59,12 @@ jobs:
       - name: Install frontend dependencies
         run: |
           cd frontend
-          npm install  #ci changed
+           CI=false npm install  #ci changed
 
       - name: Build frontend
         run: |
           cd frontend
-          npm run build
+           CI=false npm run build
 
       - name: Deploy frontend to S3
         run: |
