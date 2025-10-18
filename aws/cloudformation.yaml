@@ -17,7 +17,7 @@ Resources:
       BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
       WebsiteConfiguration:
         IndexDocument: index.html
-        ErrorDocument: index.html # <-- ADDED LINE FOR CLIENT-SIDE ROUTING
+        ErrorDocument: index.html # <-- The necessary line for client-side routing
       PublicAccessBlockConfiguration:
         BlockPublicAcls: false
         BlockPublicPolicy: false
@@ -36,4 +36,88 @@ Resources:
             Principal: "*"
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
-# ... (rest of the file remains the same)
+
+  # ---------------------------------------------------------------------
+  # DynamoDB tables
+  # ---------------------------------------------------------------------
+  SubscriberTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: subscriberId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: subscriberId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  # ---------------------------------------------------------------------
+  # IAM Role for Lambda
+  # ---------------------------------------------------------------------
+  BackendLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  # ---------------------------------------------------------------------
+  # Lambda function (placeholder at stack creation)
+  # ---------------------------------------------------------------------
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Lambda created"}
+
+# ---------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------
+Outputs:
+  FrontendURL:
+    Description: URL of the frontend
+    Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
+
+  SubscriberTableName:
+    Description: DynamoDB subscriber table
+    Value: !Ref SubscriberTable
+
+  AuditLogTableName:
+    Description: DynamoDB audit log table
+    Value: !Ref AuditLogTable
+
+  BackendLambdaName:
+    Description: Name of the backend Lambda
+    Value: !Ref BackendLambda
