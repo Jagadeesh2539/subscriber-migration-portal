@@ -1,9 +1,10 @@
 import axios from 'axios';
 
 const API = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api'
+  baseURL: process.env.REACT_APP_API_URL
 });
 
+// Add Authorization header if token exists
 API.interceptors.request.use(config => {
   const token = localStorage.getItem('token');
   if (token) {
@@ -12,6 +13,7 @@ API.interceptors.request.use(config => {
   return config;
 });
 
+// Global 401 handler
 API.interceptors.response.use(
   response => response,
   error => {
