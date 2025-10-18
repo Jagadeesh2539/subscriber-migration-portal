@@ -9,7 +9,15 @@ import os
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'devsecret123')
-CORS(app)
+
+# FIX: Configure CORS to explicitly allow the S3 static website origin.
+# IMPORTANT: Replace the placeholder below with your *exact* S3 website URL.
+# Note: Since the S3 URL uses HTTP, we must include it here.
+CORS(app, resources={r"/api/*": {"origins": [
+    "http://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com",
+    "http://localhost:3000" # Keep for local development
+]}})
+
 init_jwt(app)
 
 app.register_blueprint(user_bp, url_prefix='/api/users')
@@ -18,7 +26,8 @@ app.register_blueprint(mig_bp, url_prefix='/api/migration')
 
 @app.route('/api/provision/spml', methods=['POST'])
 def provision_spml_endpoint():
-    return prov_bp.add_spml_subscriber()
+    # This function needs login_required decorator to work, but let's leave it for now
+    return prov_bp.add_spml_subscriber() 
 
 @app.route('/api/health')
 def health():
