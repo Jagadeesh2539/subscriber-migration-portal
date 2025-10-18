@@ -76,13 +76,17 @@ jobs:
             --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
 
       # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX (NOW ENABLED)
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX (NOW ENABLED & CORRECTED)
       # This step is required to publish the new routes from app.py
       # ---------------------
       - name: Deploy API Gateway Stage
-        if: secrets.REST_API_ID != ''
+        # WORKFLOW FIX: Step-level 'if' checks the 'env' context, not 'secrets'
+        if: env.API_ID != ''
+        env:
+          # Pass the secret to an environment variable for this step
+          API_ID: ${{ secrets.REST_API_ID }}
         run: |
-          API_ID="${{ secrets.REST_API_ID }}"
+          # The $API_ID variable is now available from the 'env' block above
           echo "Starting deployment for API Gateway: $API_ID"
 
           # 1. Create a new deployment (Snapshot of the current API config)
