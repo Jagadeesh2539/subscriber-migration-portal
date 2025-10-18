@@ -8,16 +8,38 @@ Parameters:
 
 Resources:
 
-  # Frontend S3 bucket
+  # -------------------------------
+  # Frontend S3 bucket (static site)
+  # -------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"  # shorter
-      AccessControl: PublicRead
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
       WebsiteConfiguration:
         IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
 
+  # Allow public read access for frontend files
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  # -------------------------------
   # DynamoDB table for subscribers
+  # -------------------------------
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -30,7 +52,9 @@ Resources:
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
 
+  # -------------------------------
   # DynamoDB table for audit logs
+  # -------------------------------
   AuditLogTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -47,7 +71,9 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
-  # Backend Lambda role
+  # -------------------------------
+  # IAM role for Lambda backend
+  # -------------------------------
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -64,7 +90,9 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
 
-  # Backend Lambda function
+  # -------------------------------
+  # Lambda backend function
+  # -------------------------------
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -74,11 +102,11 @@ Resources:
       Role: !GetAtt BackendLambdaRole.Arn
       Code:
         S3Bucket: !Ref FrontendBucket
-        S3Key: dummy.zip  # Placeholder, will be updated from GitHub Actions
+        S3Key: dummy.zip  # Placeholder updated later by GitHub Actions
 
 Outputs:
   FrontendURL:
-    Description: URL for frontend S3 bucket
+    Description: URL for frontend S3 static website
     Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
 
   SubscriberTableName:
@@ -90,5 +118,5 @@ Outputs:
     Value: !Ref AuditLogTable
 
   BackendLambdaName:
-    Description: Backend Lambda function
+    Description: Backend Lambda function name
     Value: !Ref BackendLambda
