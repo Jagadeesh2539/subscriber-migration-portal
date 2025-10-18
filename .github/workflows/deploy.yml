@@ -21,14 +21,21 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Install backend dependencies and package
+      # ---------------------
+      # Step 1: Build & Deploy Backend Lambda
+      # ---------------------
+      - name: Install backend dependencies
         run: |
           cd backend
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
-          zip -r ../backend.zip . -x "venv/*" "__pycache__/*"
+
+      - name: Package backend
+        run: |
+          cd backend
+          zip -r backend.zip . -x "*.pyc" "__pycache__/*" "venv/*"
 
       - name: Deploy CloudFormation Stack
         run: |
@@ -39,17 +46,20 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      - name: Update backend Lambda function
+      - name: Update backend Lambda code
         run: |
           FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
-            --zip-file fileb://backend.zip
+            --zip-file fileb://backend/backend.zip
 
+      # ---------------------
+      # Step 2: Build & Deploy Frontend
+      # ---------------------
       - name: Install frontend dependencies
         run: |
           cd frontend
-          npm install
+          npm ci
 
       - name: Build frontend
         run: |
@@ -58,5 +68,4 @@ jobs:
 
       - name: Deploy frontend to S3
         run: |
-          cd frontend
-          aws s3 sync build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
+          aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
