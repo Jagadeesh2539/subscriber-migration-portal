@@ -25,16 +25,14 @@ jobs:
       # Step 1: Build & Deploy Backend Lambda
       # ---------------------
       - name: Setup Python
-        uses: actions/setup-python@v5 # Ensure Python is available for packaging
+        uses: actions/setup-python@v5 
         with:
-          python-version: '3.11' # Matches the Lambda runtime
+          python-version: '3.11' 
 
-      - name: Install and Package backend dependencies (THE CRITICAL FIX)
+      - name: Install and Package backend dependencies
         run: |
           cd backend
-          # The -t . flag installs dependencies directly into the current directory
           pip install --no-cache-dir -r requirements.txt -t .
-          # Zip the contents, including the newly installed Flask, etc.
           zip -r backend.zip . -x "*.pyc" "__pycache__/*" "*.git*"
           
       - name: Deploy CloudFormation Stack
@@ -46,8 +44,6 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # --- ROBUST LAMBDA CODE UPDATE STEPS ---
-      # This retrieves the correct, full function name for the update command.
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
@@ -63,7 +59,6 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend/backend.zip
 
-      # --- CRITICAL FIX: WAIT FOR THE UPDATE TO FINISH ---
       - name: Wait for Lambda function update to complete
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -72,52 +67,58 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- CRITICAL FIX: SET LAMBDA ENVIRONMENT VARIABLES ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
           # This sets the frontend URL (for CORS) to the custom domain from secrets
-          # This MUST match the URL users access in their browser (e.g., https://portal.your-domain.com)
-          # I am assuming your full frontend URL is 'https://' + your domain name.
-          # If you use a subdomain like 'portal', change it to: "https://portal.${{ secrets.DOMAIN_NAME }}"
           aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-            --environment "Variables={FRONTEND_DOMAIN_URL=https:://portal.${{ secrets.DOMAIN_NAME }}}"
+            --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
+
+      # --- ★★★ ADD THIS DEBUGGING STEP ★★★ ---
+      - name: DEBUG Check API_ID Structure
+        run: |
+          API_ID_VALUE="${{ secrets.REST_API_ID }}"
+          echo "Checking API_ID value structure..."
+          if [[ -z "$API_ID_VALUE" ]]; then
+            echo "::ERROR:: API_ID secret is EMPTY."
+            exit 1
+          elif [[ "$API_ID_VALUE" == *":"* ]]; then
+            echo "::ERROR:: API_ID CONTAINS A COLON. It is an ARN, not an ID."
+            echo "The value must be '7rrghvsall', but it is '$API_ID_VALUE'"
+            exit 1
+          else
+            echo "API_ID structure looks correct (no colons). Proceeding."
+          fi
 
       # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX (NOW ENABLED & CORRECTED)
-      # This step is required to publish the new routes from app.py
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX
       # ---------------------
       - name: Deploy API Gateway Stage
-        # WORKFLOW FIX: Step-level 'if' checks the 'env' context, not 'secrets'
+        # This step will only run if the DEBUG step above passes
         if: env.API_ID != ''
         env:
-          # Pass the secret to an environment variable for this step
           API_ID: ${{ secrets.REST_API_ID }}
         run: |
-          # The $API_ID variable is now available from the 'env' block above
           echo "Starting deployment for API Gateway: $API_ID"
-
-          # 1. Create a new deployment (Snapshot of the current API config)
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
             --rest-api-id $API_ID \
             --description "CI/CD route fix $(date +%s)" \
             --query 'id' \
             --output text --region us-east-1)
-
+          
           if [ -z "$DEPLOYMENT_ID" ]; then
             echo "Failed to create deployment"
             exit 1
           fi
           echo "Created Deployment ID: $DEPLOYMENT_ID"
-      
-          # 2. Update the 'prod' stage to point to the new deployment
+          
           aws apigateway update-stage \
             --rest-api-id $API_ID \
             --stage-name prod \
             --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
             --region us-east-1
-      
+          
           echo "API Gateway stage 'prod' updated to deployment $DEPLOYMENT_ID"
 
       # ---------------------
@@ -135,5 +136,4 @@ jobs:
 
       - name: Deploy frontend to S3
         run: |
-          # This step redeploys the frontend, which is needed to pick up the correct API URL from the updated .env file
           aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
