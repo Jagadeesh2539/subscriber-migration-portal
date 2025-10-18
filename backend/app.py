@@ -39,14 +39,15 @@ def handle_options_requests():
 def after_request_func(response):
     return add_cors_headers(response)
 
-# --- Blueprint Registration (Fixed Pathing) ---
-# NOTE: Removed the redundant '/api' prefix from all blueprints to align with API Gateway's proxy path.
+# --- Blueprint Registration (Corrected Pathing) ---
+# CRITICAL FIX: The redundant '/api' prefix has been removed from all blueprint registrations.
+# API Gateway handles the /api prefix, so Flask should only see the path segments immediately following it.
 app.register_blueprint(user_bp, url_prefix='/users')
 app.register_blueprint(prov_bp, url_prefix='/provision')
 app.register_blueprint(mig_bp, url_prefix='/migration')
 
-# --- Other App Routes (Fixed Pathing) ---
-# Also fixed the route for the SPML endpoint.
+# --- Other App Routes (Corrected Pathing) ---
+# CRITICAL FIX: The redundant '/api' prefix has been removed from explicit routes as well.
 @app.route('/provision/spml', methods=['POST'])
 def provision_spml_endpoint():
     # This calls the method from the provision blueprint, ensuring it runs through the blueprint logic
