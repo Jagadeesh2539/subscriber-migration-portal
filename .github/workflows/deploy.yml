@@ -11,19 +11,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure AWS credentials
-      - name: Configure AWS
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Step 3: Deploy CloudFormation stack
+      - name: Install backend dependencies and package
+        run: |
+          cd backend
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          zip -r ../backend.zip . -x "venv/*" "__pycache__/*"
+
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -33,37 +39,24 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # Step 4: Package backend Lambda
-      - name: Package Backend Lambda
-        working-directory: backend
+      - name: Update backend Lambda function
         run: |
-          set -e
-          echo "Cleaning old package..."
-          rm -rf lambda_package backend.zip || true
-          mkdir -p lambda_package
-
-          echo "Installing Python dependencies..."
-          pip install --target ./lambda_package -r requirements.txt
-
-          echo "Copying backend code..."
-          cp *.py lambda_package/
-
-          echo "Creating backend.zip..."
-          cd lambda_package
-          zip -r ../backend.zip .
-          cd ..
-
-          echo "Updating Lambda function..."
           FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
           aws lambda update-function-code \
             --function-name $FUNCTION_NAME \
             --zip-file fileb://backend.zip
 
-      # Step 5: Deploy frontend
-      - name: Deploy Frontend
-        working-directory: frontend
+      - name: Install frontend dependencies
         run: |
-          set -e
+          cd frontend
           npm install
+
+      - name: Build frontend
+        run: |
+          cd frontend
           npm run build
+
+      - name: Deploy frontend to S3
+        run: |
+          cd frontend
           aws s3 sync build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
