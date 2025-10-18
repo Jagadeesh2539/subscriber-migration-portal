@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { AppBar, Toolbar, Typography, Button, Container, Box } from '@mui/material';
-
 import Login from './auth/Login';
 import SubscriberProvision from './provisioning/SubscriberProvision';
 import BulkMigration from './migration/BulkMigration';
@@ -12,9 +11,7 @@ function App() {
   useEffect(() => {
     const token = localStorage.getItem('token');
     const user = localStorage.getItem('user');
-    if (token && user) {
-      setAuth(JSON.parse(user));
-    }
+    if (token && user) setAuth(JSON.parse(user));
   }, []);
 
   const handleLogout = () => {
@@ -23,17 +20,13 @@ function App() {
     setAuth(null);
   };
 
-  const PrivateRoute = ({ children }) => {
-    return auth ? children : <Navigate to="/login" />;
-  };
+  const PrivateRoute = ({ children }) => auth ? children : <Navigate to="/login" />;
 
   return (
     <BrowserRouter>
       <AppBar position="static">
         <Toolbar>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>
-            Subscriber Portal
-          </Typography>
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>Subscriber Portal</Typography>
           {auth && (
             <>
               <Button color="inherit" component={Link} to="/provision">Provisioning</Button>
@@ -43,7 +36,6 @@ function App() {
           )}
         </Toolbar>
       </AppBar>
-
       <Container>
         <Box sx={{ mt: 3 }}>
           <Routes>

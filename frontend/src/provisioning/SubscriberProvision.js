@@ -11,19 +11,21 @@ export default function SubscriberProvision() {
   const [subscribers, setSubscribers] = useState([]);
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [currentSub, setCurrentSub] = useState({
-    uid: '', imsi: '', msisdn: '', plan: '', status: 'active'
-  });
+  const [currentSub, setCurrentSub] = useState({ uid: '', imsi: '', msisdn: '', plan: '', status: 'active' });
   const [message, setMessage] = useState({ type: '', text: '' });
 
   const loadSubscribers = async () => {
     try {
       const { data } = await API.get('/provision/subscribers');
       setSubscribers(data.subscribers || []);
-    } catch (err) {
+    } catch {
       setMessage({ type: 'error', text: 'Failed to load subscribers' });
     }
   };
+
+  useEffect(() => {
+    loadSubscribers();
+  }, []);
 
   const handleSave = async () => {
     try {
@@ -36,8 +38,8 @@ export default function SubscriberProvision() {
       }
       setOpen(false);
       loadSubscribers();
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.msg || 'Operation failed' });
+    } catch {
+      setMessage({ type: 'error', text: 'Operation failed' });
     }
   };
 
@@ -47,7 +49,7 @@ export default function SubscriberProvision() {
         await API.delete(`/provision/subscriber/${uid}`);
         setMessage({ type: 'success', text: 'Subscriber deleted' });
         loadSubscribers();
-      } catch (err) {
+      } catch {
         setMessage({ type: 'error', text: 'Failed to delete' });
       }
     }
@@ -68,16 +70,10 @@ export default function SubscriberProvision() {
     <Paper sx={{ p: 3 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h5">Subscriber Management</Typography>
-        <Button variant="contained" startIcon={<Add />} onClick={() => openDialog()}>
-          Add Subscriber
-        </Button>
+        <Button variant="contained" startIcon={<Add />} onClick={() => openDialog()}>Add Subscriber</Button>
       </Box>
 
-      {message.text && (
-        <Alert severity={message.type} onClose={() => setMessage({ type: '', text: '' })} sx={{ mb: 2 }}>
-          {message.text}
-        </Alert>
-      )}
+      {message.text && <Alert severity={message.type} onClose={() => setMessage({ type: '', text: '' })} sx={{ mb: 2 }}>{message.text}</Alert>}
 
       <TableContainer>
         <Table>
@@ -92,7 +88,7 @@ export default function SubscriberProvision() {
             </TableRow>
           </TableHead>
           <TableBody>
-            {subscribers.map((sub) => (
+            {subscribers.map(sub => (
               <TableRow key={sub.uid}>
                 <TableCell>{sub.uid}</TableCell>
                 <TableCell>{sub.imsi}</TableCell>
@@ -112,38 +108,10 @@ export default function SubscriberProvision() {
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{editMode ? 'Edit Subscriber' : 'Add Subscriber'}</DialogTitle>
         <DialogContent>
-          <TextField
-            fullWidth
-            label="UID"
-            value={currentSub.uid}
-            onChange={(e) => setCurrentSub({ ...currentSub, uid: e.target.value })}
-            margin="normal"
-            disabled={editMode}
-            required
-          />
-          <TextField
-            fullWidth
-            label="IMSI"
-            value={currentSub.imsi}
-            onChange={(e) => setCurrentSub({ ...currentSub, imsi: e.target.value })}
-            margin="normal"
-            required
-          />
-          <TextField
-            fullWidth
-            label="MSISDN"
-            value={currentSub.msisdn}
-            onChange={(e) => setCurrentSub({ ...currentSub, msisdn: e.target.value })}
-            margin="normal"
-            required
-          />
-          <TextField
-            fullWidth
-            label="Plan"
-            value={currentSub.plan}
-            onChange={(e) => setCurrentSub({ ...currentSub, plan: e.target.value })}
-            margin="normal"
-          />
+          <TextField fullWidth label="UID" value={currentSub.uid} onChange={e => setCurrentSub({ ...currentSub, uid: e.target.value })} margin="normal" disabled={editMode} required />
+          <TextField fullWidth label="IMSI" value={currentSub.imsi} onChange={e => setCurrentSub({ ...currentSub, imsi: e.target.value })} margin="normal" required />
+          <TextField fullWidth label="MSISDN" value={currentSub.msisdn} onChange={e => setCurrentSub({ ...currentSub, msisdn: e.target.value })} margin="normal" required />
+          <TextField fullWidth label="Plan" value={currentSub.plan} onChange={e => setCurrentSub({ ...currentSub, plan: e.target.value })} margin="normal" />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
