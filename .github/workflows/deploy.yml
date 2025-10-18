@@ -63,6 +63,15 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend/backend.zip
 
+      # --- CRITICAL FIX: WAIT FOR THE UPDATE TO FINISH ---
+      - name: Wait for Lambda function update to complete
+        if: steps.cfn_outputs.outputs.function_name != ''
+        run: |
+          echo "Waiting for function ${{ steps.cfn_outputs.outputs.function_name }} to finish updating..."
+          aws lambda wait function-updated \
+            --function-name ${{ steps.cfn_outputs.outputs.function_name }}
+          echo "Function update complete."
+
       # --- CRITICAL FIX: SET LAMBDA ENVIRONMENT VARIABLES ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
@@ -73,7 +82,7 @@ jobs:
           # If you use a subdomain like 'portal', change it to: "https://portal.${{ secrets.DOMAIN_NAME }}"
           aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-            --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
+            --environment "Variables={FRONTEND_DOMAIN_URL=https:://portal.${{ secrets.DOMAIN_NAME }}}"
 
       # ---------------------
       # CRITICAL API GATEWAY REDEPLOYMENT FIX (NOW ENABLED & CORRECTED)
