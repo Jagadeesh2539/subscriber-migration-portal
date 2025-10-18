@@ -39,19 +39,20 @@ def handle_options_requests():
 def after_request_func(response):
     return add_cors_headers(response)
 
-# --- Blueprint Registration (Corrected Pathing) ---
-# NOTE: The /api prefix is applied here to match the frontend URL structure: /prod/api/...
-app.register_blueprint(user_bp, url_prefix='/api/users')
-app.register_blueprint(prov_bp, url_prefix='/api/provision')
-app.register_blueprint(mig_bp, url_prefix='/api/migration')
+# --- Blueprint Registration (Fixed Pathing) ---
+# NOTE: Removed the redundant '/api' prefix from all blueprints to align with API Gateway's proxy path.
+app.register_blueprint(user_bp, url_prefix='/users')
+app.register_blueprint(prov_bp, url_prefix='/provision')
+app.register_blueprint(mig_bp, url_prefix='/migration')
 
-# --- Other App Routes (Corrected Pathing) ---
-@app.route('/api/provision/spml', methods=['POST'])
+# --- Other App Routes (Fixed Pathing) ---
+# Also fixed the route for the SPML endpoint.
+@app.route('/provision/spml', methods=['POST'])
 def provision_spml_endpoint():
     # This calls the method from the provision blueprint, ensuring it runs through the blueprint logic
     return prov_bp.add_spml_subscriber()
 
-@app.route('/api/health')
+@app.route('/health')
 def health():
     log_audit('system', 'HEALTH_CHECK', {}, 'SUCCESS')
     return jsonify(status='OK', region=os.getenv('AWS_REGION', 'local')), 200
