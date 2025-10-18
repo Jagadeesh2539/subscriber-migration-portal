@@ -46,11 +46,22 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      - name: Update backend Lambda code
+      # NEW STEP: Get the correct Lambda Function Name from the stack output
+      - name: Get CloudFormation Outputs
+        id: cfn_outputs
         run: |
-          FUNCTION_NAME=subscriber-backend-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1
+          FUNCTION_NAME=$(aws cloudformation describe-stacks \
+            --stack-name subscriber-migration-stack-v3 \
+            --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" \
+            --output text)
+          echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
+        shell: /usr/bin/bash
+
+      - name: Update backend Lambda code
+        # Used the output from the previous step to dynamically set the function name
+        run: |
           aws lambda update-function-code \
-            --function-name $FUNCTION_NAME \
+            --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend/backend.zip
 
       # ---------------------
@@ -59,7 +70,7 @@ jobs:
       - name: Install frontend dependencies
         run: |
           cd frontend
-           CI=false npm install  #ci changed
+           CI=false npm install
 
       - name: Build frontend
         run: |
