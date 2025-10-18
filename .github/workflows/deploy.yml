@@ -46,7 +46,7 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # NEW STEP: Get the correct Lambda Function Name from the stack output
+      # FIX: Removed the explicit and error-prone shell path, relying on 'bash'
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
@@ -55,10 +55,9 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" \
             --output text)
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
-        shell: /usr/bin/bash
+        shell: bash # <-- THE FIX: Simply use 'bash'
 
       - name: Update backend Lambda code
-        # Used the output from the previous step to dynamically set the function name
         run: |
           aws lambda update-function-code \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
