@@ -1,3 +1,4 @@
+import serverless_wsgi # NEW IMPORT
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from auth import init_jwt
@@ -10,29 +11,31 @@ import os
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'devsecret123')
 
-# FIX: Configure CORS to explicitly allow the S3 static website origin.
-# IMPORTANT: Replace the placeholder below with your *exact* S3 website URL.
-# Note: Since the S3 URL uses HTTP, we must include it here.
-CORS(app, resources={r"/api/*": {"origins": [
-    "http://subscriber-portal-144395889420-us-east-1.s3-website-us-east-1.amazonaws.com",
-    "http://localhost:3000" # Keep for local development
-]}})
+# FIX 1: Allow all origins to resolve CORS issue in API Gateway environment
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 init_jwt(app)
 
-app.register_blueprint(user_bp, url_prefix='/api/users')
-app.register_blueprint(prov_bp, url_prefix='/api/provision')
-app.register_blueprint(mig_bp, url_prefix='/api/migration')
+# FIX 2: Register blueprints at the root path (e.g., /users, /provision) 
+# The API Gateway handles the /prod/ prefix. We must rely on the full path /users/login being matched.
+app.register_blueprint(user_bp, url_prefix='/users')
+app.register_blueprint(prov_bp, url_prefix='/provision')
+app.register_blueprint(mig_bp, url_prefix='/migration')
 
-@app.route('/api/provision/spml', methods=['POST'])
+# FIX 3: Clean up custom routes by removing the now-redundant /api prefix
+@app.route('/provision/spml', methods=['POST'])
 def provision_spml_endpoint():
-    # This function needs login_required decorator to work, but let's leave it for now
-    return prov_bp.add_spml_subscriber() 
+    return prov_bp.add_spml_subscriber()
 
-@app.route('/api/health')
+@app.route('/health')
 def health():
     log_audit('system', 'HEALTH_CHECK', {}, 'SUCCESS')
     return jsonify(status='OK', region=os.getenv('AWS_REGION', 'local')), 200
+
+# FIX 4: Add the mandatory handler function for AWS Lambda
+def lambda_handler(event, context):
+    """Entry point for AWS Lambda."""
+    return serverless_wsgi.handle_request(app, event, context)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
