@@ -24,19 +24,19 @@ jobs:
       # ---------------------
       # Step 1: Build & Deploy Backend Lambda
       # ---------------------
-      - name: Install backend dependencies
+      - name: Setup Python
+        uses: actions/setup-python@v5 # Ensure Python is available for packaging
+        with:
+          python-version: '3.11' # Matches the Lambda runtime
+
+      - name: Install and Package backend dependencies (THE CRITICAL FIX)
         run: |
           cd backend
-          python3 -m venv venv
-          source venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Package backend
-        run: |
-          cd backend
-          zip -r backend.zip . -x "*.pyc" "__pycache__/*" "venv/*"
-
+          # The -t . flag installs dependencies directly into the current directory
+          pip install --no-cache-dir -r requirements.txt -t .
+          # Zip the contents, including the newly installed Flask, etc.
+          zip -r backend.zip . -x "*.pyc" "__pycache__/*" "*.git*"
+          
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -46,7 +46,8 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # FIX: Removed the explicit and error-prone shell path, relying on 'bash'
+      # --- ROBUST LAMBDA CODE UPDATE STEPS ---
+      # This retrieves the correct, full function name for the update command.
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
@@ -55,7 +56,6 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" \
             --output text)
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
-        shell: bash # <-- THE FIX: Simply use 'bash'
 
       - name: Update backend Lambda code
         run: |
@@ -69,13 +69,14 @@ jobs:
       - name: Install frontend dependencies
         run: |
           cd frontend
-           CI=false npm install
+          CI=false npm install
 
       - name: Build frontend
         run: |
           cd frontend
-           CI=false npm run build
+          CI=false npm run build
 
       - name: Deploy frontend to S3
         run: |
+          # This step redeploys the frontend, which is needed to pick up the correct API URL
           aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
