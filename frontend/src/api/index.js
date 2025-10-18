@@ -1,9 +1,8 @@
 import axios from 'axios';
 
-// CRITICAL FIX: Append /api here to ensure the full path 
-// (e.g., /prod/api/users/login) is correctly constructed 
-// even if the .env file only contains the stage (/prod).
-const baseURL = `${process.env.REACT_APP_API_URL}/api`;
+// CRITICAL FIX: Base URL is now taken directly from the environment variable.
+// This assumes REACT_APP_API_URL ends in the API Gateway stage name (e.g., .../prod).
+const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const API = axios.create({
   baseURL: baseURL
