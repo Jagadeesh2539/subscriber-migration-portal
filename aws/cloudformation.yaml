@@ -41,9 +41,9 @@ Resources:
   # DynamoDB tables
   # ---------------------------------------------------------------------
   
-  # --- THIS IS THE CORRECTED RESOURCE ---
-  # It includes 'imsi' and 'msisdn' in AttributeDefinitions
-  # AND adds the GlobalSecondaryIndexes block.
+  # --- MODIFIED RESOURCE ---
+  # This version adds AttributeDefinitions for imsi and msisdn
+  # and includes the GlobalSecondaryIndexes block.
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
