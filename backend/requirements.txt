@@ -9,3 +9,4 @@ psycopg2-binary==2.9.5
 python-dotenv==1.0.0
 werkzeug==2.2.3
 serverless-wsgi
+PyMySQL==1.1.0
