@@ -40,6 +40,10 @@ Resources:
   # ---------------------------------------------------------------------
   # DynamoDB tables
   # ---------------------------------------------------------------------
+  
+  # --- MODIFIED RESOURCE ---
+  # Added AttributeDefinitions for imsi and msisdn
+  # Added GlobalSecondaryIndexes block
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -47,10 +51,27 @@ Resources:
       AttributeDefinitions:
         - AttributeName: subscriberId
           AttributeType: S
+        - AttributeName: imsi
+          AttributeType: S
+        - AttributeName: msisdn
+          AttributeType: S
       KeySchema:
         - AttributeName: subscriberId
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: IMSI-Index
+          KeySchema:
+            - AttributeName: imsi
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: MSISDN-Index
+          KeySchema:
+            - AttributeName: msisdn
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
 
   AuditLogTable:
     Type: AWS::DynamoDB::Table
@@ -204,4 +225,4 @@ Outputs:
   # NEW: Output the Invoke URL for the new API
   BackendApiUrl:
     Description: The public URL for the API Gateway prod stage
-    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Value: !Sub "https://{BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
