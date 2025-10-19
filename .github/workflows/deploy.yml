@@ -40,6 +40,14 @@ jobs:
           pip install --no-cache-dir -r requirements.txt -t .
           zip -r backend.zip . -x "*.pyc" "__pycache__/*" "*.git*"
           
+      - name: Install and Package MIGRATION backend
+        run: |
+          cd backend/migration_processor
+          cp ../bulk_ops.py . # Copy shared files
+          pip install --no-cache-dir -t .
+          zip -r processor.zip . -x "*.pyc" "__pycache__/*"
+
+      # --- THIS STEP IS NOW FIXED TO PASS THE DB PASSWORD ---
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -47,7 +55,9 @@ jobs:
             --template-file cloudformation.yaml \
             --stack-name subscriber-migration-stack-v3 \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
+            --parameter-overrides \
+              DomainName=${{ secrets.DOMAIN_NAME }} \
+              LegacyDBPassword=${{ secrets.LEGACY_DB_PASSWORD }}
 
       - name: Get CloudFormation Outputs
         id: cfn_outputs
@@ -60,15 +70,22 @@ jobs:
           API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
           API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
           FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue" --output text)
+          MIG_JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
+          MIG_UPLOAD_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
+          MIG_PROCESSOR_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorFunctionName'].OutputValue" --output text)
+          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
 
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
           echo "audit_table=$AUDIT_TABLE" >> $GITHUB_OUTPUT
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
           echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
+          echo "mig_jobs_table=$MIG_JOBS_TABLE" >> $GITHUB_OUTPUT
+          echo "mig_upload_bucket=$MIG_UPLOAD_BUCKET" >> $GITHUB_OUTPUT
+          echo "mig_processor_name=$MIG_PROCESSOR_NAME" >> $GITHUB_OUTPUT
+          echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
           
           echo "::notice:: NEW API URL: $API_URL"
-          echo "::notice:: FRONTEND URL: $FRONTEND_URL"
 
       - name: Update backend Lambda code
         run: |
@@ -76,14 +93,6 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend/backend.zip
 
-      - name: Wait for Lambda function update to complete
-        if: steps.cfn_outputs.outputs.function_name != ''
-        run: |
-          aws lambda wait function-updated \
-            --function-name ${{ steps.cfn_outputs.outputs.function_name }}
-          echo "Function update complete."
-
-      # This step requires LEGACY_DB_PASSWORD to be set in GitHub secrets
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -93,11 +102,26 @@ jobs:
               FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
-              PROV_MODE=dual_prov, \
-              LEGACY_DB_HOST=your-public-rds-endpoint.us-east-1.rds.amazonaws.com, \
-              LEGACY_DB_USER=your_db_user, \
-              LEGACY_DB_PASSWORD=${{ secrets.LEGACY_DB_PASSWORD }} \
+              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
+              MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
+              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }} \
             }"
+
+      - name: Upload MIGRATION Processor code to S3
+        run: |
+          aws s3 cp backend/migration_processor/processor.zip s3://${{ steps.cfn_outputs.outputs.frontend_url | sed 's/http:\/\///' | sed 's/.s3-website.*//' }}/processor.zip
+
+      - name: Update MIGRATION Processor Lambda code
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }} \
+            --s3-bucket ${{ steps.cfn_outputs.outputs.frontend_url | sed 's/http:\/\///' | sed 's/.s3-website.*//' }} \
+            --s3-key "processor.zip"
+
+      - name: Wait for Lambda function updates to complete
+        run: |
+          aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.function_name }}
+          aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }}
 
       - name: Deploy API Gateway Stage
         env:
@@ -114,15 +138,13 @@ jobs:
             echo "Failed to create deployment"
             exit 1
           fi
-          echo "Created Deployment ID: $DEPLOYMENT_ID"
           
           aws apigateway update-stage \
             --rest-api-id $API_ID \
             --stage-name prod \
-            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID \
-            --region us-east-1
+            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID
           
-          echo "API Gateway stage 'prod' updated to deployment $DEPLOYMENT_ID"
+          echo "API Gateway stage 'prod' updated"
 
       # ---------------------
       # Step 2: Build & Deploy Frontend
