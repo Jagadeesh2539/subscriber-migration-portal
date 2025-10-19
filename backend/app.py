@@ -4,24 +4,23 @@ from users import user_bp
 from subscriber import prov_bp
 from migration import mig_bp
 from audit import log_audit
+from auth import init_jwt  # <-- 1. IMPORT THE FUNCTION
 import os
 import serverless_wsgi
 
 # --- Configuration Constants (Must match frontend URL) ---
-# CRITICAL FIX: The origin is now read from the 'FRONTEND_DOMAIN_URL' environment variable.
-# This variable will be set by the CI/CD pipeline (see deploy.yml).
-# It must match the HTTPS URL of your CloudFront distribution (e.g., "https://portal.your-domain.com")
 FRONTEND_ORIGIN = os.getenv('FRONTEND_DOMAIN_URL')
 # -----------------------------------------------------------
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET', 'devsecret123')
 
+init_jwt(app)  # <-- 2. INITIALIZE THE JWT HOOK
+
 # --- CORS & OPTIONS Preflight Fixes ---
 
 # 1. Function to attach ALL necessary CORS headers (used by both hooks)
 def add_cors_headers(response):
-    # CRITICAL FIX: Only set the Allow-Origin header if the environment variable is present.
     if FRONTEND_ORIGIN:
         response.headers['Access-Control-Allow-Origin'] = FRONTEND_ORIGIN
         
@@ -34,7 +33,6 @@ def add_cors_headers(response):
 @app.before_request
 def handle_options_requests():
     if request.method == 'OPTIONS':
-        # Create a default 200 response and apply the necessary headers
         response = current_app.make_default_options_response()
         return add_cors_headers(response)
 
@@ -44,15 +42,12 @@ def after_request_func(response):
     return add_cors_headers(response)
 
 # --- Blueprint Registration (Corrected Pathing) ---
-# CRITICAL FIX: The redundant '/api' prefix has been removed from all blueprint registrations.
-# API Gateway handles the /api prefix, so Flask should only see the path segments immediately following it.
 app.register_blueprint(user_bp, url_prefix='/users')
 app.register_blueprint(prov_bp, url_prefix='/provision')
 app.register_blueprint(mig_bp, url_prefix='/migration')
 
 # --- Other App Routes (Corrected Pathing) ---
-# CRITICAL FIX: The redundant '/api' prefix has been removed from explicit routes as well.
-@app.route('/provision/spml', methods=['POST'])
+@app.route('/provision/spml', methods=['POST', 'OPTIONS'])
 def provision_spml_endpoint():
     # This calls the method from the provision blueprint, ensuring it runs through the blueprint logic
     return prov_bp.add_spml_subscriber()
@@ -63,10 +58,8 @@ def health():
     return jsonify(status='OK', region=os.getenv('AWS_REGION', 'local')), 200
 
 # --- Lambda Handler (Entry Point Fix) ---
-# This is the function AWS Lambda executes (Handler: app.lambda_handler)
 def lambda_handler(event, context):
     """Entry point for AWS Lambda."""
-    # Use serverless_wsgi to wrap the Flask app in the API Gateway environment
     return serverless_wsgi.handle_request(app, event, context)
 
 if __name__ == '__main__':
