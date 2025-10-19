@@ -44,14 +44,34 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
+      # --- INTEGRATION FIX: Get all required outputs from CloudFormation ---
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
+          STACK_NAME="subscriber-migration-stack-v3"
+          
           FUNCTION_NAME=$(aws cloudformation describe-stacks \
-            --stack-name subscriber-migration-stack-v3 \
+            --stack-name $STACK_NAME \
             --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" \
             --output text)
+          
+          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" \
+            --output text)
+            
+          AUDIT_TABLE=$(aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" \
+            --output text)
+
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
+          echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
+          echo "audit_table=$AUDIT_TABLE" >> $GITHUB_OUTPUT
+          
+          echo "Function Name: $FUNCTION_NAME"
+          echo "Subscriber Table: $SUBSCRIBER_TABLE"
+          echo "Audit Table: $AUDIT_TABLE"
 
       - name: Update backend Lambda code
         run: |
@@ -67,14 +87,19 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
+      # --- INTEGRATION FIX: Set all required environment variables on the Lambda ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
-          # This sets the frontend URL (for CORS) to the custom domain from secrets
           aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-            --environment "Variables={FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}}"
-
+            --environment "Variables={ \
+              FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}, \
+              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
+              AWS_REGION=us-east-1 \
+            }"
+            
       # --- ★★★ THIS IS THE NEW DEBUGGING STEP ★★★ ---
       - name: DEBUG Check API_ID Structure
         run: |
@@ -95,7 +120,6 @@ jobs:
       # CRITICAL API GATEWAY REDEPLOYMENT FIX
       # ---------------------
       - name: Deploy API Gateway Stage
-        # This step will only run if the DEBUG step above passes
         if: env.API_ID != ''
         env:
           API_ID: ${{ secrets.REST_API_ID }}
