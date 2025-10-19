@@ -18,7 +18,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-key-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
       - name: Check AWS Account ID
@@ -49,7 +49,6 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # --- THIS STEP IS NOW UPDATED TO GET THE FRONTEND URL ---
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
@@ -60,15 +59,13 @@ jobs:
           AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
           API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
           API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
-          
-          # --- ADDED THIS LINE ---
           FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue" --output text)
 
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
           echo "audit_table=$AUDIT_TABLE" >> $GITHUB_OUTPUT
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
-          echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT # Pass the new URL
+          echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
           
           echo "::notice:: NEW API URL: $API_URL"
           echo "::notice:: FRONTEND URL: $FRONTEND_URL"
@@ -86,7 +83,8 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- FIXED: Update Lambda Environment Variables (Added dual_prov and legacy DB vars) ---
+      # --- MODIFIED STEP ---
+      # This step now sets PROV_MODE=dual_prov and adds legacy DB variables.
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -104,7 +102,7 @@ jobs:
 
       - name: Deploy API Gateway Stage
         env:
-          API_ID: ${{ steps.cfn_outputs.outputs.api_id }} # Uses the new ID from CloudFormation
+          API_ID: ${{ steps.cfn_outputs.outputs.api_id }}
         run: |
           echo "Starting deployment for API Gateway: $API_ID"
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
