@@ -1,26 +1,21 @@
 import os
 import pymysql
 import pymysql.cursors
+import json
 
 # Get connection details from environment variables for local development.
-# --- FIX: Use 'host.docker.internal' to connect from WSL2/Docker to the Windows host ---
+# The defaults match your local Docker setup.
 DB_HOST = os.environ.get('LEGACY_DB_HOST', 'host.docker.internal') 
+DB_PORT = int(os.environ.get('LEGACY_DB_PORT', 3307)) # Using port 3307
 DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
 DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
 DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
-
-# --- NEW DEBUG PRINT ---
-print("--- LEGACY DB CONNECTION DETAILS ---")
-print(f"HOST: {DB_HOST}")
-print(f"USER: {DB_USER}")
-print(f"DB_NAME: {DB_NAME}")
-print("---------------------------------")
-# --- END DEBUG PRINT ---
 
 def get_connection():
     """Establishes a new database connection."""
     return pymysql.connect(
         host=DB_HOST,
+        port=DB_PORT,
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
@@ -59,8 +54,15 @@ def get_subscriber_by_any_id(identifier):
             """
             cursor.execute(sql, (identifier, identifier, identifier))
             result = cursor.fetchone()
-            # Convert boolean values (0/1) from MySQL to true/false for JSON
+            
             if result:
+                # Decode JSON string for pdp_contexts if it's not null
+                if result.get('pdp_contexts'):
+                    result['pdp_contexts'] = json.loads(result['pdp_contexts'])
+                else:
+                    result['pdp_contexts'] = []
+
+                # Convert boolean values (0/1) from MySQL to true/false for JSON
                 for key, value in result.items():
                     if value == 0:
                         result[key] = False
@@ -142,4 +144,5 @@ def delete_subscriber(uid):
         return True
     finally:
         conn.close()
+
 
