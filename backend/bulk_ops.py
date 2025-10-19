@@ -6,6 +6,7 @@ import boto3
 import os
 from io import StringIO
 from flask import current_app
+import legacy_db # Import to access real legacy data if configured
 
 # Global dictionary to track job statuses in memory (not persistent across Lambda invocations, but fine for simulation)
 JOBS = {}
@@ -13,7 +14,7 @@ JOBS_LOCK = threading.Lock()  # Ensures thread-safe updates
 
 # --- MOCK LEGACY DATA SOURCE ---
 # This dictionary simulates the legacy database records that the bulk migration
-# job needs to pull full subscriber profiles from.
+# job needs to pull full subscriber profiles from. It is used as a fallback.
 LEGACY_DB_MOCK = {
     # Standard profile used by the frontend sample CSV
     '502122900001234': {
@@ -52,10 +53,9 @@ def start_migration_job(file_obj, username):
             'total': 0,
             'processed': 0,
             'failed': 0,
-            'progress': 0 # Initialize progress
+            'progress': 0 
         }
     
-    # Use a thread for asynchronous processing (simulating a background worker)
     thread = threading.Thread(target=process_migration, args=(job_id, file_obj))
     thread.start()
     current_app.logger.info(f"Migration job {job_id} started by {username}.")
@@ -84,15 +84,16 @@ def update_job_progress(job_id, processed_increment=0, failed_increment=0):
 
 def process_migration(job_id, file_obj):
     """
-    Simulates fetching subscriber profiles from a legacy source (mock) and
-    migrating them to the Cloud DB (DynamoDB).
+    Attempts to fetch data from the real legacy DB (if configured), falling back to mock 
+    if the connection is blocked or fails.
     """
     
+    # Flag to track if we successfully connected to the real Legacy DB
+    using_mock = True
+
     try:
-        # Read file contents and create a dictionary reader
         content = file_obj.read().decode('utf-8')
         reader = csv.DictReader(StringIO(content))
-        
         rows = list(reader)
         
         with JOBS_LOCK:
@@ -102,19 +103,38 @@ def process_migration(job_id, file_obj):
         table_name = os.environ.get('SUBSCRIBER_TABLE_NAME', 'SubscriberTable')
         table = dynamodb.Table(table_name)
         
+        # --- Attempt Real Legacy Connection ---
+        try:
+            # Tell legacy_db to use the migration connection rules (ENABLE_REAL_LEGACY_MIGRATION)
+            legacy_db.get_connection(for_migration=True).close()
+            using_mock = False
+            current_app.logger.info(f"Migration job {job_id}: Successfully connected to real Legacy DB.")
+        except Exception as e:
+            current_app.logger.warning(f"Migration job {job_id}: Real Legacy DB connection failed or skipped. Falling back to mock data. Error: {e}")
+            using_mock = True
+        # -------------------------------------
+
         for row in rows:
-            # Check for cancellation before processing
             with JOBS_LOCK:
                 if JOBS.get(job_id, {}).get('status') == 'CANCELLED':
                     current_app.logger.warning(f"Migration job {job_id} cancelled by user.")
                     break
                 
-            # Determine the key to search in the mock DB
             key = row.get('uid') or row.get('imsi') or row.get('msisdn')
             
             try:
-                # --- MOCK PULL from Legacy Source ---
-                full_subscriber_data = LEGACY_DB_MOCK.get(key)
+                if not key:
+                    raise ValueError("Row is missing UID, IMSI, and MSISDN.")
+
+                full_subscriber_data = None
+                
+                if not using_mock:
+                    # Attempt to pull full data from the real Legacy DB
+                    full_subscriber_data = legacy_db.get_subscriber_by_any_id(key, for_migration=True)
+                else:
+                    # Use mock data if real connection failed/blocked
+                    full_subscriber_data = LEGACY_DB_MOCK.get(key)
+                
                 
                 if full_subscriber_data:
                     # --- Cloud Write ---
@@ -125,13 +145,12 @@ def process_migration(job_id, file_obj):
                     update_job_progress(job_id, processed_increment=1)
                 else:
                     update_job_progress(job_id, failed_increment=1)
-                    current_app.logger.warning(f"Migration job {job_id}: Subscriber with key {key} not found in mock legacy data.")
+                    current_app.logger.warning(f"Migration job {job_id}: Subscriber {key} not found in source ({'MOCK' if using_mock else 'REAL DB'}).")
                     
             except Exception as e:
                 update_job_progress(job_id, failed_increment=1)
                 current_app.logger.error(f"Error processing row in job {job_id}: {e}")
             
-            # Simulate work delay
             time.sleep(0.05) 
         
         # Final status update
@@ -142,7 +161,6 @@ def process_migration(job_id, file_obj):
                 current_app.logger.info(f"Migration job {job_id} completed successfully.")
         
     except Exception as e:
-        # Critical failure handling
         with JOBS_LOCK:
             JOBS[job_id]['status'] = 'FAILED'
             JOBS[job_id]['error'] = str(e)
@@ -150,4 +168,11 @@ def process_migration(job_id, file_obj):
 
 def get_job_status(job_id):
     with JOBS_LOCK:
-        return JOBS.get(job_id, {'status': 'NOT_FOUND'})
+        # Return a deep copy of the job to prevent accidental external modification
+        job_copy = JOBS.get(job_id, {'status': 'NOT_FOUND'}).copy()
+        
+        # Ensure status is always set correctly, particularly if it was paused/cancelled mid-loop
+        if job_copy['status'] == 'IN_PROGRESS' and job_copy.get('paused'):
+            job_copy['status'] = 'PAUSED'
+            
+        return job_copy
