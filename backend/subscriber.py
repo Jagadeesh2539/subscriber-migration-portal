@@ -25,19 +25,25 @@ MODE = os.getenv('PROV_MODE', 'dual_prov')
 
 # Updated function to handle deletes
 def dual_provision(data, method='put'):
+    # Use 'subscriberId' as the key to match CloudFormation
+    key = data.get('subscriberId')
+    if not key:
+        key = data.get('uid') # Fallback
+        
     if MODE in ['legacy', 'dual_prov']:
         if method == 'put':
-            LEGACY_DB[data['uid']] = data
+            LEGACY_DB[key] = data
         elif method == 'delete':
-            LEGACY_DB.pop(data['uid'], None)
+            LEGACY_DB.pop(key, None)
         
     if MODE in ['cloud', 'dual_prov']:
         if method == 'put':
             subscriber_table.put_item(Item=data)
         elif method == 'delete':
-            subscriber_table.delete_item(Key={'uid': data['uid']})
+            subscriber_table.delete_item(Key={'subscriberId': key})
 
-@prov_bp.route('/subscriber', methods=['POST'])
+# --- FIX ---
+@prov_bp.route('/subscriber', methods=['POST', 'OPTIONS'])
 @login_required()
 def add_subscriber():
     user = request.environ['user']
@@ -59,27 +65,26 @@ def add_subscriber():
         log_audit(user['sub'], 'ADD_SUBSCRIBER', data, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- NEW FUNCTION (Matches frontend GET /provision/subscribers) ---
-@prov_bp.route('/subscribers', methods=['GET']) # Note the 's'
+# --- FIX (No change needed, GET only) ---
+@prov_bp.route('/subscribers', methods=['GET'])
 @login_required()
 def get_all_subscribers():
     try:
         if MODE in ['cloud', 'dual_prov']:
-            # Scan is OK for small tables, but inefficient for large ones
             response = subscriber_table.scan()
             items = response.get('Items', [])
         else: # Legacy only
             items = list(LEGACY_DB.values())
             
-        log_audit('system', 'FETCH_ALL_SUBSCRIBERS', {}, 'SUCCESS')
-        # Frontend expects 'uid', so we map 'subscriberId' back to 'uid'
+        log_audit('system', 'FETCH_ALL_SUBSCRIBER', {}, 'SUCCESS')
         for item in items:
             item['uid'] = item.get('subscriberId')
         return jsonify(subscribers=items), 200
     except Exception as e:
-        log_audit('system', 'FETCH_ALL_SUBSCRIBERS', {}, f'FAILED: {str(e)}')
+        log_audit('system', 'FETCH_ALL_SUBSCRIBER', {}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
+# --- FIX (No change needed, GET only) ---
 @prov_bp.route('/subscriber/<uid>', methods=['GET'])
 @login_required()
 def get_subscriber(uid):
@@ -100,8 +105,8 @@ def get_subscriber(uid):
         log_audit('system', 'FETCH_SUBSCRIBER', {'uid': uid}, f'FAILED: {str(e)}'), 500
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- NEW FUNCTION (Matches frontend PUT /provision/subscriber/<uid>) ---
-@prov_bp.route('/subscriber/<uid>', methods=['PUT'])
+# --- FIX ---
+@prov_bp.route('/subscriber/<uid>', methods=['PUT', 'OPTIONS'])
 @login_required()
 def update_subscriber(uid):
     user = request.environ['user']
@@ -121,14 +126,14 @@ def update_subscriber(uid):
         log_audit(user['sub'], 'UPDATE_SUBSCRIBER', data, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- NEW FUNCTION (Matches frontend DELETE /provision/subscriber/<uid>) ---
-@prov_bp.route('/subscriber/<uid>', methods=['DELETE'])
-@login_required(role='admin') # Example: Restrict to admin
+# --- FIX ---
+@prov_bp.route('/subscriber/<uid>', methods=['DELETE', 'OPTIONS'])
+@login_required(role='admin') 
 def delete_subscriber(uid):
     user = request.environ['user']
     
     try:
-        data_to_delete = {'uid': uid}
+        data_to_delete = {'subscriberId': uid}
         dual_provision(data_to_delete, method='delete')
             
         log_audit(user['sub'], 'DELETE_SUBSCRIBER', data_to_delete, 'SUCCESS')
@@ -137,13 +142,13 @@ def delete_subscriber(uid):
         log_audit(user['sub'], 'DELETE_SUBSCRIBER', {'uid': uid}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
         
-@prov_bp.route('/subscriber/spml', methods=['POST'])
+# --- FIX ---
+@prov_bp.route('/subscriber/spml', methods=['POST', 'OPTIONS'])
 @login_required()
 def add_spml_subscriber():
     user = request.environ['user']
     try:
         parsed_data = parse_spml_to_json(request.data)
-        # Ensure 'subscriberId' is set
         parsed_data['subscriberId'] = parsed_data.get('uid')
         dual_provision(parsed_data, method='put')
         log_audit(user['sub'], 'ADD_SPML_SUBSCRIBER', parsed_data, 'SUCCESS')
