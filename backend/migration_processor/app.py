@@ -26,7 +26,7 @@ def get_db_credentials():
         secret = json.loads(response['SecretString'])
         return {
             'host': LEGACY_DB_HOST,
-            'port': 3306,
+            'port': 3306, # Standard RDS MySQL port
             'user': secret['username'],
             'password': secret['password'],
             'database': 'legacydb'
@@ -59,12 +59,16 @@ def lambda_handler(event, context):
             raise Exception("MigrationId not found in S3 metadata.")
     except Exception as e:
         print(f"Error getting metadata: {e}")
+        # Update job table to reflect this critical failure
+        if 'migration_id' in locals() and migration_id:
+             jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
         return {'status': 'error', 'message': str(e)}
 
     counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
     report_data = [['Identifier', 'Status', 'Details']]
 
     try:
+        # Configure the legacy_db connector with RDS details
         db_creds = get_db_credentials()
         legacy_db.init_connection_details(**db_creds)
         print("Successfully configured legacy DB connector.")
@@ -93,12 +97,16 @@ def lambda_handler(event, context):
                 continue
 
             try:
+                # Fetch full profile from Legacy DB
                 legacy_data = legacy_db.get_subscriber_by_any_id(identifier_val)
+                # Check if already exists in Cloud DB
                 cloud_data = subscribers_table.get_item(Key={'subscriberId': identifier_val}).get('Item')
 
                 if legacy_data and not cloud_data:
                     status_detail = "Migrated successfully."
                     if not is_simulate_mode:
+                        # Ensure subscriberId is set for DynamoDB
+                        legacy_data['subscriberId'] = legacy_data['uid']
                         subscribers_table.put_item(Item=legacy_data)
                     else:
                         status_detail = "SIMULATED: Would have been migrated."
@@ -114,11 +122,13 @@ def lambda_handler(event, context):
                 counts['failed'] += 1
                 report_data.append([identifier_val, 'FAILED', str(e)])
 
+        # Generate and upload report
         report_key = f"reports/{migration_id}.csv"
         report_buffer = io.StringIO()
         csv.writer(report_buffer).writerows(report_data)
         s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
         
+        # Finalize job status
         jobs_table.update_item(
             Key={'migrationId': migration_id},
             UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
@@ -129,7 +139,7 @@ def lambda_handler(event, context):
         print(f"FATAL ERROR during processing: {e}")
         jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
     finally:
+        # Clean up the original uploaded file
         s3_client.delete_object(Bucket=bucket, Key=key)
 
     return {'status': 'success'}
-
