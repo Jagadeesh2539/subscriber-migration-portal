@@ -96,6 +96,7 @@ jobs:
               FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }} \
+              PROV_MODE=cloud \ # <--- ADD THIS LINE
             }"
 
       - name: Deploy API Gateway Stage
