@@ -1,12 +1,13 @@
+import os
+import boto3
 from flask import Blueprint, request, jsonify
+from boto3.dynamodb.conditions import Key, Attr
 from auth import login_required
 from audit import log_audit
 from parse_spml import parse_spml_to_json
-import boto3
-import os
 from datetime import datetime
+import legacy_db 
 import json
-import legacy_db # <-- NEW: Import our powerful new connector
 
 prov_bp = Blueprint('prov', __name__)
 
@@ -15,46 +16,92 @@ SUBSCRIBER_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
 subscriber_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME)
 
-# REMOVED the old hardcoded LEGACY_DB dictionary
- 
 MODE = os.getenv('PROV_MODE', 'dual_prov')
 
-def dual_provision(data, method='put'):
+def dual_provision(data, method='put', uid=None):
     """
     Writes data to both legacy (MySQL) and cloud (DynamoDB) based on the current mode.
+    Handles create ('put'), update ('update'), and delete ('delete').
     """
-    uid = data.get('uid')
-    if not uid:
-        # For delete operations, the uid might be passed differently
-        uid = data.get('subscriberId')
+    target_uid = uid if uid else data.get('uid')
 
     # --- Legacy DB (MySQL) Action ---
     if MODE in ['legacy', 'dual_prov']:
         try:
             if method == 'put':
                 legacy_db.create_subscriber_full_profile(data)
+            elif method == 'update':
+                legacy_db.update_subscriber_full_profile(target_uid, data)
             elif method == 'delete':
-                legacy_db.delete_subscriber(uid)
+                legacy_db.delete_subscriber(target_uid)
         except Exception as e:
             print(f"Error in legacy DB (MySQL) operation: {e}")
-            # In a real system, this failure would be queued for a retry attempt
             raise e # Re-raise the exception to fail the transaction
             
     # --- Cloud (DynamoDB) Action ---
     if MODE in ['cloud', 'dual_prov']:
         try:
-            if method == 'put':
-                # DynamoDB uses 'subscriberId' as its primary key, so we map uid to it
-                data['subscriberId'] = uid
-                subscriber_table.put_item(Item=data)
+            # DynamoDB uses 'subscriberId' as its primary key
+            data_to_write = data.copy()
+            data_to_write['subscriberId'] = target_uid
+            
+            if method == 'put' or method == 'update':
+                # Use put_item for full overwrite on create/update
+                subscriber_table.put_item(Item=data_to_write)
             elif method == 'delete':
-                subscriber_table.delete_item(Key={'subscriberId': uid})
+                subscriber_table.delete_item(Key={'subscriberId': target_uid})
         except Exception as e:
             print(f"Error in cloud DB (DynamoDB) operation: {e}")
-            # In a real system, this failure would be queued for a retry attempt
-            raise e # Re-raise the exception to fail the transaction
+            raise e 
 
-# --- NEW: Powerful Search Endpoint ---
+def check_cloud_duplicates(uid, imsi, msisdn):
+    """
+    Checks DynamoDB for existing UID, IMSI, or MSISDN. 
+    Returns a string detailing the conflict or None if no conflict is found.
+    """
+    # 1. Check Primary Key (UID/subscriberId)
+    response = subscriber_table.get_item(Key={'subscriberId': uid})
+    if 'Item' in response:
+        return f"UID '{uid}' already exists in Cloud DB."
+
+    # 2. Check IMSI and MSISDN (Uses scan with filter which is NOT production-optimal 
+    # without GSIs, but works for the demo environment)
+    
+    # Check IMSI
+    if imsi:
+        response = subscriber_table.scan(
+            FilterExpression=Attr('imsi').eq(imsi),
+            ProjectionExpression='subscriberId'
+        )
+        if response.get('Items'):
+            return f"IMSI '{imsi}' already exists in Cloud DB."
+
+    # Check MSISDN
+    if msisdn:
+        response = subscriber_table.scan(
+            FilterExpression=Attr('msisdn').eq(msisdn),
+            ProjectionExpression='subscriberId'
+        )
+        if response.get('Items'):
+            return f"MSISDN '{msisdn}' already exists in Cloud DB."
+
+    return None
+
+# --- COUNT ENDPOINT ---
+@prov_bp.route('/count', methods=['GET'])
+@login_required()
+def get_subscriber_count():
+    """Returns the total number of subscribers in the Cloud (DynamoDB)."""
+    try:
+        # NOTE: table.item_count returns a cached value. For a real-time count,
+        # you would need to use a DynamoDB Query on a specific index, or an external metric.
+        # We will use the cached value here for simplicity and dashboard use.
+        count = subscriber_table.item_count
+        return jsonify(count=count), 200
+    except Exception as e:
+        return jsonify(msg=f'Error fetching count: {str(e)}'), 500
+
+# --- SEARCH ENDPOINT ---
 @prov_bp.route('/search', methods=['GET'])
 @login_required()
 def search_subscriber():
@@ -66,8 +113,16 @@ def search_subscriber():
         return jsonify(msg='Identifier query parameter is required'), 400
 
     try:
-        # 1. Check cloud (DynamoDB) first for speed, as it's the target system
+        # 1. Check cloud (DynamoDB) first
         cloud_data = subscriber_table.get_item(Key={'subscriberId': identifier}).get('Item')
+        if not cloud_data:
+            # Check secondary keys (IMSI/MSISDN) in cloud
+            response = subscriber_table.scan(
+                FilterExpression=Attr('imsi').eq(identifier) | Attr('msisdn').eq(identifier)
+            )
+            if response.get('Items'):
+                cloud_data = response['Items'][0]
+
         if cloud_data:
             cloud_data['uid'] = cloud_data.get('subscriberId') # Normalize for frontend consistency
             log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier, 'source': 'cloud'}, 'SUCCESS')
@@ -87,19 +142,39 @@ def search_subscriber():
         log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- NEW: Create Endpoint for Full Subscriber Profile ---
+# --- CREATE ENDPOINT ---
 @prov_bp.route('/subscriber', methods=['POST', 'OPTIONS'])
 @login_required()
 def add_subscriber():
     """
-    Handles creating a new subscriber in both legacy and cloud DBs.
+    Handles creating a new subscriber in both legacy and cloud DBs, with full duplicate validation.
     """
     user = request.environ['user']
     data = request.json
 
     try:
-        if not data.get('uid'):
-             return jsonify(msg='Error: uid is required for new subscriber'), 400
+        uid = data.get('uid')
+        imsi = data.get('imsi')
+        msisdn = data.get('msisdn')
+        
+        if not uid or not imsi:
+             return jsonify(msg='Error: UID and IMSI are required for new subscriber'), 400
+
+        # --- STEP 1: Full Duplicate Validation ---
+        
+        # Check Cloud DB for UID, IMSI, MSISDN duplicates
+        cloud_conflict = check_cloud_duplicates(uid, imsi, msisdn)
+        if cloud_conflict:
+            log_audit(user['sub'], 'ADD_SUBSCRIBER', data, f'FAILED: DUPLICATE {cloud_conflict}')
+            return jsonify(msg=f'Validation Error: {cloud_conflict}'), 400
+
+        # Check Legacy DB for UID, IMSI, MSISDN duplicates (if enabled)
+        legacy_conflict = legacy_db.check_for_duplicates(uid, imsi, msisdn)
+        if legacy_conflict:
+            log_audit(user['sub'], 'ADD_SUBSCRIBER', data, f'FAILED: DUPLICATE {legacy_conflict}')
+            return jsonify(msg=f'Validation Error: {legacy_conflict}'), 400
+
+        # --- STEP 2: Dual Provisioning ---
         
         data['created_at'] = datetime.utcnow().isoformat()
         data['created_by'] = user['sub']
@@ -107,12 +182,34 @@ def add_subscriber():
         dual_provision(data, method='put')
         
         log_audit(user['sub'], 'ADD_SUBSCRIBER', data, 'SUCCESS')
-        return jsonify(msg='Subscriber created successfully', uid=data['uid']), 201
+        return jsonify(msg='Subscriber created successfully', uid=uid), 201
     except Exception as e:
         log_audit(user['sub'], 'ADD_SUBSCRIBER', data, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- NEW: Delete Endpoint ---
+# --- UPDATE ENDPOINT ---
+@prov_bp.route('/subscriber/<uid>', methods=['PUT', 'OPTIONS'])
+@login_required()
+def update_subscriber(uid):
+    """
+    Handles updating an existing subscriber in both legacy and cloud DBs.
+    """
+    user = request.environ['user']
+    data = request.json
+
+    try:
+        data['updated_at'] = datetime.utcnow().isoformat()
+        data['updated_by'] = user['sub']
+        
+        # We pass the UID explicitly for the update operation
+        dual_provision(data, method='update', uid=uid)
+        
+        log_audit(user['sub'], 'UPDATE_SUBSCRIBER', data, 'SUCCESS')
+        return jsonify(msg='Subscriber updated successfully', uid=uid), 200
+    except Exception as e:
+        log_audit(user['sub'], 'UPDATE_SUBSCRIBER', data, f'FAILED: {str(e)}'), 500
+
+# --- DELETE ENDPOINT ---
 @prov_bp.route('/subscriber/<uid>', methods=['DELETE', 'OPTIONS'])
 @login_required(role='admin') 
 def delete_subscriber(uid):
@@ -120,11 +217,10 @@ def delete_subscriber(uid):
     
     try:
         data_to_delete = {'uid': uid}
-        dual_provision(data_to_delete, method='delete')
+        dual_provision(data_to_delete, method='delete', uid=uid)
             
         log_audit(user['sub'], 'DELETE_SUBSCRIBER', data_to_delete, 'SUCCESS')
         return jsonify(msg='Subscriber deleted successfully'), 200
     except Exception as e:
         log_audit(user['sub'], 'DELETE_SUBSCRIBER', {'uid': uid}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
-
