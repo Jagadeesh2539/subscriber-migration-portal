@@ -17,7 +17,7 @@ Resources:
       BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
       WebsiteConfiguration:
         IndexDocument: index.html
-        ErrorDocument: index.html # <-- The necessary line for client-side routing
+        ErrorDocument: index.html
       PublicAccessBlockConfiguration:
         BlockPublicAcls: false
         BlockPublicPolicy: false
@@ -88,7 +88,7 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
 
   # ---------------------------------------------------------------------
-  # Lambda function (placeholder at stack creation)
+  # Lambda function
   # ---------------------------------------------------------------------
   BackendLambda:
     Type: AWS::Lambda::Function
@@ -101,6 +101,80 @@ Resources:
         ZipFile: |
           def lambda_handler(event, context):
               return {"statusCode": 200, "body": "Lambda created"}
+
+  # ---------------------------------------------------------------------
+  # NEW: API Gateway REST API
+  # ---------------------------------------------------------------------
+  BackendApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "migration-portal-api-${AWS::Region}"
+      Description: "API for the Subscriber Migration Portal"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # NEW: The /{proxy+} "catch-all" resource
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+      PathPart: "{proxy+}"
+
+  # NEW: The ANY method on the /{proxy+} resource
+  ApiProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST # This must be POST for Lambda proxy
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      ResourceId: !Ref ApiProxyResource
+      RestApiId: !Ref BackendApi
+
+  # NEW: The ANY method on the root (/) resource
+  ApiRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      ResourceId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+
+  # NEW: Permission for API Gateway to invoke the Lambda
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref BackendLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
+
+  # NEW: The API Gateway Deployment (required to create a stage)
+  # We make it dependent on the routes so it deploys *after* they are made.
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiProxyMethod
+      - ApiRootMethod
+    Properties:
+      RestApiId: !Ref BackendApi
+
+  # NEW: The "prod" stage for the API
+  ApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      Description: Production Stage
+      RestApiId: !Ref BackendApi
+      DeploymentId: !Ref ApiDeployment
 
 # ---------------------------------------------------------------------
 # Outputs
@@ -121,3 +195,13 @@ Outputs:
   BackendLambdaName:
     Description: Name of the backend Lambda
     Value: !Ref BackendLambda
+
+  # NEW: Output the ID of the API we just created
+  BackendApiId:
+    Description: The ID of the new API Gateway
+    Value: !Ref BackendApi
+
+  # NEW: Output the Invoke URL for the new API
+  BackendApiUrl:
+    Description: The public URL for the API Gateway prod stage
+    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
