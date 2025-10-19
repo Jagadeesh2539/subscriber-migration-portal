@@ -4,7 +4,7 @@ import {
   Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, Divider,
   Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, Checkbox, FormControlLabel
 } from '@mui/material';
-import { Search, Add, Edit, Delete, Dashboard as DashboardIcon, Send } from '@mui/icons-material';
+import { Search, Add, Edit, Delete, Dashboard as DashboardIcon, Send, VerifiedUser, Gavel, Lock } from '@mui/icons-material';
 import API from '../api';
 
 // --- I. Reusable Form Component (Used for Create and Modify) ---
@@ -45,8 +45,6 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave, isEditing = false }
     onSave(formData);
   };
 
-  const requiredFields = ['uid', 'imsi', 'plan', 'subscription_state'];
-
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth key={formKey}>
       <DialogTitle>{isEditing ? `Modify Subscriber: ${formData.uid}` : 'Create New Subscriber'}</DialogTitle>
@@ -58,7 +56,7 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave, isEditing = false }
         <Grid container spacing={3}>
           {/* IDENTIFIERS SECTION */}
           <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}>Identifiers</Typography>
+            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><VerifiedUser sx={{ fontSize: '1rem', mr: 0.5 }} /> Identifiers</Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} sm={4}>
                 <TextField name="uid" label="UID" value={formData.uid || ''} onChange={handleChange} fullWidth disabled={isEditing} required error={!isEditing && !formData.uid} helperText={!isEditing && !formData.uid ? 'Required' : ''} />
@@ -74,7 +72,7 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave, isEditing = false }
           
           {/* SUBSCRIPTION & STATUS SECTION */}
           <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}>Subscription & Status</Typography>
+            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><Gavel sx={{ fontSize: '1rem', mr: 0.5 }} /> Subscription & Status</Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} sm={4}>
                 <TextField name="plan" label="Plan" value={formData.plan || ''} onChange={handleChange} fullWidth required />
@@ -114,7 +112,7 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave, isEditing = false }
 
           {/* HLR FEATURES SECTION */}
           <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}>HLR Features</Typography>
+            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><Lock sx={{ fontSize: '1rem', mr: 0.5 }} /> HLR Features</Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} sm={4}>
                 <FormControlLabel control={<Checkbox name="clip_provisioned" checked={formData.clip_provisioned || false} onChange={handleChange} />} label="CLIP Provisioned" />
@@ -215,7 +213,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
   );
 };
 
-// --- III. Search/Modify/Delete View ---
+// --- III. Search/Modify View ---
 const SubscriberSearch = ({ setAppState }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [subscriber, setSubscriber] = useState(null);
@@ -350,7 +348,7 @@ const SubscriberCreate = ({ setAppState }) => {
     <Paper sx={{ p: 4, my: 3, boxShadow: 6 }}>
       <Typography variant="h4" gutterBottom>Create New Subscriber</Typography>
       <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
-        Enter a complete profile. All identifiers (UID, IMSI, MSISDN) must be unique across all databases.
+        Enter a complete profile. **All identifiers (UID, IMSI, MSISDN) must be unique** across all databases.
       </Typography>
       
       {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}><CircularProgress /></Box>}
@@ -411,6 +409,7 @@ const SubscriberDelete = ({ setAppState, initialSearchTerm }) => {
   };
   
   const handleDelete = async (uid) => {
+    // Note: window.confirm is used here as a final step confirmation before an irreversible action
     if (window.confirm(`WARNING: Are you sure you want to PERMANENTLY delete subscriber ${uid}? This action is irreversible across both Cloud and Legacy databases.`)) {
         setLoading(true);
         setError('');
@@ -444,7 +443,7 @@ const SubscriberDelete = ({ setAppState, initialSearchTerm }) => {
             variant="outlined" 
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
           />
-          <Button variant="contained" color="warning" startIcon={<Search />} onClick={() => handleSearch()} disabled={loading || !searchTerm} sx={{ ml: 2, py: '15px' }}>
+          <Button variant="contained" color="error" startIcon={<Search />} onClick={() => handleSearch()} disabled={loading || !searchTerm} sx={{ ml: 2, py: '15px' }}>
             Find Profile
           </Button>
         </Box>
@@ -454,18 +453,18 @@ const SubscriberDelete = ({ setAppState, initialSearchTerm }) => {
         {message && <Alert severity="success" onClose={() => setMessage('')} sx={{ my: 2 }}>{message}</Alert>}
         
         {subscriber && (
-            <Card sx={{ mt: 3, p: 3, bgcolor: 'warning.light' }}>
-                <Typography variant="h6" color="warning.dark">Profile Found - Confirm Deletion</Typography>
-                <Divider sx={{ my: 1 }} />
-                <Typography variant="body1" sx={{ mt: 1 }}>**UID:** {subscriber.uid || subscriber.subscriberId}</Typography>
-                <Typography variant="body1">**IMSI:** {subscriber.imsi}</Typography>
-                <Typography variant="body1">**Source:** {subscriber.source}</Typography>
-                <Typography variant="body2" color="error" sx={{ mt: 2 }}>
-                    Press the button below to permanently erase this profile.
+            <Card sx={{ mt: 3, p: 3, bgcolor: 'error.main', color: '#fff' }}>
+                <Typography variant="h6" sx={{ color: 'inherit' }}>Profile Found - Confirm Deletion</Typography>
+                <Divider sx={{ my: 1, bgcolor: '#fff' }} />
+                <Typography variant="body1" sx={{ mt: 1, fontWeight: 'bold' }}>UID: {subscriber.uid || subscriber.subscriberId}</Typography>
+                <Typography variant="body1" sx={{ fontWeight: 'bold' }}>IMSI: {subscriber.imsi}</Typography>
+                <Typography variant="body1">Source: {subscriber.source}</Typography>
+                <Typography variant="body2" sx={{ mt: 2 }}>
+                    Press the button below to **permanently erase** this profile.
                 </Typography>
                 <Button 
                     variant="contained" 
-                    color="error" 
+                    color="warning" 
                     startIcon={<Delete />} 
                     onClick={() => handleDelete(subscriber.uid || subscriber.subscriberId)} 
                     sx={{ mt: 2 }}
@@ -480,6 +479,9 @@ const SubscriberDelete = ({ setAppState, initialSearchTerm }) => {
 
 
 // --- VI. Dashboard View ---
+// Accessing PROV_MODE directly from the backend context or mock data for display
+const MODE = 'cloud'; 
+
 const ProvisioningDashboard = () => {
   const [totalSubscribers, setTotalSubscribers] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -536,7 +538,7 @@ const ProvisioningDashboard = () => {
             <Typography variant="h5" sx={{ mb: 2 }}>System Overview</Typography>
             <Alert severity="info">
                 This dashboard reflects data primarily from the high-performance Cloud (DynamoDB) system. 
-                Legacy lookups occur only during search operations.
+                Legacy lookups occur only during search operations. **PROV_MODE is set to CLOUD.**
             </Alert>
         </Box>
     </Paper>
