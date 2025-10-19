@@ -255,11 +255,9 @@ Resources:
     Properties:
       TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
       AttributeDefinitions:
-        - AttributeName: subscriberId
+        - AttributeName: subscriberId # Main key
           AttributeType: S
-        - AttributeName: imsi
-          AttributeType: S
-        - AttributeName: msisdn
+        - AttributeName: imsi # New index key
           AttributeType: S
       KeySchema:
         - AttributeName: subscriberId
@@ -269,12 +267,6 @@ Resources:
         - IndexName: ImsiIndex
           KeySchema:
             - AttributeName: imsi
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: MsisdnIndex
-          KeySchema:
-            - AttributeName: msisdn
               KeyType: HASH
           Projection:
             ProjectionType: ALL
