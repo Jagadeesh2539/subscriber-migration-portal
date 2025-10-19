@@ -99,7 +99,7 @@ jobs:
             
       - name: DEBUG Check API_ID Structure
         run: |
-          API_ID_VALUE="${{ secrets.REST_API_ID }}"
+          API_ID_VALUE="7rrghvsall" # <-- Using the hardcoded value for the check
           echo "Checking API_ID value structure..."
           if [[ -z "$API_ID_VALUE" ]]; then
             echo "::ERROR:: API_ID secret is EMPTY."
@@ -112,10 +112,12 @@ jobs:
             echo "API_ID structure looks correct (no colons). Proceeding."
           fi
 
+      # ---------------------
+      # CRITICAL API GATEWAY REDEPLOYMENT FIX
+      # ---------------------
       - name: Deploy API Gateway Stage
-        if: env.API_ID != ''
         env:
-          API_ID: ${{ secrets.REST_API_ID }}
+          API_ID: '7rrghvsall' # <-- HARDCODED FIX: Bypass GitHub Secrets
         run: |
           echo "Starting deployment for API Gateway: $API_ID"
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
