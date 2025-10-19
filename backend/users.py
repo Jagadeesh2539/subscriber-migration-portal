@@ -12,7 +12,9 @@ USERS = {
     'guest': {'password': hashlib.sha256('Guest@123'.encode()).hexdigest(), 'role': 'guest'}
 }
 
-@user_bp.route('/login', methods=['POST'])
+# --- FIX ---
+# Added 'OPTIONS' to the methods list
+@user_bp.route('/login', methods=['POST', 'OPTIONS'])
 def login():
     data = request.json
     username = data.get('username')
