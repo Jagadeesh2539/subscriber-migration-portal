@@ -1,15 +1,205 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Full Subscriber Migration Portal Infrastructure
+Description: Full Subscriber Migration Portal Infrastructure with RDS and enhanced DynamoDB
 
 Parameters:
   DomainName:
     Type: String
-    Description: Optional domain name for the frontend site
+    Description: "Optional domain name for the frontend site"
+  LegacyDBPassword:
+    Type: String
+    Description: "Password for the legacy MySQL database. Min 8 characters."
+    NoEcho: true
+    AllowedPattern: ".{8,}"
+    ConstraintDescription: "Must be at least 8 characters."
 
 Resources:
 
   # ---------------------------------------------------------------------
-  # S3 Bucket for frontend static website
+  # Networking (VPC, Subnets, etc.)
+  # ---------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-1"
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-2"
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-2"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+  
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+      
+  # ---------------------------------------------------------------------
+  # Security Groups and DB Secret
+  # ---------------------------------------------------------------------
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-Lambda-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for Lambda functions"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-RDS-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for RDS instance"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  LegacyDBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: "Credentials for the legacy MySQL database"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\\'
+
+  # ---------------------------------------------------------------------
+  # RDS MySQL Database Instance
+  # ---------------------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for the legacy RDS instance"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  LegacyDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: "legacydb"
+      Engine: "mysql"
+      EngineVersion: "8.0"
+      DBInstanceClass: "db.t3.micro"
+      AllocatedStorage: "20"
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: false
+      StorageType: "gp2"
+      DeletionProtection: false
+      MultiAZ: false
+
+  # ---------------------------------------------------------------------
+  # S3 Buckets for Frontend and Migrations
   # ---------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -37,13 +227,29 @@ Resources:
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
+  MigrationUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - PUT
+              - POST
+            AllowedOrigins:
+              - !Sub "http://subscriber-portal-${AWS::AccountId}-${AWS::Region}.s3-website.${AWS::Region}.amazonaws.com"
+              - http://localhost:3000
+
   # ---------------------------------------------------------------------
-  # DynamoDB tables
+  # DynamoDB Tables
   # ---------------------------------------------------------------------
-  
-  # --- THIS IS THE CORRECTED RESOURCE ---
-  # 1. Added 'imsi' and 'msisdn' to AttributeDefinitions
-  # 2. Added the entire 'GlobalSecondaryIndexes' block
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -51,24 +257,16 @@ Resources:
       AttributeDefinitions:
         - AttributeName: subscriberId
           AttributeType: S
-        - AttributeName: imsi
-          AttributeType: S
-        - AttributeName: msisdn
+        - AttributeName: imsi # Add attribute for the first index
           AttributeType: S
       KeySchema:
         - AttributeName: subscriberId
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
       GlobalSecondaryIndexes:
-        - IndexName: IMSI-Index
+        - IndexName: ImsiIndex # Define the first index
           KeySchema:
             - AttributeName: imsi
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: MSISDN-Index
-          KeySchema:
-            - AttributeName: msisdn
               KeyType: HASH
           Projection:
             ProjectionType: ALL
@@ -89,8 +287,20 @@ Resources:
           KeyType: RANGE
       BillingMode: PAY_PER_REQUEST
 
+  MigrationJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: migrationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: migrationId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
   # ---------------------------------------------------------------------
-  # IAM Role for Lambda
+  # IAM Roles for Lambdas
   # ---------------------------------------------------------------------
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -107,9 +317,61 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SecretReadPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref LegacyDBSecret
+
+  MigrationProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "MigrationProcessorRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: MigrationProcessorPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${MigrationUploadBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt MigrationJobsTable.Arn
+                  - !GetAtt SubscriberTable.Arn
+                  - !GetAtt AuditLogTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref LegacyDBSecret
 
   # ---------------------------------------------------------------------
-  # Lambda function
+  # Lambda Functions
   # ---------------------------------------------------------------------
   BackendLambda:
     Type: AWS::Lambda::Function
@@ -122,9 +384,56 @@ Resources:
         ZipFile: |
           def lambda_handler(event, context):
               return {"statusCode": 200, "body": "Lambda created"}
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+
+  MigrationProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt MigrationProcessorRole.Arn
+      Code:
+        S3Bucket: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
+        S3Key: "processor.zip"
+      Timeout: 300
+      Environment:
+        Variables:
+          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
+          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
+          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
 
   # ---------------------------------------------------------------------
-  # NEW: API Gateway REST API
+  # S3 Trigger for Migration
+  # ---------------------------------------------------------------------
+  S3UploadTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt MigrationUploadBucket.Arn
+      FunctionName: !GetAtt MigrationProcessorFunction.Arn
+      StartingPosition: LATEST
+      FilterCriteria:
+        Rules:
+          - Name: suffix
+            Value: ".csv"
+          - Name: prefix
+            Value: "uploads/"
+
+  # ---------------------------------------------------------------------
+  # API Gateway
   # ---------------------------------------------------------------------
   BackendApi:
     Type: AWS::ApiGateway::RestApi
@@ -135,7 +444,6 @@ Resources:
         Types:
           - REGIONAL
 
-  # NEW: The /{proxy+} "catch-all" resource
   ApiProxyResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -143,7 +451,6 @@ Resources:
       RestApiId: !Ref BackendApi
       PathPart: "{proxy+}"
 
-  # NEW: The ANY method on the /{proxy+} resource
   ApiProxyMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -151,12 +458,11 @@ Resources:
       HttpMethod: ANY
       Integration:
         Type: AWS_PROXY
-        IntegrationHttpMethod: POST # This must be POST for Lambda proxy
+        IntegrationHttpMethod: POST
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
       ResourceId: !Ref ApiProxyResource
       RestApiId: !Ref BackendApi
 
-  # NEW: The ANY method on the root (/) resource
   ApiRootMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -169,7 +475,6 @@ Resources:
       ResourceId: !GetAtt BackendApi.RootResourceId
       RestApiId: !Ref BackendApi
 
-  # NEW: Permission for API Gateway to invoke the Lambda
   LambdaApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -178,8 +483,6 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
 
-  # NEW: The API Gateway Deployment (required to create a stage)
-  # We make it dependent on the routes so it deploys *after* they are made.
   ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -188,7 +491,6 @@ Resources:
     Properties:
       RestApiId: !Ref BackendApi
 
-  # NEW: The "prod" stage for the API
   ApiProdStage:
     Type: AWS::ApiGateway::Stage
     Properties:
@@ -197,9 +499,6 @@ Resources:
       RestApiId: !Ref BackendApi
       DeploymentId: !Ref ApiDeployment
 
-# ---------------------------------------------------------------------
-# Outputs
-# ---------------------------------------------------------------------
 Outputs:
   FrontendURL:
     Description: URL of the frontend
@@ -213,16 +512,35 @@ Outputs:
     Description: DynamoDB audit log table
     Value: !Ref AuditLogTable
 
+  MigrationJobsTableName:
+    Description: DynamoDB table to track migration jobs
+    Value: !Ref MigrationJobsTable
+
+  MigrationUploadBucketName:
+    Description: S3 bucket for CSV uploads
+    Value: !Ref MigrationUploadBucket
+
   BackendLambdaName:
     Description: Name of the backend Lambda
     Value: !Ref BackendLambda
 
-  # NEW: Output the ID of the API we just created
+  MigrationProcessorFunctionName:
+    Description: Name of the migration processor Lambda
+    Value: !Ref MigrationProcessorFunction
+    
   BackendApiId:
     Description: The ID of the new API Gateway
     Value: !Ref BackendApi
 
-  # NEW: Output the Invoke URL for the new API
   BackendApiUrl:
     Description: The public URL for the API Gateway prod stage
-    Value: !Sub "https://{BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  LegacyDBEndpoint:
+    Description: "The connection endpoint for the legacy MySQL database"
+    Value: !GetAtt LegacyDBInstance.Endpoint.Address
+
+  LegacyDBSecretArn:
+    Description: "The ARN of the secret containing the DB credentials"
+    Value: !Ref LegacyDBSecret
+
