@@ -1,146 +1,555 @@
-import boto3
-import os
-import csv
-import io
-import json
-from datetime import datetime
-import legacy_db # Use the real DB connector
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Full Subscriber Migration Portal Infrastructure with RDS and enhanced DynamoDB
 
-# Get env variables set by CloudFormation/deploy script
-SUBSCRIBERS_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
-MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
-REPORT_BUCKET_NAME = os.environ.get('MIGRATION_UPLOAD_BUCKET_NAME')
-LEGACY_DB_SECRET_ARN = os.environ.get('LEGACY_DB_SECRET_ARN')
-LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST') # The RDS endpoint
+Parameters:
+  DomainName:
+    Type: String
+    Description: "Optional domain name for the frontend site"
+  LegacyDBPassword:
+    Type: String
+    Description: "Password for the legacy MySQL database. Min 8 characters."
+    NoEcho: true
+    AllowedPattern: ".{8,}"
+    ConstraintDescription: "Must be at least 8 characters."
 
-s3_client = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
-jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
-subscribers_table = dynamodb.Table(SUBSCRIBERS_TABLE_NAME)
+Resources:
 
-def get_db_credentials():
-    """Fetches database credentials securely from AWS Secrets Manager."""
-    secrets_client = boto3.client('secretsmanager')
-    try:
-        response = secrets_client.get_secret_value(SecretId=LEGACY_DB_SECRET_ARN)
-        secret = json.loads(response['SecretString'])
-        return {
-            'host': LEGACY_DB_HOST,
-            'port': 3306, # Standard RDS MySQL port
-            'user': secret['username'],
-            'password': secret['password'],
-            'database': 'legacydb'
-        }
-    except Exception as e:
-        print(f"FATAL: Could not retrieve DB credentials from Secrets Manager: {e}")
-        raise
+  # ---------------------------------------------------------------------
+  # Networking (VPC, Subnets, etc.)
+  # ---------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
 
-def find_identifier_key(headers):
-    """Detects the main identifier from a list of CSV headers."""
-    for header in headers:
-        h_lower = header.lower()
-        if h_lower in ['uid', 'imsi', 'msisdn', 'subscriberid']:
-            return header
-    return None
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-1"
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-2"
 
-def lambda_handler(event, context):
-    record = event['Records'][0]
-    bucket = record['s3']['bucket']['name']
-    key = record['s3']['object']['key']
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-2"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+  
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+      
+  # ---------------------------------------------------------------------
+  # Security Groups and DB Secret
+  # ---------------------------------------------------------------------
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-Lambda-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for Lambda functions"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-RDS-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for RDS instance"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  LegacyDBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: "Credentials for the legacy MySQL database"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\\'
+
+  # ---------------------------------------------------------------------
+  # RDS MySQL Database Instance
+  # ---------------------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for the legacy RDS instance"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  LegacyDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: "legacydb"
+      Engine: "mysql"
+      EngineVersion: "8.0"
+      DBInstanceClass: "db.t3.micro"
+      AllocatedStorage: "20"
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: false
+      StorageType: "gp2"
+      DeletionProtection: false
+      MultiAZ: false
+
+  # ---------------------------------------------------------------------
+  # S3 Buckets for Frontend and Migrations
+  # ---------------------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  MigrationUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - PUT
+              - POST
+            AllowedOrigins:
+              - !Sub "http://subscriber-portal-${AWS::AccountId}-${AWS::Region}.s3-website.${AWS::Region}.amazonaws.com"
+              - http://localhost:3000
+
+  # ---------------------------------------------------------------------
+  # DynamoDB Tables
+  # ---------------------------------------------------------------------
+  SubscriberTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: subscriberId
+          AttributeType: S
+        - AttributeName: imsi
+          AttributeType: S
+        - AttributeName: msisdn
+          AttributeType: S
+      KeySchema:
+        - AttributeName: subscriberId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: ImsiIndex
+          KeySchema:
+            - AttributeName: imsi
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: MsisdnIndex
+          KeySchema:
+            - AttributeName: msisdn
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  MigrationJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - AttributeName: migrationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: migrationId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # ---------------------------------------------------------------------
+  # IAM Roles for Lambdas
+  # ---------------------------------------------------------------------
+  BackendLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SecretReadPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref LegacyDBSecret
+
+  MigrationProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "MigrationProcessorRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: MigrationProcessorPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${MigrationUploadBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt MigrationJobsTable.Arn
+                  - !GetAtt SubscriberTable.Arn
+                  - !GetAtt AuditLogTable.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref LegacyDBSecret
+
+  # ---------------------------------------------------------------------
+  # Lambda Functions
+  # ---------------------------------------------------------------------
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Lambda created"}
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+
+  MigrationProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt MigrationProcessorRole.Arn
+      Code:
+        S3Bucket: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
+        S3Key: "processor.zip"
+      Timeout: 300
+      Environment:
+        Variables:
+          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
+          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
+          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+
+  # ---------------------------------------------------------------------
+  # S3 Trigger for Migration
+  # ---------------------------------------------------------------------
+  S3UploadTrigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt MigrationUploadBucket.Arn
+      FunctionName: !GetAtt MigrationProcessorFunction.Arn
+      StartingPosition: LATEST
+      FilterCriteria:
+        Rules:
+          - Name: suffix
+            Value: ".csv"
+          - Name: prefix
+            Value: "uploads/"
+
+  # ---------------------------------------------------------------------
+  # API Gateway
+  # ---------------------------------------------------------------------
+  BackendApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "migration-portal-api-${AWS::Region}"
+      Description: "API for the Subscriber Migration Portal"
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+      PathPart: "{proxy+}"
+
+  ApiProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      ResourceId: !Ref ApiProxyResource
+      RestApiId: !Ref BackendApi
+
+  ApiRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      ResourceId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref BackendLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiProxyMethod
+      - ApiRootMethod
+    Properties:
+      RestApiId: !Ref BackendApi
+
+  ApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      Description: Production Stage
+      RestApiId: !Ref BackendApi
+      DeploymentId: !Ref ApiDeployment
+
+Outputs:
+  FrontendURL:
+    Description: URL of the frontend
+    Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
+
+  SubscriberTableName:
+    Description: DynamoDB subscriber table
+    Value: !Ref SubscriberTable
+
+  AuditLogTableName:
+    Description: DynamoDB audit log table
+    Value: !Ref AuditLogTable
+
+  MigrationJobsTableName:
+    Description: DynamoDB table to track migration jobs
+    Value: !Ref MigrationJobsTable
+
+  MigrationUploadBucketName:
+    Description: S3 bucket for CSV uploads
+    Value: !Ref MigrationUploadBucket
+
+  BackendLambdaName:
+    Description: Name of the backend Lambda
+    Value: !Ref BackendLambda
+
+  MigrationProcessorFunctionName:
+    Description: Name of the migration processor Lambda
+    Value: !Ref MigrationProcessorFunction
     
-    print(f"Processing s3://{bucket}/{key}")
-    
-    try:
-        head_object = s3_client.head_object(Bucket=bucket, Key=key)
-        metadata = head_object.get('Metadata', {})
-        migration_id = metadata.get('migrationid')
-        is_simulate_mode = metadata.get('issimulatemode', 'false').lower() == 'true'
-        if not migration_id:
-            raise Exception("MigrationId not found in S3 metadata.")
-    except Exception as e:
-        print(f"Error getting metadata: {e}")
-        # Update job table to reflect this critical failure
-        if 'migration_id' in locals() and migration_id:
-             jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
-        return {'status': 'error', 'message': str(e)}
+  BackendApiId:
+    Description: The ID of the new API Gateway
+    Value: !Ref BackendApi
 
-    counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
-    report_data = [['Identifier', 'Status', 'Details']]
+  BackendApiUrl:
+    Description: The public URL for the API Gateway prod stage
+    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
 
-    try:
-        # Configure the legacy_db connector with RDS details
-        db_creds = get_db_credentials()
-        legacy_db.init_connection_details(**db_creds)
-        print("Successfully configured legacy DB connector.")
-    except Exception as e:
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
-        return {'status': 'error'}
+  LegacyDBEndpoint:
+    Description: "The connection endpoint for the legacy MySQL database"
+    Value: !GetAtt LegacyDBInstance.Endpoint.Address
 
-    try:
-        csv_object = s3_client.get_object(Bucket=bucket, Key=key)
-        csv_content = csv_object['Body'].read().decode('utf-8')
-        reader = csv.DictReader(io.StringIO(csv_content))
-        
-        identifier_key = find_identifier_key(reader.fieldnames)
-        if not identifier_key:
-            raise Exception("Could not find a valid identifier (uid, imsi, or msisdn) in CSV header.")
-
-        all_rows = list(reader)
-        counts['total'] = len(all_rows)
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
-
-        for row in all_rows:
-            identifier_val = row.get(identifier_key)
-            if not identifier_val:
-                counts['failed'] += 1
-                report_data.append([row.get(identifier_key, 'N/A'), 'FAILED', 'Identifier value was blank in CSV row.'])
-                continue
-
-            try:
-                # Fetch full profile from Legacy DB
-                legacy_data = legacy_db.get_subscriber_by_any_id(identifier_val)
-                # Check if already exists in Cloud DB
-                cloud_data = subscribers_table.get_item(Key={'subscriberId': identifier_val}).get('Item')
-
-                if legacy_data and not cloud_data:
-                    status_detail = "Migrated successfully."
-                    if not is_simulate_mode:
-                        # Ensure subscriberId is set for DynamoDB
-                        legacy_data['subscriberId'] = legacy_data['uid']
-                        subscribers_table.put_item(Item=legacy_data)
-                    else:
-                        status_detail = "SIMULATED: Would have been migrated."
-                    counts['migrated'] += 1
-                    report_data.append([identifier_val, 'MIGRATED', status_detail])
-                elif cloud_data:
-                    counts['already_present'] += 1
-                    report_data.append([identifier_val, 'SKIPPED', 'Already present in cloud.'])
-                elif not legacy_data:
-                    counts['not_found_in_legacy'] += 1
-                    report_data.append([identifier_val, 'SKIPPED', 'Not found in legacy DB.'])
-            except Exception as e:
-                counts['failed'] += 1
-                report_data.append([identifier_val, 'FAILED', str(e)])
-
-        # Generate and upload report
-        report_key = f"reports/{migration_id}.csv"
-        report_buffer = io.StringIO()
-        csv.writer(report_buffer).writerows(report_data)
-        s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
-        
-        # Finalize job status
-        jobs_table.update_item(
-            Key={'migrationId': migration_id},
-            UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={':s': 'COMPLETED', ':m': counts['migrated'], ':ap': counts['already_present'], ':nf': counts['not_found_in_legacy'], ':f': counts['failed'], ':rk': report_key}
-        )
-    except Exception as e:
-        print(f"FATAL ERROR during processing: {e}")
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
-    finally:
-        # Clean up the original uploaded file
-        s3_client.delete_object(Bucket=bucket, Key=key)
-
-    return {'status': 'success'}
+  LegacyDBSecretArn:
+    Description: "The ARN of the secret containing the DB credentials"
+    Value: !Ref LegacyDBSecret
 
