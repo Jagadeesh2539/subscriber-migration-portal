@@ -34,20 +34,33 @@ jobs:
         with:
           python-version: '3.11' 
 
-      - name: Install and Package backend dependencies
+      # --- THIS STEP IS NOW COMBINED AND MORE ROBUST ---
+      - name: Install and Package All Backends
         run: |
+          echo "--- Packaging Main Flask API ---"
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
-          zip -r backend.zip . -x "*.pyc" "__pycache__/*" "*.git*"
-          
-      - name: Install and Package MIGRATION backend
-        run: |
-          cd backend/migration_processor
-          cp ../bulk_ops.py . # Copy shared files
-          pip install --no-cache-dir -t .
-          zip -r processor.zip . -x "*.pyc" "__pycache__/*"
+          # Create zip file in the root directory, excluding the migration processor code
+          zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
+          cd .. # Return to project root
 
-      # --- THIS STEP IS NOW FIXED TO PASS THE DB PASSWORD ---
+          echo "--- Packaging Migration Processor ---"
+          # Check if the required directory exists before trying to package it
+          if [ -d "backend/migration_processor" ]; then
+            cd backend/migration_processor
+            # This copy is redundant if you followed instructions, but safe to include
+            cp ../bulk_ops.py .
+            # This assumes an empty requirements.txt for now
+            pip install --no-cache-dir -t .
+            # Create zip file in the project root directory
+            zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*"
+            cd ../.. # Return to project root
+          else
+            echo "::error:: The 'backend/migration_processor' directory was not found."
+            echo "::error:: Please create this directory and add the 'app.py' for the migration processor as instructed in the previous step, then re-run this workflow."
+            exit 1
+          fi
+
       - name: Deploy CloudFormation Stack
         run: |
           cd aws
@@ -91,7 +104,7 @@ jobs:
         run: |
           aws lambda update-function-code \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-            --zip-file fileb://backend/backend.zip
+            --zip-file fileb://backend.zip
 
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
@@ -112,7 +125,7 @@ jobs:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
           BUCKET_NAME=$(echo $FRONTEND_URL | sed 's/http:\/\///' | sed 's/.s3-website.*//')
-          aws s3 cp backend/migration_processor/processor.zip s3://$BUCKET_NAME/processor.zip
+          aws s3 cp processor.zip s3://$BUCKET_NAME/processor.zip
 
       - name: Update MIGRATION Processor Lambda code
         env:
