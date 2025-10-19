@@ -108,14 +108,21 @@ jobs:
             }"
 
       - name: Upload MIGRATION Processor code to S3
+        env:
+          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
-          aws s3 cp backend/migration_processor/processor.zip s3://${{ steps.cfn_outputs.outputs.frontend_url | sed 's/http:\/\///' | sed 's/.s3-website.*//' }}/processor.zip
+          BUCKET_NAME=$(echo $FRONTEND_URL | sed 's/http:\/\///' | sed 's/.s3-website.*//')
+          aws s3 cp backend/migration_processor/processor.zip s3://$BUCKET_NAME/processor.zip
 
       - name: Update MIGRATION Processor Lambda code
+        env:
+          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
+          MIG_PROCESSOR_NAME: ${{ steps.cfn_outputs.outputs.mig_processor_name }}
         run: |
+          BUCKET_NAME=$(echo $FRONTEND_URL | sed 's/http:\/\///' | sed 's/.s3-website.*//')
           aws lambda update-function-code \
-            --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }} \
-            --s3-bucket ${{ steps.cfn_outputs.outputs.frontend_url | sed 's/http:\/\///' | sed 's/.s3-website.*//' }} \
+            --function-name $MIG_PROCESSOR_NAME \
+            --s3-bucket $BUCKET_NAME \
             --s3-key "processor.zip"
 
       - name: Wait for Lambda function updates to complete
@@ -162,3 +169,4 @@ jobs:
       - name: Deploy frontend to S3
         run: |
           aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
+
