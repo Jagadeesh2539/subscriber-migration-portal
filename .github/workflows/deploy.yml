@@ -18,7 +18,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-secret-key-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
       - name: Check AWS Account ID
@@ -86,7 +86,7 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- FIXED: Update Lambda Environment Variables (Added comma and PROV_MODE) ---
+      # --- FIXED: Update Lambda Environment Variables (Added dual_prov and legacy DB vars) ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -96,7 +96,10 @@ jobs:
               FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
-              PROV_MODE=cloud \
+              PROV_MODE=dual_prov, \
+              LEGACY_DB_HOST=your-public-rds-endpoint.us-east-1.rds.amazonaws.com, \
+              LEGACY_DB_USER=your_db_user, \
+              LEGACY_DB_PASSWORD=${{ secrets.LEGACY_DB_PASSWORD }} \
             }"
 
       - name: Deploy API Gateway Stage
