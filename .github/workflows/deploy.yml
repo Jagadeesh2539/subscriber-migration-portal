@@ -21,6 +21,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      # --- NEW DEBUGGING STEP ---
+      # This step will print the AWS Account ID your secrets are using.
+      # Compare this to the account ID where your API Gateway exists.
+      - name: Check AWS Account ID
+        run: |
+          echo "Checking AWS identity..."
+          aws sts get-caller-identity
+      # ---------------------------
+
       # ---------------------
       # Step 1: Build & Deploy Backend Lambda
       # ---------------------
@@ -99,7 +108,7 @@ jobs:
             
       - name: DEBUG Check API_ID Structure
         run: |
-          API_ID_VALUE="7rrghvsall" # <-- Using the hardcoded value for the check
+          API_ID_VALUE="7rrghvsall" # Using the hardcoded value for the check
           echo "Checking API_ID value structure..."
           if [[ -z "$API_ID_VALUE" ]]; then
             echo "::ERROR:: API_ID secret is EMPTY."
@@ -112,12 +121,9 @@ jobs:
             echo "API_ID structure looks correct (no colons). Proceeding."
           fi
 
-      # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX
-      # ---------------------
       - name: Deploy API Gateway Stage
         env:
-          API_ID: '7rrghvsall' # <-- HARDCODED FIX: Bypass GitHub Secrets
+          API_ID: '7rrghvsall' # Hardcoded API ID
         run: |
           echo "Starting deployment for API Gateway: $API_ID"
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
