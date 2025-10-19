@@ -2,7 +2,7 @@ import os
 import pymysql
 import pymysql.cursors
 import json
-import warnings # Added for cleaner logging of skipped connection
+import warnings
 
 # Get connection details from environment variables for local development.
 # The defaults match your local Docker setup.
@@ -34,6 +34,40 @@ def get_connection():
         autocommit=True
     )
 
+def check_for_duplicates(uid, imsi, msisdn):
+    """
+    Checks if a subscriber with the given UID, IMSI, or MSISDN already exists.
+    Returns a string detailing the conflict or None if no conflict is found.
+    """
+    try:
+        conn = get_connection()
+    except RuntimeError as e:
+        warnings.warn(f"INFO: Legacy DB duplicate check skipped: {e}")
+        return None 
+        
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+            SELECT uid, imsi, msisdn
+            FROM subscribers
+            WHERE uid = %s OR imsi = %s OR msisdn = %s
+            LIMIT 1;
+            """
+            cursor.execute(sql, (uid, imsi, msisdn))
+            result = cursor.fetchone()
+            
+            if result:
+                if result['uid'] == uid:
+                    return f"UID '{uid}' already exists in Legacy DB."
+                if result['imsi'] == imsi:
+                    return f"IMSI '{imsi}' already exists in Legacy DB."
+                if result['msisdn'] == msisdn:
+                    return f"MSISDN '{msisdn}' already exists in Legacy DB."
+            return None
+    finally:
+        if conn:
+            conn.close()
+
 def get_subscriber_by_any_id(identifier):
     """
     Fetches a full subscriber profile from the legacy DB using UID, IMSI, or MSISDN.
@@ -50,7 +84,7 @@ def get_subscriber_by_any_id(identifier):
         
     try:
         with conn.cursor() as cursor:
-            # This single, powerful query joins all 5 tables. (Restored the original query)
+            # This single, powerful query joins all 5 tables.
             sql = """
             SELECT
                 s.*,
@@ -156,6 +190,51 @@ def create_subscriber_full_profile(data):
             conn.rollback()
         print(f"Transaction failed: {e}")
         raise # Re-raise the exception to be caught by the API layer
+    finally:
+        if conn:
+            conn.close()
+
+def update_subscriber_full_profile(uid, data):
+    """
+    Updates a subscriber profile across all tables within a single transaction. (Placeholder for full implementation)
+    NOTE: For the purposes of this demo, this is a placeholder. A real update requires complex logic.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+    except RuntimeError as e:
+        # Fail the update operation if the legacy DB is unreachable
+        raise Exception(f"Dual Provisioning Failed: Legacy DB Unreachable for update: {e}") 
+
+    try:
+        with conn.cursor() as cursor:
+            conn.begin()
+
+            # 1. Update main subscribers table
+            sql_sub = """
+            UPDATE subscribers 
+            SET imsi=%s, msisdn=%s, plan=%s, subscription_state=%s, service_class=%s
+            WHERE uid=%s;
+            """
+            cursor.execute(sql_sub, (
+                data['imsi'], data.get('msisdn'), data.get('plan'),
+                data.get('subscription_state'), data.get('service_class'), uid
+            ))
+
+            # 2. Update HSS table (e.g., just profile type for simplicity)
+            sql_hss = "UPDATE tbl_hss_profiles SET profile_type=%s WHERE subscriber_uid=%s;"
+            cursor.execute(sql_hss, (data.get('profile_type'), uid))
+            
+            # 3. Update HLR table (e.g., just call forward unconditional)
+            sql_hlr = "UPDATE tbl_hlr_features SET call_forward_unconditional=%s WHERE subscriber_uid=%s;"
+            cursor.execute(sql_hlr, (data.get('call_forward_unconditional'), uid))
+
+            conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"Update transaction failed: {e}")
+        raise
     finally:
         if conn:
             conn.close()
