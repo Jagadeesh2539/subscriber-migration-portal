@@ -6,7 +6,8 @@ import os
 
 mig_bp = Blueprint('migration', __name__)
 
-@mig_bp.route('/bulk', methods=['POST'])
+# --- FIX ---
+@mig_bp.route('/bulk', methods=['POST', 'OPTIONS'])
 @login_required()
 def bulk_migration():
     user = request.environ['user']
@@ -24,6 +25,7 @@ def bulk_migration():
         log_audit(user['sub'], 'START_MIGRATION', {}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
+# --- FIX (No change needed, GET only) ---
 @mig_bp.route('/status/<job_id>', methods=['GET'])
 @login_required()
 def migration_status(job_id):
