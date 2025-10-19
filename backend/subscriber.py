@@ -4,117 +4,113 @@ from audit import log_audit
 import boto3
 import os
 from datetime import datetime
-
-# --- NEW: Import our new legacy DB connector ---
-import legacy_db
+import legacy_db # Import our new connector
 
 prov_bp = Blueprint('prov', __name__)
 
-# Cloud (DynamoDB) connection remains the same
+# Cloud (DynamoDB) connection
 SUBSCRIBER_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
-subscriber_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME)
-
-# --- REMOVED: The old LEGACY_DB dictionary is gone ---
+subscriber_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME) if SUBSCRIBER_TABLE_NAME else None
 
 MODE = os.environ.get('PROV_MODE', 'dual_prov')
 
-def dual_provision(data, method='put'):
-    """
-    Writes data to both legacy and cloud based on the current mode.
-    This now calls functions from our legacy_db connector.
-    """
-    uid = data.get('uid') or data.get('subscriberId')
-
-    # --- Legacy DB Action ---
-    if MODE in ['legacy', 'dual_prov']:
-        try:
-            if method == 'put':
-                # We will implement this function in a later step
-                legacy_db.create_subscriber(data)
-            elif method == 'delete':
-                legacy_db.delete_subscriber(uid)
-        except Exception as e:
-            print(f"Error in legacy DB operation: {e}")
-            
-    # --- Cloud (DynamoDB) Action ---
-    if MODE in ['cloud', 'dual_prov']:
-        try:
-            if method == 'put':
-                data['subscriberId'] = uid
-                subscriber_table.put_item(Item=data)
-            elif method == 'delete':
-                subscriber_table.delete_item(Key={'subscriberId': uid})
-        except Exception as e:
-            print(f"Error in DynamoDB operation: {e}")
-
-
-# --- NEW: A powerful search endpoint that replaces the old get_subscriber ---
+# --- NEW: A flexible search endpoint ---
 @prov_bp.route('/search', methods=['GET'])
 @login_required()
 def search_subscriber():
     """
-    Searches for a subscriber by any identifier (uid, imsi, msisdn).
-    Checks cloud (DynamoDB) first, then falls back to legacy (MySQL).
+    Searches for a subscriber by UID, IMSI, or MSISDN.
+    It checks the cloud (DynamoDB) first, then falls back to the legacy DB (MySQL).
     """
     identifier = request.args.get('identifier')
     if not identifier:
         return jsonify(msg='Identifier query parameter is required'), 400
 
     try:
-        # 1. Check Cloud DB first
-        # Note: DynamoDB only allows efficient lookups on its primary key (subscriberId).
-        # We assume the identifier might be a UID/subscriberId for this check.
-        cloud_data = subscriber_table.get_item(Key={'subscriberId': identifier}).get('Item')
-        
+        # Check cloud first
+        cloud_data = None
+        if subscriber_table:
+            # Note: A real-world cloud DB would need secondary indexes (GSIs) 
+            # on IMSI and MSISDN for this to be efficient. This example only checks the primary key.
+            response = subscriber_table.get_item(Key={'subscriberId': identifier})
+            cloud_data = response.get('Item')
+
         if cloud_data:
-            # If found in cloud, we might still want to enrich it with legacy data if needed,
-            # but for now, we'll just return it.
-            log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier, 'source': 'cloud'}, 'SUCCESS')
             # Map subscriberId back to uid for frontend consistency
             cloud_data['uid'] = cloud_data.get('subscriberId')
+            log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier, 'source': 'cloud'}, 'SUCCESS')
             return jsonify(cloud_data), 200
-
-        # 2. If not in cloud, check Legacy DB using our powerful new function
+        
+        # If not in cloud, check legacy
         legacy_data = legacy_db.get_subscriber_by_any_id(identifier)
         if legacy_data:
             log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier, 'source': 'legacy'}, 'SUCCESS')
             return jsonify(legacy_data), 200
         
-        # 3. If not found anywhere
-        log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier}, 'NOT_FOUND')
+        # If not found in either, return 404
         return jsonify(msg='Subscriber not found'), 404
-
+        
     except Exception as e:
         log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
 
-# --- The rest of the functions (POST, PUT, DELETE) will be updated later ---
-# --- They still use the placeholder logic for now ---
-
+# --- NEW: A full-profile create endpoint ---
 @prov_bp.route('/subscriber', methods=['POST', 'OPTIONS'])
 @login_required()
 def add_subscriber():
-    # This function will be enhanced later to handle the multi-table schema
-    return jsonify(msg="Add subscriber endpoint needs to be updated."), 501
+    """
+    Handles creating a new subscriber in both legacy (MySQL) and cloud (DynamoDB) systems.
+    """
+    user = request.environ['user']
+    data = request.json
 
+    try:
+        if not data.get('uid'):
+             return jsonify(msg='Error: uid is a required field'), 400
 
-@prov_bp.route('/subscriber/<uid>', methods=['PUT', 'OPTIONS'])
-@login_required()
-def update_subscriber(uid):
-    return jsonify(msg="Update subscriber endpoint needs to be updated."), 501
+        # --- Dual Provisioning: Create in both systems ---
+        if MODE in ['legacy', 'dual_prov']:
+            legacy_db.create_subscriber_full_profile(data)
+        
+        if MODE in ['cloud', 'dual_prov'] and subscriber_table:
+            # For DynamoDB, we flatten the data for this example.
+            # A real system might store complex objects or use DynamoDB Streams.
+            cloud_item = data.copy()
+            cloud_item['subscriberId'] = data['uid'] # Use 'subscriberId' as the primary key
+            subscriber_table.put_item(Item=cloud_item)
+        
+        log_audit(user['sub'], 'ADD_SUBSCRIBER', {'uid': data['uid']}, 'SUCCESS')
+        return jsonify(msg='Subscriber created successfully', uid=data['uid']), 201
 
+    except Exception as e:
+        log_audit(user['sub'], 'ADD_SUBSCRIBER', {'uid': data.get('uid')}, f'FAILED: {str(e)}')
+        return jsonify(msg=f'Error: {str(e)}'), 500
 
+# --- NEW: A simple delete endpoint ---
 @prov_bp.route('/subscriber/<uid>', methods=['DELETE', 'OPTIONS'])
 @login_required(role='admin') 
 def delete_subscriber(uid):
+    """
+    Handles deleting a subscriber from both legacy and cloud systems.
+    """
     user = request.environ['user']
+    
     try:
-        data_to_delete = {'uid': uid}
-        dual_provision(data_to_delete, method='delete')
-        log_audit(user['sub'], 'DELETE_SUBSCRIBER', data_to_delete, 'SUCCESS')
+        # --- Dual Provisioning: Delete from both systems ---
+        if MODE in ['legacy', 'dual_prov']:
+            legacy_db.delete_subscriber(uid)
+        
+        if MODE in ['cloud', 'dual_prov'] and subscriber_table:
+            subscriber_table.delete_item(Key={'subscriberId': uid})
+            
+        log_audit(user['sub'], 'DELETE_SUBSCRIBER', {'uid': uid}, 'SUCCESS')
         return jsonify(msg='Subscriber deleted successfully'), 200
+
     except Exception as e:
-        log_audit('user', 'DELETE_SUBSCRIBER', {'uid': uid}, f'FAILED: {str(e)}')
+        log_audit(user['sub'], 'DELETE_SUBSCRIBER', {'uid': uid}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error: {str(e)}'), 500
+
+# NOTE: A full PUT/update endpoint would require significant logic to update 
+# all 5 tables transactionally and is omitted for brevity, but would follow a similar pattern to create.
 
