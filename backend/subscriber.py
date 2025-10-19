@@ -17,8 +17,9 @@ SUBSCRIBER_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION', 'us-east-1'))
 subscriber_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME)
 
-# Get provisioning mode: 'cloud' (default), 'legacy', or 'dual_prov'
-MODE = os.getenv('PROV_MODE', 'cloud') 
+# --- MODIFIED LINE ---
+# Get provisioning mode: Default changed from 'cloud' to 'dual_prov'
+MODE = os.getenv('PROV_MODE', 'dual_prov') 
 
 # --- Centralized Dual Provisioning Core Function ---
 
@@ -35,9 +36,9 @@ def dual_provision(data, method='put'):
             if method == 'put':
                 legacy_db.create_subscriber_full_profile(data)
             elif method == 'update':
-                # Note: legacy_db.update_subscriber_full_profile is a placeholder in the original file
-                # It needs to be fully implemented in legacy_db.py for this to work
-                legacy_db.update_subscriber_full_profile(uid, data) 
+                # Note: The original legacy_db.py's update function is a placeholder.
+                # This call assumes it's implemented to update based on UID.
+                legacy_db.update_subscriber_full_profile(uid, data)
             elif method == 'delete':
                 legacy_db.delete_subscriber(uid)
         except Exception as e:
@@ -67,12 +68,9 @@ def check_dynamodb_duplicate(identifier, value, current_uid=None):
     Checks for duplicates in DynamoDB using its Global Secondary Indexes (GSIs).
     Returns a descriptive error string if a duplicate is found, otherwise None.
     """
-    # Note: This assumes you have GSIs named 'IMSI-Index' and 'MSISDN-Index'
-    # The provided cloudformation.yaml does NOT define these. This code will
-    # fail unless the DynamoDB table schema is updated with these indexes.
+    index_name = f'{identifier.upper()}-Index'
+    
     try:
-        index_name = f'{identifier.upper()}-Index'
-        
         # Query the GSI based on the identifier type
         response = subscriber_table.query(
             IndexName=index_name,
@@ -87,15 +85,16 @@ def check_dynamodb_duplicate(identifier, value, current_uid=None):
                 
                 # Found a true duplicate
                 return f"Cloud DB (GSI: {identifier.upper()})", item.get('subscriberId')
+                
     except Exception as e:
-        # Catch Boto3 errors if the index doesn't exist
-        print(f"Warning: Could not check GSI '{identifier.upper()}-Index'. It may not exist. Error: {e}")
-        # Continue without GSI validation if it fails, relying on PK validation.
-        pass
+        # This will catch the "ValidationException" if the index doesn't exist
+        print(f"CRITICAL: Failed to query GSI '{index_name}'. Error: {e}")
+        # Re-raise to stop the operation, as validation can't be guaranteed
+        raise Exception(f"Validation failed: DynamoDB Index '{index_name}' not found or query failed.")
 
     return None, None
 
-# --- NEW: Powerful Search Endpoint (Handles multiple identifiers) ---
+# --- MODIFIED SEARCH ENDPOINT ---
 
 @prov_bp.route('/search', methods=['GET'])
 @login_required()
@@ -105,7 +104,7 @@ def search_subscriber():
     in cloud and legacy databases, using the 'type' parameter sent from the frontend.
     """
     identifier_value = request.args.get('identifier')
-    # --- ENHANCEMENT: Read the 'type' from the query ---
+    # Read the 'type' (uid, imsi, msisdn) from the query string
     identifier_type = request.args.get('type', 'uid') # Default to 'uid' if not provided
 
     if not identifier_value:
@@ -114,14 +113,13 @@ def search_subscriber():
     try:
         cloud_data = None
         
-        # --- ENHANCEMENT: Use the 'type' to search efficiently ---
+        # Use the 'type' to search efficiently
         if identifier_type == 'uid':
             # 1. Check cloud (DynamoDB) by Primary Key
             cloud_data = subscriber_table.get_item(Key={'subscriberId': identifier_value}).get('Item')
         
         elif identifier_type == 'imsi':
             # 2. Check cloud (DynamoDB) by IMSI GSI
-            # This requires a GSI named 'IMSI-Index' on the 'imsi' attribute
             response = subscriber_table.query(
                 IndexName='IMSI-Index',
                 KeyConditionExpression=Key('imsi').eq(identifier_value)
@@ -131,7 +129,6 @@ def search_subscriber():
 
         elif identifier_type == 'msisdn':
             # 3. Check cloud (DynamoDB) by MSISDN GSI
-            # This requires a GSI named 'MSISDN-Index' on the 'msisdn' attribute
             response = subscriber_table.query(
                 IndexName='MSISDN-Index',
                 KeyConditionExpression=Key('msisdn').eq(identifier_value)
@@ -142,14 +139,14 @@ def search_subscriber():
         # --- Process Cloud Result ---
         if cloud_data:
             cloud_data['uid'] = cloud_data.get('subscriberId')
-            cloud_data['source'] = 'Cloud/DynamoDB' # Add source for clarity
+            cloud_data['source'] = 'Cloud/DynamoDB' # Add source for frontend
             log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier_value, 'type': identifier_type, 'source': 'cloud'}, 'SUCCESS')
             return jsonify(cloud_data), 200
 
         # 4. If not found in cloud, query the legacy (MySQL) database
         legacy_data = legacy_db.get_subscriber_by_any_id(identifier_value)
         if legacy_data:
-            legacy_data['source'] = 'Legacy/MySQL' # Add source for clarity
+            legacy_data['source'] = 'Legacy/MySQL' # Add source for frontend
             log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier_value, 'type': identifier_type, 'source': 'legacy'}, 'SUCCESS')
             return jsonify(legacy_data), 200
         
@@ -158,16 +155,16 @@ def search_subscriber():
         return jsonify(msg='Subscriber not found in Cloud or Legacy database.'), 404
         
     except Exception as e:
-        # Handle cases where GSIs might not exist
-        if "Cannot do operations on a non-existent index" in str(e):
+        # Catch the "ValidationException" specifically if the index doesn't exist
+        if "The table does not have the specified index" in str(e) or "Cannot do operations on a non-existent index" in str(e):
             log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier_value, 'type': identifier_type}, f'FAILED: {e}')
-            return jsonify(msg=f"Search failed: The required DynamoDB Index '{identifier_type.upper()}-Index' does not exist. Please update CloudFormation."), 500
+            return jsonify(msg=f"Search Error: The DynamoDB Index '{identifier_type.upper()}-Index' does not exist. The CloudFormation stack needs to be updated."), 500
         
         log_audit('system', 'SEARCH_SUBSCRIBER', {'identifier': identifier_value, 'type': identifier_type}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error during search: {str(e)}'), 500
 
 
-# --- NEW: Create Endpoint with Full Duplicate Validation ---
+# --- Create Endpoint with Full Duplicate Validation ---
 
 @prov_bp.route('/subscriber', methods=['POST', 'OPTIONS'])
 @login_required()
@@ -217,12 +214,11 @@ def add_subscriber():
         return jsonify(msg='Subscriber created successfully', uid=data['uid']), 201
     
     except Exception as e:
-        # Catch and report the specific Dual Provisioning failure message
         log_audit(user['sub'], 'ADD_SUBSCRIBER', data, f'FAILED: {str(e)}')
         return jsonify(msg=f'{str(e)}'), 500
 
 
-# --- NEW: Update Endpoint with Full Duplicate Validation and Exclusion ---
+# --- Update Endpoint with Full Duplicate Validation and Exclusion ---
 
 @prov_bp.route('/subscriber/<uid>', methods=['PUT', 'OPTIONS'])
 @login_required()
@@ -250,12 +246,11 @@ def update_subscriber(uid):
             if source:
                 return jsonify(msg=f"Validation Error: MSISDN '{msisdn}' is a duplicate in {source} (Sub ID: {conflict_id})."), 400
 
-
         # 2. --- VALIDATION: Check for Duplicates in Legacy DB (excluding current UID) ---
         if MODE in ['legacy', 'dual_prov']:
-            # The legacy_db.check_for_duplicates function does not support exclusion
-            # A more robust check would be needed here for a true production system
-            # For now, we rely on the DB constraint to fail the 'dual_provision' call
+            # The original legacy_db.check_for_duplicates does not support exclusion.
+            # A production system would need a modified query.
+            # We'll rely on the DB constraint to fail the dual_provision call if there's a conflict.
             pass
 
         # --- Provisioning ---
@@ -309,8 +304,7 @@ def get_subscriber_count():
         # Simulate Today's Provisions for the dashboard
         today_provisions = 0
         
-        # Mocking logic for today's provisions: In a real system, you'd query the AuditLogTable
-        # For simplicity, we'll just mock it based on total count parity.
+        # Mocking logic for today's provisions
         if count > 0:
             today_provisions = max(1, count % 5) # Gives a number 1-4 for visual effect
 
