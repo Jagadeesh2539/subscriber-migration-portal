@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   Paper, TextField, Button, Typography, Alert, Box, CircularProgress, 
-  Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, Divider, 
-  Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Tabs, Tab,
-  Tooltip, Checkbox, FormControlLabel // ✅ Added Tooltip, Checkbox, FormControlLabel
+  Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, 
+  Dialog, DialogTitle, DialogContent, DialogActions, Tabs, Tab,
+  Tooltip, Checkbox, FormControlLabel, IconButton 
 } from '@mui/material';
 import { 
-  Search, Add, Edit, Delete, Dashboard, CheckCircleOutline, VpnKey, AccountCircle 
+  Search, Add, Edit, Delete, Dashboard, CheckCircleOutline, VpnKey, AccountCircle, InfoOutlined 
 } from '@mui/icons-material';
 import API from '../api';
 
@@ -20,47 +20,42 @@ const DEFAULT_SUBSCRIBER = {
   ts11_provisioned: true, ts21_provisioned: true,
   ts22_provisioned: true, bs30_genr_provisioned: true,
   account_status: 'ACTIVE', language_id: 'en-US', sim_type: '4G_USIM',
-  call_forward_unconditional: '', // Added for completeness
+  call_forward_unconditional: '',
 };
 
 // --- Helper Components ---
 
-// --- 1. Subscriber Form (Used for Create and Modify) ---
+// --- 1. Subscriber Form (Create/Modify) ---
 const SubscriberForm = ({ formData, setFormData, isEditing }) => {
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({ 
       ...prev, 
       [name]: type === 'checkbox' ? checked : value,
-      // Ensure uid is never changed during editing
       uid: isEditing ? formData.uid : (name === 'uid' ? value : prev.uid) 
     }));
   };
 
-  // Field definitions (using your refined list)
   const formFields = [
-    // Core Identifiers (Mandatory/Primary)
     { name: 'uid', label: 'UID (Primary Key)', required: true, disabled: isEditing, xs: 12, sm: 4, tooltip: 'Unique Identifier for the subscriber. Cannot be changed when editing.' },
     { name: 'imsi', label: 'IMSI (SIM ID)', required: true, disabled: false, xs: 12, sm: 4, tooltip: 'International Mobile Subscriber Identity.' },
-    { name: 'msisdn', label: 'MSISDN (Phone Number)', required: false, disabled: false, xs: 12, sm: 4, tooltip: 'Mobile Station International Subscriber Directory Number.' },
+    { name: 'msisdn', label: 'MSISDN (Phone Number)', required: false, disabled: false, xs: 12, sm: 4, tooltip: 'Phone Number. Must be unique if provided.' },
     
-    // Subscription Details
-    { name: 'plan', label: 'Service Plan', required: false, xs: 12, sm: 4 },
-    { name: 'subscription_state', label: 'Subscription State', required: false, xs: 12, sm: 4 },
-    { name: 'service_class', label: 'Service Class', required: false, xs: 12, sm: 4 },
+    { name: 'plan', label: 'Service Plan', required: false, xs: 12, sm: 4, tooltip: 'Service plan assigned to the subscriber.' },
+    { name: 'subscription_state', label: 'Subscription State', required: false, xs: 12, sm: 4, tooltip: 'Current state of the subscription (e.g., ACTIVE, SUSPENDED).' },
+    { name: 'service_class', label: 'Service Class', required: false, xs: 12, sm: 4, tooltip: 'The service profile or class.' },
     
-    // HSS/LTE Profile
     { name: 'profile_type', label: 'Profile Type', required: false, xs: 12, sm: 4 },
     { name: 'account_status', label: 'Account Status (VAS)', required: false, xs: 12, sm: 4 },
     { name: 'language_id', label: 'Language ID', required: false, xs: 12, sm: 4 },
     { name: 'sim_type', label: 'SIM Type', required: false, xs: 12, sm: 4 },
 
     // HLR Features (Booleans/Flags)
-    { name: 'call_barring_all_outgoing', label: 'Call Barring (Outgoing)', type: 'checkbox', xs: 12, sm: 4 },
-    { name: 'clip_provisioned', label: 'CLIP Provisioned', type: 'checkbox', xs: 12, sm: 4 },
-    { name: 'clir_provisioned', label: 'CLIR Provisioned', type: 'checkbox', xs: 12, sm: 4 },
-    { name: 'call_hold_provisioned', label: 'Call Hold Provisioned', type: 'checkbox', xs: 12, sm: 4 },
-    { name: 'call_waiting_provisioned', label: 'Call Waiting Provisioned', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'call_barring_all_outgoing', label: 'Call Barring (Outgoing)', type: 'checkbox', xs: 12, sm: 4, tooltip: 'Enable/Disable all outgoing calls.' },
+    { name: 'clip_provisioned', label: 'CLIP Provisioned', type: 'checkbox', xs: 12, sm: 4, tooltip: 'Calling Line Identification Presentation.' },
+    { name: 'clir_provisioned', label: 'CLIR Provisioned', type: 'checkbox', xs: 12, sm: 4, tooltip: 'Calling Line Identification Restriction.' },
+    { name: 'call_hold_provisioned', label: 'Call Hold Provisioned', type: 'checkbox', xs: 12, sm: 4, tooltip: 'Enable/Disable Call Hold feature.' },
+    { name: 'call_waiting_provisioned', label: 'Call Waiting Provisioned', type: 'checkbox', xs: 12, sm: 4, tooltip: 'Enable/Disable Call Waiting feature.' },
     { name: 'call_forward_unconditional', label: 'Call Forward Unconditional', required: false, xs: 12, sm: 8 },
   ];
 
@@ -71,7 +66,7 @@ const SubscriberForm = ({ formData, setFormData, isEditing }) => {
 
       return (
         <Grid item xs={field.xs} sm={field.sm} key={field.name}>
-          <Tooltip title={field.tooltip || field.label}> {/* ✅ Tooltip for checkbox */}
+          <Tooltip title={field.tooltip || field.label}>
             <FormControlLabel
               control={
                 <Checkbox 
@@ -91,7 +86,7 @@ const SubscriberForm = ({ formData, setFormData, isEditing }) => {
     // Standard TextField rendering with Tooltip
     return (
       <Grid item xs={field.xs} sm={field.sm} key={field.name}>
-        <Tooltip title={field.tooltip || field.label}> {/* ✅ Tooltip for textfield */}
+        <Tooltip title={field.tooltip || field.label}>
           <TextField 
             name={field.name} 
             label={field.label} 
@@ -266,7 +261,7 @@ const ProvisioningDashboard = ({ totalSubs, todayProvisions, fetchCounts }) => {
 };
 
 
-// --- View B: Create Subscriber ---
+// --- View B: Create Subscriber (Inline Form) ---
 const SubscriberCreate = ({ totalSubs, setTotalSubs, fetchCounts }) => {
   const [formData, setFormData] = useState(DEFAULT_SUBSCRIBER);
   const [loading, setLoading] = useState(false);
@@ -288,11 +283,9 @@ const SubscriberCreate = ({ totalSubs, setTotalSubs, fetchCounts }) => {
       
       setMessage({ type: 'success', text: response.data?.msg || 'Subscriber created successfully!' });
       
-      // Simulate real-time dashboard update (increment count)
       setTotalSubs(prev => prev + 1);
       fetchCounts();
 
-      // Reset form after success
       setFormData(DEFAULT_SUBSCRIBER); 
       
     } catch (err) {
@@ -343,9 +336,76 @@ const SubscriberCreate = ({ totalSubs, setTotalSubs, fetchCounts }) => {
 };
 
 
+// --- Search Tabs Component ---
+const SearchTabs = ({ searchTerm, setSearchTerm, handleSearch, loading, type, setSearchType }) => {
+    const searchTabs = [
+        { label: 'Search by UID', key: 'uid', placeholder: 'Enter UID' },
+        { label: 'Search by IMSI', key: 'imsi', placeholder: 'Enter IMSI' },
+        { label: 'Search by MSISDN', key: 'msisdn', placeholder: 'Enter MSISDN' },
+    ];
+    
+    // Find the currently active tab index based on the search type prop
+    const activeTab = searchTabs.findIndex(t => t.key === type);
+
+    const handleTabChange = (event, newValue) => {
+        // Update the searchType in the parent component based on the tab clicked
+        setSearchType(searchTabs[newValue].key);
+        setSearchTerm('');
+    };
+    
+    const currentTab = searchTabs[activeTab];
+
+    return (
+        <Card variant="outlined" sx={{ p: 3, mb: 3, bgcolor: '#f0f4f8' }}>
+            <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center' }}>
+                <VpnKey sx={{ mr: 1, color: 'primary.main' }} /> Search By Identifier
+            </Typography>
+
+            <Tabs 
+                value={activeTab} 
+                onChange={handleTabChange} 
+                variant="scrollable" 
+                scrollButtons="auto" 
+                sx={{ mb: 2 }}
+            >
+                {searchTabs.map((tab, index) => (
+                    <Tab key={tab.key} label={tab.label} />
+                ))}
+            </Tabs>
+            
+            <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+                Enter the subscriber's **{currentTab.key.toUpperCase()}** to retrieve the profile.
+            </Typography>
+            <Box display="flex" alignItems="center" gap={2}>
+              <TextField 
+                fullWidth 
+                label={currentTab.placeholder}
+                value={searchTerm} 
+                onChange={e => setSearchTerm(e.target.value)} 
+                variant="outlined" 
+                size="small"
+                onKeyPress={(e) => e.key === 'Enter' && handleSearch(searchTerm, currentTab.key)}
+                disabled={loading}
+              />
+              <Button 
+                variant="contained" 
+                startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <Search />} 
+                onClick={() => handleSearch(searchTerm, currentTab.key)} 
+                disabled={loading || !searchTerm.trim()} 
+                sx={{ py: '8px', whiteSpace: 'nowrap' }}
+              >
+                Search
+              </Button>
+            </Box>
+        </Card>
+    );
+};
+
+
 // --- View C: Search, Modify, & Delete Subscriber ---
 const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchType, setSearchType] = useState('uid');
   const [subscriber, setSubscriber] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
@@ -356,7 +416,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
   // Set the title based on the mode
   const title = isDeleteMode ? 'Delete Subscriber Profile' : 'Search & Modify Subscriber';
 
-  const handleSearch = async (term = searchTerm) => {
+  const handleSearch = useCallback(async (term, type) => {
     const searchIdentifier = term.trim();
     if (!searchIdentifier) {
       setMessage({ type: 'warning', text: 'Please enter an identifier to search.' });
@@ -368,21 +428,22 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
     setIsEditing(false);
 
     try {
-      const { data } = await API.get(`/provision/search?identifier=${searchIdentifier}`);
+      // Send the identifier and its type to the backend for accurate search
+      const { data } = await API.get(`/provision/search?identifier=${searchIdentifier}&type=${type}`);
       setSubscriber(data);
-      // Initialize form data with the fetched subscriber data
       setFormData(data); 
-      setMessage({ type: 'success', text: `Subscriber ${data.uid} found. Source: ${data.source || 'Cloud/DynamoDB'}` });
+      setMessage({ type: 'success', text: `Subscriber ${data.uid} found by ${type.toUpperCase()}. Source: ${data.source || 'Cloud/DynamoDB'}` });
+      if (isDeleteMode) setIsDeleteModalOpen(true); // Open modal immediately if in delete mode
     } catch (err) {
       if (err.response?.status === 404) {
         setMessage({ type: 'error', text: `Subscriber identifier '${searchIdentifier}' not found.` });
       } else {
-        setMessage({ type: 'error', text: err.response?.data?.msg || 'An unknown error occurred during search.' });
+        setMessage({ type: 'error', text: err.response?.data?.msg || `Error during search: ${err.message}` });
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [isDeleteMode]);
 
   const handleModify = async (e) => {
     e.preventDefault();
@@ -402,7 +463,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
       setIsEditing(false);
       
       // Re-fetch data to update the detail view with fresh data
-      await handleSearch(formData.uid); 
+      await handleSearch(formData.uid, 'uid'); 
       
     } catch (err) {
       const errorMsg = err.response?.data?.msg || 'An unknown error occurred during update.';
@@ -439,7 +500,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
   const renderContent = () => {
     if (isEditing) {
       return (
-        <form onSubmit={handleModify} sx={{ mt: 3 }}>
+        <Box component="form" onSubmit={handleModify} sx={{ mt: 3 }}>
           <Alert severity="info" sx={{ my: 2 }}>
             You are editing Subscriber **{formData.uid}**. Changes will be saved to both Cloud and Legacy DBs (if enabled).
           </Alert>
@@ -458,7 +519,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
               {loading ? 'Saving Changes...' : 'Save Modifications'}
             </Button>
           </Box>
-        </form>
+        </Box>
       );
     }
     
@@ -472,6 +533,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
                     startIcon={<Edit />} 
                     onClick={() => setIsEditing(true)} 
                     color="primary"
+                    disabled={isDeleteMode} // Can't modify if in Delete tab
                 >
                     Modify Profile
                 </Button>
@@ -480,7 +542,6 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
                     color="error" 
                     startIcon={<Delete />} 
                     onClick={() => setIsDeleteModalOpen(true)}
-                    disabled={isDeleteMode} // Disable here if we are already in the Delete dedicated view
                 >
                     Delete Subscriber
                 </Button>
@@ -497,36 +558,15 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
         {isDeleteMode ? <Delete sx={{ mr: 1, color: 'error.main' }} /> : <Search sx={{ mr: 1 }} />} {title}
       </Typography>
       
-      {/* Search Input Block */}
-      <Card variant="outlined" sx={{ p: 3, mb: 3, bgcolor: '#f0f4f8' }}>
-        <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center' }}>
-            <VpnKey sx={{ mr: 1, color: 'primary.main' }} /> Search By Identifier
-        </Typography>
-        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-          Enter **UID**, **IMSI**, or **MSISDN** to retrieve the profile.
-        </Typography>
-        <Box display="flex" alignItems="center" gap={2}>
-          <TextField 
-            fullWidth 
-            label="UID, IMSI, or MSISDN" 
-            value={searchTerm} 
-            onChange={e => setSearchTerm(e.target.value)} 
-            variant="outlined" 
-            size="small"
-            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-            disabled={loading}
-          />
-          <Button 
-            variant="contained" 
-            startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <Search />} 
-            onClick={() => handleSearch()} 
-            disabled={loading || !searchTerm.trim()} 
-            sx={{ py: '8px', whiteSpace: 'nowrap' }}
-          >
-            Search
-          </Button>
-        </Box>
-      </Card>
+      {/* Search Input Block - Now Tabbed */}
+      <SearchTabs 
+        searchTerm={searchTerm} 
+        setSearchTerm={setSearchTerm} 
+        handleSearch={handleSearch} 
+        loading={loading}
+        type={searchType}
+        setSearchType={setSearchType} // Pass setter to SearchTabs
+      />
       
       {/* Status Messages */}
       {message.text && <Alert severity={message.type.includes('Validation') || message.type.includes('error') ? 'error' : message.type} sx={{ my: 2 }} onClose={() => setMessage({ type: '', text: '' })}>{message.text}</Alert>}
@@ -537,7 +577,7 @@ const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }
       {/* Delete Modal */}
       {subscriber && (
         <DeleteConfirmModal 
-          open={isDeleteModalOpen || isDeleteMode} // Open if in delete view or triggered by button
+          open={isDeleteModalOpen}
           onClose={() => setIsDeleteModalOpen(false)}
           subscriber={subscriber}
           onConfirm={handleDeleteConfirm}
@@ -558,24 +598,23 @@ export default function SubscriberProvision() {
   const [totalSubs, setTotalSubs] = useState(0);
   const [todayProvisions, setTodayProvisions] = useState(0);
 
-  const handleTabChange = (event, newValue) => {
-    setActiveTab(newValue);
-  };
-  
-  // Function to fetch dashboard counts from the backend (used by both dashboard and create/delete success)
-  const fetchCounts = async () => {
+  // Use useCallback to ensure this function doesn't change unnecessarily
+  const fetchCounts = useCallback(async () => {
       try {
           const { data } = await API.get('/provision/count');
           setTotalSubs(data.total_subscribers);
           setTodayProvisions(data.today_provisions);
       } catch (err) {
           console.error("Failed to fetch subscriber counts:", err);
-          // Set a fallback count
           setTotalSubs('N/A');
           setTodayProvisions('N/A');
       }
-  };
+  }, []); // Empty dependency array ensures fetchCounts is stable
 
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+  
   const renderContent = () => {
     switch (activeTab) {
       case 0:
@@ -585,7 +624,6 @@ export default function SubscriberProvision() {
       case 2:
         return <SubscriberSearch totalSubs={totalSubs} setTotalSubs={setTotalSubs} fetchCounts={fetchCounts} isDeleteMode={false} />;
       case 3:
-        // Use the same search component but force the delete modal open upon search result
         return <SubscriberSearch totalSubs={totalSubs} setTotalSubs={setTotalSubs} fetchCounts={fetchCounts} isDeleteMode={true} />;
       default:
         return <Typography>Select a Provisioning Option</Typography>;
