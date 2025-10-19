@@ -73,6 +73,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
        <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 1 }}>
         <Typography variant="h6">Subscriber Profile</Typography>
         <Box>
+            {/* The Edit button is disabled as the backend PUT endpoint is not yet fully implemented for multi-table updates */}
             <Button variant="outlined" startIcon={<Edit />} onClick={() => onEdit(subscriber)} sx={{ mr: 1 }} disabled>Edit</Button>
             <Button variant="outlined" color="error" startIcon={<Delete />} onClick={() => onDelete(subscriber.uid)}>Delete</Button>
         </Box>
@@ -181,9 +182,9 @@ export default function SubscriberProvision() {
     setMessage('');
     try {
       if (editingSubscriber) {
-        // TODO: Implement the PUT endpoint in the backend
+        // TODO: Implement the PUT endpoint in the backend for multi-table updates
         // await API.put(`/provision/subscriber/${editingSubscriber.uid}`, formData);
-        setMessage('Subscriber updated successfully!');
+        setMessage('Subscriber updated successfully! (Note: Edit functionality is a placeholder)');
       } else {
         // Create new subscriber
         await API.post('/provision/subscriber', formData);
