@@ -86,7 +86,7 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- THIS STEP IS NOW FIXED TO USE THE CORRECT URL ---
+      # --- FIXED: Update Lambda Environment Variables (Added comma and PROV_MODE) ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -95,8 +95,8 @@ jobs:
             --environment "Variables={ \
               FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
-              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }} \
-              PROV_MODE=cloud \ # <--- ADD THIS LINE
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
+              PROV_MODE=cloud \
             }"
 
       - name: Deploy API Gateway Stage
