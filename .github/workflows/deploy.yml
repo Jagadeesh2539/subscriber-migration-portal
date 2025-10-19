@@ -34,30 +34,49 @@ jobs:
         with:
           python-version: '3.11' 
 
-      # --- THIS STEP IS NOW COMBINED AND MORE ROBUST ---
       - name: Install and Package All Backends
         run: |
+          echo "Current directory: $(pwd)"
+          echo "Listing files in backend: $(ls -la backend)"
           echo "--- Packaging Main Flask API ---"
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
-          # Create zip file in the root directory, excluding the migration processor code
+          # Ensure legacy_db.py exists before copying
+          if [ -f "legacy_db.py" ]; then
+            cp legacy_db.py migration_processor/
+          else
+            echo "::warning:: legacy_db.py not found in backend/ - Processor might fail if it needs it."
+          fi
+          # Ensure bulk_ops.py exists before copying (needed for MOCK data in processor)
+           if [ -f "bulk_ops.py" ]; then
+            cp bulk_ops.py migration_processor/
+          else
+            echo "::warning:: bulk_ops.py not found in backend/ - Processor might fail if it needs it."
+          fi
+          # Create zip file in the root directory, excluding specific files/dirs
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
           cd .. # Return to project root
+          echo "Current directory after main API packaging: $(pwd)"
 
           echo "--- Packaging Migration Processor ---"
-          # Check if the required directory exists before trying to package it
           if [ -d "backend/migration_processor" ]; then
             cd backend/migration_processor
-            # This copy is redundant if you followed instructions, but safe to include
-            cp ../bulk_ops.py .
-            # This assumes an empty requirements.txt for now
-            pip install --no-cache-dir -t .
+            echo "Current directory for processor packaging: $(pwd)"
+            echo "Listing files in migration_processor: $(ls -la .)"
+            # Check if requirements.txt exists BEFORE running pip
+            if [ ! -f "requirements.txt" ]; then
+               echo "::error:: File 'backend/migration_processor/requirements.txt' not found inside directory!"
+               exit 1
+            fi
+            # Install dependencies (will do nothing if requirements.txt is empty)
+            echo "Running pip install in $(pwd)..."
+            pip install --no-cache-dir -r requirements.txt -t .
             # Create zip file in the project root directory
             zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*"
             cd ../.. # Return to project root
+            echo "Current directory after processor packaging: $(pwd)"
           else
             echo "::error:: The 'backend/migration_processor' directory was not found."
-            echo "::error:: Please create this directory and add the 'app.py' for the migration processor as instructed in the previous step, then re-run this workflow."
             exit 1
           fi
 
@@ -76,17 +95,22 @@ jobs:
         id: cfn_outputs
         run: |
           STACK_NAME="subscriber-migration-stack-v3"
-          
+          # Get MAIN Flask API outputs
           FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" --output text)
-          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
-          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
           API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
           API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
           FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue" --output text)
+          
+          # Get SHARED outputs
+          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
+          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
+
+          # Get NEW MIGRATION outputs
           MIG_JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
           MIG_UPLOAD_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
           MIG_PROCESSOR_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorFunctionName'].OutputValue" --output text)
           LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
+          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text) # Get RDS host
 
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
@@ -97,8 +121,10 @@ jobs:
           echo "mig_upload_bucket=$MIG_UPLOAD_BUCKET" >> $GITHUB_OUTPUT
           echo "mig_processor_name=$MIG_PROCESSOR_NAME" >> $GITHUB_OUTPUT
           echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
-          
-          echo "::notice:: NEW API URL: $API_URL"
+          echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
+
+          echo "::notice:: API URL: $API_URL"
+          echo "::notice:: Frontend URL: $FRONTEND_URL"
 
       - name: Update backend Lambda code
         run: |
@@ -106,8 +132,7 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --zip-file fileb://backend.zip
 
-      - name: Update Lambda Environment Variables
-        if: steps.cfn_outputs.outputs.function_name != ''
+      - name: Update MAIN Lambda Environment Variables
         run: |
           aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
@@ -117,7 +142,8 @@ jobs:
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
               MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
               MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
-              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }} \
+              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}, \
+              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }} \
             }"
 
       - name: Upload MIGRATION Processor code to S3
@@ -137,6 +163,20 @@ jobs:
             --function-name $MIG_PROCESSOR_NAME \
             --s3-bucket $BUCKET_NAME \
             --s3-key "processor.zip"
+      
+      - name: Update MIGRATION Lambda Environment Variables
+        run: |
+           aws lambda update-function-configuration \
+            --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }} \
+            --environment "Variables={ \
+              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
+              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
+              MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
+              REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
+              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}, \
+              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }} \
+            }"
 
       - name: Wait for Lambda function updates to complete
         run: |
@@ -182,4 +222,3 @@ jobs:
       - name: Deploy frontend to S3
         run: |
           aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
-
