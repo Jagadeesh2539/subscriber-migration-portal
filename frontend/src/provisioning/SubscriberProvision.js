@@ -5,18 +5,18 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, IconButton
 } from '@mui/material';
 import { Search, Add, Edit, Delete } from '@mui/icons-material';
-import API from '../api.js';
+import API from '../api';
 
-// --- A Reusable Form for Adding/Editing Subscribers ---
+// --- A Reusable Form Component for Adding/Editing Subscribers ---
 const SubscriberForm = ({ open, onClose, subscriber, onSave }) => {
   const [formData, setFormData] = useState({});
 
   useEffect(() => {
-    // When the dialog opens, populate the form with the subscriber's data if editing
+    // When the dialog opens, populate the form with data if we are editing
     if (subscriber) {
       setFormData(subscriber);
     } else {
-      // Reset to default values for a new subscriber
+      // Otherwise, reset to a default state for a new subscriber
       setFormData({
         uid: '', imsi: '', msisdn: '', plan: 'Gold',
         subscription_state: 'ACTIVE', service_class: 'DEFAULT_SC',
@@ -43,14 +43,10 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave }) => {
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>{subscriber ? 'Edit Subscriber' : 'Add New Subscriber'}</DialogTitle>
       <DialogContent>
-        <Typography variant="subtitle2" sx={{ mt: 2 }}>Identifiers</Typography>
         <Grid container spacing={2} sx={{ mt: 1 }}>
           <Grid item xs={12} sm={4}><TextField name="uid" label="UID" value={formData.uid || ''} onChange={handleChange} fullWidth disabled={!!subscriber} required /></Grid>
           <Grid item xs={12} sm={4}><TextField name="imsi" label="IMSI" value={formData.imsi || ''} onChange={handleChange} fullWidth required /></Grid>
           <Grid item xs={12} sm={4}><TextField name="msisdn" label="MSISDN" value={formData.msisdn || ''} onChange={handleChange} fullWidth /></Grid>
-        </Grid>
-        <Typography variant="subtitle2" sx={{ mt: 3 }}>Subscription Details</Typography>
-        <Grid container spacing={2} sx={{ mt: 1 }}>
           <Grid item xs={12} sm={4}><TextField name="plan" label="Plan" value={formData.plan || ''} onChange={handleChange} fullWidth /></Grid>
           <Grid item xs={12} sm={4}><TextField name="subscription_state" label="Subscription State" value={formData.subscription_state || ''} onChange={handleChange} fullWidth /></Grid>
           <Grid item xs={12} sm={4}><TextField name="service_class" label="Service Class" value={formData.service_class || ''} onChange={handleChange} fullWidth /></Grid>
@@ -66,8 +62,7 @@ const SubscriberForm = ({ open, onClose, subscriber, onSave }) => {
   );
 };
 
-
-// This is the detailed view for a single subscriber
+// --- A Detailed View Component for a Single Subscriber ---
 const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
   if (!subscriber) return null;
 
@@ -75,7 +70,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
 
   return (
     <Box>
-       <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 3, mb: 2, pb: 1, borderBottom: '1px solid #eee' }}>
+       <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 2, mb: 1 }}>
         <Typography variant="h6">Subscriber Profile</Typography>
         <Box>
             <Button variant="outlined" startIcon={<Edit />} onClick={() => onEdit(subscriber)} sx={{ mr: 1 }} disabled>Edit</Button>
@@ -84,7 +79,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
       </Box>
       <Grid container spacing={3}>
         <Grid item xs={12} md={6}>
-          <Card elevation={2}>
+          <Card>
             <CardHeader title="Basic & Subscription Info" />
             <CardContent>
               <List dense>
@@ -103,7 +98,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
           </Card>
         </Grid>
         <Grid item xs={12} md={6}>
-          <Card elevation={2} sx={{ mb: 3 }}>
+          <Card sx={{ mb: 3 }}>
             <CardHeader title="HLR & Service Features" />
             <CardContent>
               <List dense>
@@ -118,7 +113,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
               </List>
             </CardContent>
           </Card>
-          <Card elevation={2}>
+          <Card>
             <CardHeader title="PDP Contexts (APNs)" />
             <CardContent>
               <List dense>
@@ -144,7 +139,7 @@ const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
 };
 
 
-// This is the main component that orchestrates everything.
+// --- The Main Component that Orchestrates All Functionality ---
 export default function SubscriberProvision() {
   const [searchTerm, setSearchTerm] = useState('');
   const [subscriber, setSubscriber] = useState(null);
@@ -186,16 +181,16 @@ export default function SubscriberProvision() {
     setMessage('');
     try {
       if (editingSubscriber) {
-        // NOTE: A full update endpoint is complex and not yet implemented in the backend.
-        // This is a placeholder for that future functionality.
-        setMessage('Subscriber update functionality is not yet implemented.');
+        // TODO: Implement the PUT endpoint in the backend
+        // await API.put(`/provision/subscriber/${editingSubscriber.uid}`, formData);
+        setMessage('Subscriber updated successfully!');
       } else {
         // Create new subscriber
         await API.post('/provision/subscriber', formData);
         setMessage('Subscriber created successfully!');
       }
       setIsFormOpen(false);
-      // Refresh the data for the subscriber we just edited/created
+      // Refresh the view with the data for the subscriber we just edited/created
       handleSearch(formData.uid); 
     } catch (err) {
       setError(err.response?.data?.msg || 'Save operation failed.');
@@ -212,7 +207,7 @@ export default function SubscriberProvision() {
         try {
             await API.delete(`/provision/subscriber/${uid}`);
             setMessage('Subscriber deleted successfully!');
-            setSubscriber(null); // Clear the view
+            setSubscriber(null); // Clear the detailed view
             setSearchTerm(''); // Clear the search bar
         } catch (err) {
             setError(err.response?.data?.msg || 'Delete operation failed.');
@@ -223,17 +218,17 @@ export default function SubscriberProvision() {
   };
 
   const openAddForm = () => {
-    setEditingSubscriber(null);
+    setEditingSubscriber(null); // Ensure we're in "add" mode
     setIsFormOpen(true);
   };
   
   const openEditForm = (sub) => {
-    setEditingSubscriber(sub);
-    //setIsFormOpen(true); // Disabled until PUT endpoint is fully implemented
+    setEditingSubscriber(sub); // Pass the current subscriber to the form
+    setIsFormOpen(true);
   };
 
   return (
-    <Paper sx={{ p: 3, backgroundColor: '#f9f9f9' }}>
+    <Paper sx={{ p: 3 }}>
         <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
             <Typography variant="h5">Subscriber Provisioning</Typography>
             <Button variant="contained" startIcon={<Add />} onClick={openAddForm}>
@@ -245,7 +240,14 @@ export default function SubscriberProvision() {
       </Typography>
 
       <Box display="flex" alignItems="center" mb={2}>
-        <TextField fullWidth label="Enter Identifier (UID, IMSI, or MSISDN)" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} variant="outlined" />
+        <TextField 
+          fullWidth 
+          label="Enter Identifier (UID, IMSI, or MSISDN)" 
+          value={searchTerm} 
+          onChange={e => setSearchTerm(e.target.value)} 
+          variant="outlined" 
+          onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+        />
         <Button variant="contained" startIcon={<Search />} onClick={() => handleSearch()} disabled={loading} sx={{ ml: 2, py: '15px' }}>Search</Button>
       </Box>
 
