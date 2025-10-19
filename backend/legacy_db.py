@@ -2,6 +2,7 @@ import os
 import pymysql
 import pymysql.cursors
 import json
+import warnings # Added for cleaner logging of skipped connection
 
 # Get connection details from environment variables for local development.
 # The defaults match your local Docker setup.
@@ -11,8 +12,18 @@ DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
 DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
 DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
 
+# --- FIX: Conditionally disable legacy DB access in remote deployment ---
+# Check if we are running in a known remote environment (Lambda sets AWS_REGION) 
+# AND using one of the common local/docker development hosts. 
+IS_LEGACY_DB_DISABLED = (os.environ.get('AWS_REGION') is not None) and (DB_HOST in ['host.docker.internal', '127.0.0.1'])
+# ---------------------------------------------------------------------
+
 def get_connection():
     """Establishes a new database connection."""
+    if IS_LEGACY_DB_DISABLED:
+        # If disabled, raise a RuntimeError to signal the caller to skip the operation.
+        raise RuntimeError("Legacy DB connection skipped: Cannot reach local database from a remote environment.")
+        
     return pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -28,10 +39,18 @@ def get_subscriber_by_any_id(identifier):
     Fetches a full subscriber profile from the legacy DB using UID, IMSI, or MSISDN.
     Uses LEFT JOINs to gather all related data.
     """
-    conn = get_connection()
+    conn = None
+    try:
+        conn = get_connection()
+    except RuntimeError as e:
+        # FIX: Gracefully catch the disabled error and return None, which 
+        # the calling function in subscriber.py will treat as 'not found'.
+        warnings.warn(f"INFO: Legacy DB search skipped: {e}")
+        return None 
+        
     try:
         with conn.cursor() as cursor:
-            # This single, powerful query joins all 5 tables.
+            # This single, powerful query joins all 5 tables. (Restored the original query)
             sql = """
             SELECT
                 s.*,
@@ -70,13 +89,21 @@ def get_subscriber_by_any_id(identifier):
                         result[key] = True
             return result
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def create_subscriber_full_profile(data):
     """
     Creates a full subscriber profile across all tables within a single transaction.
     """
-    conn = get_connection()
+    conn = None
+    try:
+        conn = get_connection()
+    except RuntimeError as e:
+        # FIX: Fail the create/provisioning operation if the legacy DB is unreachable, 
+        # as the dual-provisioning feature requires both systems to be updated.
+        raise Exception(f"Dual Provisioning Failed: Legacy DB Unreachable: {e}") 
+
     try:
         with conn.cursor() as cursor:
             # Start transaction
@@ -125,24 +152,31 @@ def create_subscriber_full_profile(data):
             conn.commit()
     except Exception as e:
         # If anything fails, roll back all changes
-        conn.rollback()
+        if conn:
+            conn.rollback()
         print(f"Transaction failed: {e}")
         raise # Re-raise the exception to be caught by the API layer
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def delete_subscriber(uid):
     """
     Deletes a subscriber. The ON DELETE CASCADE in the database schema
     will automatically delete records from all child tables.
     """
-    conn = get_connection()
+    conn = None
+    try:
+        conn = get_connection()
+    except RuntimeError as e:
+        # FIX: Raise a critical exception to ensure dual-provisioning fails if the legacy system is unreachable.
+        raise Exception(f"Dual Provisioning Failed: Legacy DB Unreachable: {e}") 
+        
     try:
         with conn.cursor() as cursor:
             sql = "DELETE FROM subscribers WHERE uid = %s"
             cursor.execute(sql, (uid,))
         return True
     finally:
-        conn.close()
-
-
+        if conn:
+            conn.close()
