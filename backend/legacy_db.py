@@ -1,110 +1,137 @@
 import os
 import pymysql
 import pymysql.cursors
-from contextlib import contextmanager
 
-# Get connection details from environment variables for local development.
-# The password 'Admin@123' matches what you set in the Docker command.
-DB_HOST = os.environ.get('LEGACY_DB_HOST', 'localhost')
+# --- FIX: Changed 'localhost' to '127.0.0.1' ---
+# This is a more explicit IP address for the local machine and resolves connection issues.
+DB_HOST = os.environ.get('LEGACY_DB_HOST', '127.0.0.1') 
 DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
 DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
 DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
 
-@contextmanager
 def get_connection():
-    """Provides a database connection that is automatically closed."""
-    connection = pymysql.connect(
+    """Establishes a new database connection."""
+    return pymysql.connect(
         host=DB_HOST,
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
-        cursorclass=pymysql.cursors.DictCursor
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
     )
-    try:
-        yield connection
-    finally:
-        connection.close()
 
 def get_subscriber_by_any_id(identifier):
     """
-    Fetches a complete subscriber profile by UID, IMSI, or MSISDN
-    using a multi-table JOIN.
+    Fetches a full subscriber profile from the legacy DB using UID, IMSI, or MSISDN.
+    Uses LEFT JOINs to gather all related data.
     """
-    with get_connection() as conn:
+    conn = get_connection()
+    try:
         with conn.cursor() as cursor:
-            # This powerful query joins all related tables to get a complete profile
+            # This single, powerful query joins all 5 tables.
             sql = """
             SELECT
-                s.uid, s.imsi, s.msisdn, s.plan, s.subscription_state, s.service_class, s.charging_characteristics,
+                s.*,
                 hss.subscription_id, hss.profile_type, hss.private_user_id, hss.public_user_id,
-                hlr.call_forward_unconditional, hlr.call_barring_all_outgoing, hlr.clip_provisioned, hlr.clir_provisioned,
-                hlr.call_hold_provisioned, hlr.call_waiting_provisioned,
-                vas.account_status, vas.language_id, vas.sim_type
-            FROM subscribers s
-            LEFT JOIN tbl_hss_profiles hss ON s.uid = hss.subscriber_uid
-            LEFT JOIN tbl_hlr_features hlr ON s.uid = hlr.subscriber_uid
-            LEFT JOIN tbl_vas_services vas ON s.uid = vas.subscriber_uid
-            WHERE s.uid = %s OR s.imsi = %s OR s.msisdn = %s
+                hlr.call_forward_unconditional, hlr.call_barring_all_outgoing, hlr.clip_provisioned, 
+                hlr.clir_provisioned, hlr.call_hold_provisioned, hlr.call_waiting_provisioned,
+                vas.account_status, vas.language_id, vas.sim_type,
+                (SELECT JSON_ARRAYAGG(JSON_OBJECT('context_id', pdp.context_id, 'apn', pdp.apn, 'qos_profile', pdp.qos_profile))
+                 FROM tbl_pdp_contexts pdp WHERE pdp.subscriber_uid = s.uid) AS pdp_contexts
+            FROM
+                subscribers s
+            LEFT JOIN
+                tbl_hss_profiles hss ON s.uid = hss.subscriber_uid
+            LEFT JOIN
+                tbl_hlr_features hlr ON s.uid = hlr.subscriber_uid
+            LEFT JOIN
+                tbl_vas_services vas ON s.uid = vas.subscriber_uid
+            WHERE
+                s.uid = %s OR s.imsi = %s OR s.msisdn = %s;
             """
             cursor.execute(sql, (identifier, identifier, identifier))
-            subscriber_data = cursor.fetchone()
-
-            # If a subscriber was found, fetch their PDP contexts (one-to-many)
-            if subscriber_data:
-                pdp_sql = "SELECT context_id, apn, qos_profile FROM tbl_pdp_contexts WHERE subscriber_uid = %s"
-                cursor.execute(pdp_sql, (subscriber_data['uid'],))
-                subscriber_data['pdp_contexts'] = cursor.fetchall()
-
-            return subscriber_data
+            result = cursor.fetchone()
+            # Convert boolean values (0/1) from MySQL to true/false for JSON
+            if result:
+                for key, value in result.items():
+                    if value == 0:
+                        result[key] = False
+                    elif value == 1:
+                        result[key] = True
+            return result
+    finally:
+        conn.close()
 
 def create_subscriber_full_profile(data):
     """
-    Creates a full subscriber profile across all tables using a database transaction.
+    Creates a full subscriber profile across all tables within a single transaction.
     """
-    with get_connection() as conn:
+    conn = get_connection()
+    try:
         with conn.cursor() as cursor:
-            try:
-                conn.begin() # Start a transaction
+            # Start transaction
+            conn.begin()
 
-                # 1. Insert into main subscribers table
-                sub_sql = """
-                INSERT INTO subscribers (uid, imsi, msisdn, plan, subscription_state, service_class, charging_characteristics)
-                VALUES (%s, %s, %s, %s, %s, %s, '0010')
-                """
-                cursor.execute(sub_sql, (data['uid'], data['imsi'], data['msisdn'], data['plan'], data['subscription_state'], data['service_class']))
+            # 1. Insert into main subscribers table
+            sql_sub = """
+            INSERT INTO subscribers (uid, imsi, msisdn, plan, subscription_state, service_class, charging_characteristics)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """
+            cursor.execute(sql_sub, (
+                data['uid'], data['imsi'], data.get('msisdn'), data.get('plan'),
+                data.get('subscription_state'), data.get('service_class'), data.get('charging_characteristics')
+            ))
 
-                # 2. Insert into HSS table
-                hss_sql = """
-                INSERT INTO tbl_hss_profiles (subscriber_uid, profile_type) VALUES (%s, %s)
-                """
-                cursor.execute(hss_sql, (data['uid'], data['profile_type']))
-                
-                # 3. Insert into HLR table
-                hlr_sql = """
-                INSERT INTO tbl_hlr_features (subscriber_uid, call_forward_unconditional, call_barring_all_outgoing, 
-                                            clip_provisioned, clir_provisioned, call_hold_provisioned, call_waiting_provisioned,
-                                            ts11_provisioned, ts21_provisioned, ts22_provisioned, bs30_genr_provisioned)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(hlr_sql, (data['uid'], data.get('call_forward_unconditional'), data['call_barring_all_outgoing'],
-                                        data['clip_provisioned'], data['clir_provisioned'], data['call_hold_provisioned'],
-                                        data['call_waiting_provisioned'], data['ts11_provisioned'], data['ts21_provisioned'],
-                                        data['ts22_provisioned'], data['bs30_genr_provisioned']))
-                
-                # 4. Insert into VAS table
-                vas_sql = "INSERT INTO tbl_vas_services (subscriber_uid, account_status, language_id, sim_type) VALUES (%s, %s, %s, %s)"
-                cursor.execute(vas_sql, (data['uid'], data['account_status'], data['language_id'], data['sim_type']))
-                
-                conn.commit() # Commit all changes if successful
-                return True
-            except Exception as e:
-                conn.rollback() # Roll back all changes if any part fails
-                raise e # Re-raise the exception to be handled by the API layer
+            # 2. Insert into HSS table
+            sql_hss = """
+            INSERT INTO tbl_hss_profiles (subscriber_uid, profile_type) 
+            VALUES (%s, %s);
+            """
+            cursor.execute(sql_hss, (data['uid'], data.get('profile_type')))
+
+            # 3. Insert into HLR table
+            sql_hlr = """
+            INSERT INTO tbl_hlr_features (subscriber_uid, call_forward_unconditional, call_barring_all_outgoing, 
+                                          clip_provisioned, clir_provisioned, call_hold_provisioned, call_waiting_provisioned)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """
+            cursor.execute(sql_hlr, (
+                data['uid'], data.get('call_forward_unconditional'), data.get('call_barring_all_outgoing', False),
+                data.get('clip_provisioned', True), data.get('clir_provisioned', False),
+                data.get('call_hold_provisioned', True), data.get('call_waiting_provisioned', True)
+            ))
+            
+            # 4. Insert into VAS table
+            sql_vas = """
+            INSERT INTO tbl_vas_services (subscriber_uid, account_status, language_id, sim_type)
+            VALUES (%s, %s, %s, %s);
+            """
+            cursor.execute(sql_vas, (
+                data['uid'], data.get('account_status', 'ACTIVE'),
+                data.get('language_id', 'en-US'), data.get('sim_type', '4G_USIM')
+            ))
+
+            # Commit the transaction
+            conn.commit()
+    except Exception as e:
+        # If anything fails, roll back all changes
+        conn.rollback()
+        print(f"Transaction failed: {e}")
+        raise # Re-raise the exception to be caught by the API layer
+    finally:
+        conn.close()
 
 def delete_subscriber(uid):
-    """Deletes a subscriber. The CASCADE constraint will handle child tables."""
-    with get_connection() as conn:
+    """
+    Deletes a subscriber. The ON DELETE CASCADE in the database schema
+    will automatically delete records from all child tables.
+    """
+    conn = get_connection()
+    try:
         with conn.cursor() as cursor:
             sql = "DELETE FROM subscribers WHERE uid = %s"
             cursor.execute(sql, (uid,))
+        return True
+    finally:
+        conn.close()
 
