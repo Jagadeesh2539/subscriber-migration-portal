@@ -398,9 +398,12 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
+      # --- FIX: Use placeholder code for initial creation ---
       Code:
-        S3Bucket: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
-        S3Key: "processor.zip"
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Migration Processor Lambda created"}
+      # --- END FIX ---
       Timeout: 300
       Environment:
         Variables:
