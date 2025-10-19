@@ -21,17 +21,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # --- THIS IS THE CRITICAL DEBUGGING STEP ---
-      # This step will print the AWS Account ID your secrets are using.
-      # Compare this to the account ID where your API Gateway exists.
       - name: Check AWS Account ID
         run: |
           echo "Checking AWS identity..."
           aws sts get-caller-identity
-      # -------------------------------------------
-
+      
       # ---------------------
-      # Step 1: Build & Deploy Backend Lambda
+      # Step 1: Build & Deploy Backend
       # ---------------------
       - name: Setup Python
         uses: actions/setup-python@v5 
@@ -53,33 +49,27 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
+      # --- THIS STEP NOW GETS YOUR NEW API ID (mqdj8pm9v9) ---
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
           STACK_NAME="subscriber-migration-stack-v3"
           
-          FUNCTION_NAME=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" \
-            --output text)
+          FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" --output text)
+          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
+          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
           
-          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" \
-            --output text)
-            
-          AUDIT_TABLE=$(aws cloudformation describe-stacks \
-            --stack-name $STACK_NAME \
-            --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" \
-            --output text)
+          # Get the NEW API ID and URL from the stack
+          API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
+          API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
 
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
           echo "audit_table=$AUDIT_TABLE" >> $GITHUB_OUTPUT
+          echo "api_id=$API_ID" >> $GITHUB_OUTPUT # Pass the new ID to the next step
           
-          echo "Function Name: $FUNCTION_NAME"
-          echo "Subscriber Table: $SUBSCRIBER_TABLE"
-          echo "Audit Table: $AUDIT_TABLE"
+          echo "::notice:: NEW API URL: $API_URL" # Print the new URL
+          echo "New API ID: $API_ID"
 
       - name: Update backend Lambda code
         run: |
@@ -90,7 +80,6 @@ jobs:
       - name: Wait for Lambda function update to complete
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
-          echo "Waiting for function ${{ steps.cfn_outputs.outputs.function_name }} to finish updating..."
           aws lambda wait function-updated \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
@@ -101,34 +90,20 @@ jobs:
           aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
             --environment "Variables={ \
-              FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}, \
+              FRONTEND_DOMAIN_URL=https.portal.${{ secrets.DOMAIN_NAME }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }} \
             }"
-            
-      - name: DEBUG Check API_ID Structure
-        run: |
-          API_ID_VALUE="7rrghvsall" 
-          echo "Checking API_ID value structure..."
-          if [[ -z "$API_ID_VALUE" ]]; then
-            echo "::ERROR:: API_ID secret is EMPTY."
-            exit 1
-          elif [[ "$API_ID_VALUE" == *":"* ]]; then
-            echo "::ERROR:: API_ID CONTAINS A COLON. It is an ARN, not an ID."
-            echo "The value must be '7rrghvsall', but it is '$API_ID_VALUE'"
-            exit 1
-          else
-            echo "API_ID structure looks correct (no colons). Proceeding."
-          fi
 
+      # --- THIS STEP NOW USES YOUR NEW API ID ---
       - name: Deploy API Gateway Stage
         env:
-          API_ID: '7rrghvsall' # Hardcoded API ID
+          API_ID: ${{ steps.cfn_outputs.outputs.api_id }} # Uses the new ID from CloudFormation
         run: |
           echo "Starting deployment for API Gateway: $API_ID"
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
             --rest-api-id $API_ID \
-            --description "CI/CD route fix $(date +%s)" \
+            --description "CI/CD code update $(date +%s)" \
             --query 'id' \
             --output text --region us-east-1)
           
