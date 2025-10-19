@@ -1,616 +1,613 @@
 import React, { useState, useEffect } from 'react';
-import {
-  Paper, TextField, Button, Typography, Alert, Box, CircularProgress,
-  Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, Divider,
-  Dialog, DialogTitle, DialogContent, DialogActions, FormControl, InputLabel, Select, MenuItem, Checkbox, FormControlLabel
+import { 
+  Paper, TextField, Button, Typography, Alert, Box, CircularProgress, 
+  Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, Divider, 
+  Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Tabs, Tab,
+  Tooltip, Checkbox, FormControlLabel // ✅ Added Tooltip, Checkbox, FormControlLabel
 } from '@mui/material';
-import { Search, Add, Edit, Delete, Dashboard as DashboardIcon, Send, VerifiedUser, Gavel, Lock } from '@mui/icons-material';
+import { 
+  Search, Add, Edit, Delete, Dashboard, CheckCircleOutline, VpnKey, AccountCircle 
+} from '@mui/icons-material';
 import API from '../api';
 
-// --- I. Reusable Form Component (Used for Create and Modify) ---
-const SubscriberForm = ({ open, onClose, subscriber, onSave, isEditing = false }) => {
-  // Use a unique key to force re-render when switching between create/edit
-  const [formData, setFormData] = useState({});
-  const [formKey, setFormKey] = useState(0);
+// --- Default Data for Forms ---
+const DEFAULT_SUBSCRIBER = {
+  uid: '', imsi: '', msisdn: '', plan: 'Gold',
+  subscription_state: 'ACTIVE', service_class: 'DEFAULT_SC',
+  profile_type: 'DEFAULT_LTE_PROFILE', call_barring_all_outgoing: false,
+  clip_provisioned: true, clir_provisioned: false,
+  call_hold_provisioned: true, call_waiting_provisioned: true,
+  ts11_provisioned: true, ts21_provisioned: true,
+  ts22_provisioned: true, bs30_genr_provisioned: true,
+  account_status: 'ACTIVE', language_id: 'en-US', sim_type: '4G_USIM',
+  call_forward_unconditional: '', // Added for completeness
+};
 
-  useEffect(() => {
-    // Define a full default state for creation
-    const defaultData = {
-      uid: '', imsi: '', msisdn: '', plan: 'Gold',
-      subscription_state: 'ACTIVE', service_class: 'DEFAULT_SC',
-      profile_type: 'DEFAULT_LTE_PROFILE', call_barring_all_outgoing: false,
-      clip_provisioned: true, clir_provisioned: false,
-      call_hold_provisioned: true, call_waiting_provisioned: true,
-      account_status: 'ACTIVE', language_id: 'en-US', sim_type: '4G_USIM',
-      call_forward_unconditional: ''
-    };
+// --- Helper Components ---
 
-    if (subscriber && isEditing) {
-      // For editing, use existing data (must normalize subscriberId back to uid for forms)
-      const dataToEdit = { ...subscriber, uid: subscriber.uid || subscriber.subscriberId };
-      setFormData(dataToEdit);
-    } else {
-      // For creation, use defaults
-      setFormData(defaultData);
-    }
-    setFormKey(prev => prev + 1); // Increment key to force form reset
-  }, [subscriber, open, isEditing]);
-
+// --- 1. Subscriber Form (Used for Create and Modify) ---
+const SubscriberForm = ({ formData, setFormData, isEditing }) => {
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    setFormData(prev => ({ 
+      ...prev, 
+      [name]: type === 'checkbox' ? checked : value,
+      // Ensure uid is never changed during editing
+      uid: isEditing ? formData.uid : (name === 'uid' ? value : prev.uid) 
+    }));
   };
 
-  const handleFormSave = () => {
-    onSave(formData);
+  // Field definitions (using your refined list)
+  const formFields = [
+    // Core Identifiers (Mandatory/Primary)
+    { name: 'uid', label: 'UID (Primary Key)', required: true, disabled: isEditing, xs: 12, sm: 4, tooltip: 'Unique Identifier for the subscriber. Cannot be changed when editing.' },
+    { name: 'imsi', label: 'IMSI (SIM ID)', required: true, disabled: false, xs: 12, sm: 4, tooltip: 'International Mobile Subscriber Identity.' },
+    { name: 'msisdn', label: 'MSISDN (Phone Number)', required: false, disabled: false, xs: 12, sm: 4, tooltip: 'Mobile Station International Subscriber Directory Number.' },
+    
+    // Subscription Details
+    { name: 'plan', label: 'Service Plan', required: false, xs: 12, sm: 4 },
+    { name: 'subscription_state', label: 'Subscription State', required: false, xs: 12, sm: 4 },
+    { name: 'service_class', label: 'Service Class', required: false, xs: 12, sm: 4 },
+    
+    // HSS/LTE Profile
+    { name: 'profile_type', label: 'Profile Type', required: false, xs: 12, sm: 4 },
+    { name: 'account_status', label: 'Account Status (VAS)', required: false, xs: 12, sm: 4 },
+    { name: 'language_id', label: 'Language ID', required: false, xs: 12, sm: 4 },
+    { name: 'sim_type', label: 'SIM Type', required: false, xs: 12, sm: 4 },
+
+    // HLR Features (Booleans/Flags)
+    { name: 'call_barring_all_outgoing', label: 'Call Barring (Outgoing)', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'clip_provisioned', label: 'CLIP Provisioned', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'clir_provisioned', label: 'CLIR Provisioned', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'call_hold_provisioned', label: 'Call Hold Provisioned', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'call_waiting_provisioned', label: 'Call Waiting Provisioned', type: 'checkbox', xs: 12, sm: 4 },
+    { name: 'call_forward_unconditional', label: 'Call Forward Unconditional', required: false, xs: 12, sm: 8 },
+  ];
+
+  const renderField = (field) => {
+    // Checkbox field rendering using FormControlLabel/Checkbox
+    if (field.type === 'checkbox') {
+      const isChecked = formData[field.name] === true || formData[field.name] === 'true';
+
+      return (
+        <Grid item xs={field.xs} sm={field.sm} key={field.name}>
+          <Tooltip title={field.tooltip || field.label}> {/* ✅ Tooltip for checkbox */}
+            <FormControlLabel
+              control={
+                <Checkbox 
+                  checked={isChecked} 
+                  onChange={handleChange} 
+                  name={field.name} 
+                  size="small"
+                />
+              }
+              label={<Typography variant="body2">{field.label}</Typography>}
+            />
+          </Tooltip>
+        </Grid>
+      );
+    }
+
+    // Standard TextField rendering with Tooltip
+    return (
+      <Grid item xs={field.xs} sm={field.sm} key={field.name}>
+        <Tooltip title={field.tooltip || field.label}> {/* ✅ Tooltip for textfield */}
+          <TextField 
+            name={field.name} 
+            label={field.label} 
+            value={formData[field.name] || ''} 
+            onChange={handleChange} 
+            fullWidth 
+            required={field.required} 
+            disabled={field.disabled}
+            variant="outlined"
+            size="small"
+          />
+        </Tooltip>
+      </Grid>
+    );
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth key={formKey}>
-      <DialogTitle>{isEditing ? `Modify Subscriber: ${formData.uid}` : 'Create New Subscriber'}</DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-          {isEditing ? 'Modify the selected parameters and save.' : 'Enter all required data to provision a new subscriber.'}
+    <Grid container spacing={2}>
+      {formFields.map(renderField)}
+    </Grid>
+  );
+};
+
+
+// --- 2. Subscriber Detail View (Used in Search/Modify) ---
+const SubscriberDetail = ({ subscriber }) => {
+  if (!subscriber) return null;
+
+  const renderBool = (value) => (value ? 'Yes' : 'No');
+
+  const mainFields = [
+    { label: 'UID', key: 'uid' },
+    { label: 'IMSI', key: 'imsi' },
+    { label: 'MSISDN', key: 'msisdn' },
+    { label: 'Plan', key: 'plan' },
+    { label: 'Subscription State', key: 'subscription_state' },
+    { label: 'Service Class', key: 'service_class' },
+    { label: 'Profile Type', key: 'profile_type' },
+  ];
+
+  const hlrFields = [
+    { label: 'Call Forward Unconditional', key: 'call_forward_unconditional' },
+    { label: 'Call Barring (Outgoing)', key: 'call_barring_all_outgoing', render: renderBool },
+    { label: 'CLIP Provisioned', key: 'clip_provisioned', render: renderBool },
+    { label: 'CLIR Provisioned', key: 'clir_provisioned', render: renderBool },
+    { label: 'Call Hold', key: 'call_hold_provisioned', render: renderBool },
+    { label: 'Call Waiting', key: 'call_waiting_provisioned', render: renderBool },
+  ];
+
+  return (
+    <Grid container spacing={3} sx={{ mt: 3 }}>
+      <Grid item xs={12} md={6}>
+        <Card variant="outlined">
+          <CardHeader title="Core & Subscription Info" sx={{ bgcolor: '#f5f5f5' }} />
+          <CardContent>
+            <List dense disablePadding>
+              {mainFields.map(f => (
+                <ListItem key={f.key} divider>
+                  <ListItemText 
+                    primary={<strong>{f.label}</strong>} 
+                    secondary={subscriber[f.key] || 'N/A'} 
+                  />
+                </ListItem>
+              ))}
+            </List>
+          </CardContent>
+        </Card>
+      </Grid>
+      <Grid item xs={12} md={6}>
+        <Card variant="outlined">
+          <CardHeader title="HLR & HSS Features" sx={{ bgcolor: '#f5f5f5' }} />
+          <CardContent>
+            <List dense disablePadding>
+              {hlrFields.map(f => (
+                <ListItem key={f.key} divider>
+                  <ListItemText 
+                    primary={<strong>{f.label}</strong>} 
+                    secondary={f.render ? f.render(subscriber[f.key]) : (subscriber[f.key] || 'N/A')} 
+                  />
+                </ListItem>
+              ))}
+              <ListItem divider>
+                <ListItemText primary={<strong>Source Database</strong>} secondary={subscriber.source || 'Cloud/DynamoDB'} />
+              </ListItem>
+            </List>
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
+};
+
+
+// --- 3. Delete Confirmation Modal ---
+const DeleteConfirmModal = ({ open, onClose, subscriber, onConfirm }) => {
+  if (!subscriber) return null;
+  
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ bgcolor: '#f44336', color: 'white' }}>
+        <Box display="flex" alignItems="center"><Delete sx={{ mr: 1 }} /> Confirm Deletion</Box>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Typography variant="h6" color="error" sx={{ mb: 2 }}>
+          This action cannot be undone.
         </Typography>
-
-        <Grid container spacing={3}>
-          {/* IDENTIFIERS SECTION */}
-          <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><VerifiedUser sx={{ fontSize: '1rem', mr: 0.5 }} /> Identifiers</Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
-                <TextField name="uid" label="UID" value={formData.uid || ''} onChange={handleChange} fullWidth disabled={isEditing} required error={!isEditing && !formData.uid} helperText={!isEditing && !formData.uid ? 'Required' : ''} />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="imsi" label="IMSI" value={formData.imsi || ''} onChange={handleChange} fullWidth required error={!formData.imsi} helperText={!formData.imsi ? 'Required' : ''} />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="msisdn" label="MSISDN" value={formData.msisdn || ''} onChange={handleChange} fullWidth />
-              </Grid>
-            </Grid>
-          </Grid>
-          
-          {/* SUBSCRIPTION & STATUS SECTION */}
-          <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><Gavel sx={{ fontSize: '1rem', mr: 0.5 }} /> Subscription & Status</Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
-                <TextField name="plan" label="Plan" value={formData.plan || ''} onChange={handleChange} fullWidth required />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="service_class" label="Service Class" value={formData.service_class || ''} onChange={handleChange} fullWidth />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControl fullWidth>
-                  <InputLabel>Subscription State *</InputLabel>
-                  <Select name="subscription_state" label="Subscription State *" value={formData.subscription_state || ''} onChange={handleChange} required>
-                    <MenuItem value="ACTIVE">ACTIVE</MenuItem>
-                    <MenuItem value="PENDING">PENDING</MenuItem>
-                    <MenuItem value="SUSPENDED">SUSPENDED</MenuItem>
-                    <MenuItem value="TERMINATED">TERMINATED</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="profile_type" label="Profile Type" value={formData.profile_type || ''} onChange={handleChange} fullWidth />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControl fullWidth>
-                  <InputLabel>Account Status</InputLabel>
-                  <Select name="account_status" label="Account Status" value={formData.account_status || ''} onChange={handleChange}>
-                    <MenuItem value="ACTIVE">ACTIVE</MenuItem>
-                    <MenuItem value="INACTIVE">INACTIVE</MenuItem>
-                    <MenuItem value="BLOCKED">BLOCKED</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="language_id" label="Language ID" value={formData.language_id || ''} onChange={handleChange} fullWidth />
-              </Grid>
-            </Grid>
-          </Grid>
-
-          {/* HLR FEATURES SECTION */}
-          <Grid item xs={12}>
-            <Typography variant="subtitle1" sx={{ mt: 2, mb: 1, borderBottom: '1px solid #eee' }}><Lock sx={{ fontSize: '1rem', mr: 0.5 }} /> HLR Features</Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}>
-                <FormControlLabel control={<Checkbox name="clip_provisioned" checked={formData.clip_provisioned || false} onChange={handleChange} />} label="CLIP Provisioned" />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControlLabel control={<Checkbox name="clir_provisioned" checked={formData.clir_provisioned || false} onChange={handleChange} />} label="CLIR Provisioned" />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControlLabel control={<Checkbox name="call_hold_provisioned" checked={formData.call_hold_provisioned || false} onChange={handleChange} />} label="Call Hold" />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControlLabel control={<Checkbox name="call_waiting_provisioned" checked={formData.call_waiting_provisioned || false} onChange={handleChange} />} label="Call Waiting" />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <FormControlLabel control={<Checkbox name="call_barring_all_outgoing" checked={formData.call_barring_all_outgoing || false} onChange={handleChange} />} label="Call Barring (Outgoing)" />
-              </Grid>
-              <Grid item xs={12} sm={4}>
-                <TextField name="call_forward_unconditional" label="Call Forward Unconditional" value={formData.call_forward_unconditional || ''} onChange={handleChange} fullWidth />
-              </Grid>
-            </Grid>
-          </Grid>
-
-        </Grid>
+        <Typography>
+          Are you absolutely sure you want to delete the subscriber profile for:
+        </Typography>
+        <Box sx={{ mt: 2, p: 2, border: '1px solid #ccc', borderRadius: 1 }}>
+          <Typography><strong>UID:</strong> {subscriber.uid}</Typography>
+          <Typography><strong>IMSI:</strong> {subscriber.imsi}</Typography>
+        </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleFormSave} variant="contained" startIcon={<Send />} disabled={!formData.uid || !formData.imsi}>
-          {isEditing ? 'Save Changes' : 'Create Subscriber'}
+        <Button onClick={onClose} variant="outlined">Cancel</Button>
+        <Button onClick={() => onConfirm(subscriber.uid)} color="error" variant="contained" startIcon={<Delete />}>
+          Permanently Delete
         </Button>
       </DialogActions>
     </Dialog>
   );
 };
 
-// --- II. A Detailed View Component for a Single Subscriber ---
-const SubscriberDetail = ({ subscriber, onEdit, onDelete }) => {
-  if (!subscriber) return null;
 
-  const renderBool = (value) => (value ? 'Yes' : 'No');
-  const subscriberId = subscriber.uid || subscriber.subscriberId;
+// ----------------------------------------------------------------------------------
+// --- MAIN VIEWS ---
+// ----------------------------------------------------------------------------------
 
+// --- View A: Dashboard ---
+const ProvisioningDashboard = ({ totalSubs, todayProvisions, fetchCounts }) => {
+  useEffect(() => {
+    fetchCounts();
+  }, [fetchCounts]);
+  
   return (
-    <Card variant="outlined" sx={{ mt: 3, boxShadow: 3 }}>
-      <CardHeader 
-        title={`Subscriber Profile: ${subscriberId}`} 
-        subheader={`Source: ${subscriber.source || 'Cloud/Legacy Mix'} | Status: ${subscriber.subscription_state || 'N/A'}`}
-        action={
-          <Box>
-            <Button variant="outlined" startIcon={<Edit />} onClick={() => onEdit(subscriber)} sx={{ mr: 1 }}>Modify</Button>
-            <Button variant="outlined" color="error" startIcon={<Delete />} onClick={() => onDelete(subscriberId)}>Delete</Button>
-          </Box>
-        }
-        sx={{ borderBottom: '1px solid #eee' }}
-      />
-      <CardContent>
-        <Grid container spacing={3}>
-          
-          {/* Basic Info Column */}
-          <Grid item xs={12} md={6}>
-            <Typography variant="h6" sx={{ mb: 1, color: 'primary.main' }}>Basic & Identifiers</Typography>
-            <List dense sx={{ '& .MuiListItemText-primary': { fontWeight: 'bold' } }}>
-              <ListItem><ListItemText primary="UID" secondary={subscriberId || 'N/A'} /></ListItem>
-              <ListItem><ListItemText primary="IMSI" secondary={subscriber.imsi || 'N/A'} /></ListItem>
-              <ListItem><ListItemText primary="MSISDN" secondary={subscriber.msisdn || 'N/A'} /></ListItem>
-              <Divider component="li" />
-              <ListItem><ListItemText primary="Plan" secondary={subscriber.plan || 'N/A'} /></ListItem>
-              <ListItem><ListItemText primary="Service Class" secondary={subscriber.service_class || 'N/A'} /></ListItem>
-              <ListItem><ListItemText primary="Profile Type" secondary={subscriber.profile_type || 'N/A'} /></ListItem>
-            </List>
-          </Grid>
-          
-          {/* HLR Features Column */}
-          <Grid item xs={12} md={6}>
-            <Typography variant="h6" sx={{ mb: 1, color: 'primary.main' }}>HLR & Service Features</Typography>
-            <List dense sx={{ '& .MuiListItemText-primary': { fontWeight: 'bold' } }}>
-              <ListItem><ListItemText primary="Call Forward Unconditional" secondary={subscriber.call_forward_unconditional || 'Not Set'} /></ListItem>
-              <ListItem><ListItemText primary="Call Barring (Outgoing)" secondary={renderBool(subscriber.call_barring_all_outgoing)} /></ListItem>
-              <ListItem><ListItemText primary="CLIP Provisioned" secondary={renderBool(subscriber.clip_provisioned)} /></ListItem>
-              <ListItem><ListItemText primary="CLIR Provisioned" secondary={renderBool(subscriber.clir_provisioned)} /></ListItem>
-              <ListItem><ListItemText primary="Call Hold" secondary={renderBool(subscriber.call_hold_provisioned)} /></ListItem>
-              <ListItem><ListItemText primary="Call Waiting" secondary={renderBool(subscriber.call_waiting_provisioned)} /></ListItem>
-              <Divider component="li" />
-              <ListItem><ListItemText primary="Language" secondary={subscriber.language_id || 'N/A'} /></ListItem>
-              <ListItem><ListItemText primary="Account Status" secondary={subscriber.account_status || 'N/A'} /></ListItem>
-            </List>
-          </Grid>
+    <Box>
+      <Typography variant="h4" gutterBottom sx={{ mb: 3, display: 'flex', alignItems: 'center' }}>
+        <Dashboard sx={{ mr: 1 }} /> Provisioning Dashboard
+      </Typography>
+      <Grid container spacing={3}>
+        <Grid item xs={12} md={6}>
+          <Card sx={{ bgcolor: '#e3f2fd', borderLeft: '5px solid #2196f3', boxShadow: 3 }}>
+            <CardContent>
+              <Typography color="textSecondary" gutterBottom variant="h6">
+                TOTAL SUBSCRIBERS (CLOUD)
+              </Typography>
+              <Typography variant="h3" sx={{ fontWeight: 'bold', color: '#1565c0' }}>
+                {totalSubs.toLocaleString()}
+              </Typography>
+            </CardContent>
+          </Card>
         </Grid>
-        
-        {/* Audit/Metadata Row */}
-        <Box sx={{ mt: 3, pt: 2, borderTop: '1px dashed #eee' }}>
-            <Typography variant="caption" color="textSecondary">
-                Provisioned By: {subscriber.created_by || 'Unknown'} | 
-                Created At: {subscriber.created_at ? new Date(subscriber.created_at).toLocaleString() : 'N/A'}
-            </Typography>
-        </Box>
-      </CardContent>
-    </Card>
+        <Grid item xs={12} md={6}>
+          <Card sx={{ bgcolor: '#e8f5e9', borderLeft: '5px solid #4caf50', boxShadow: 3 }}>
+            <CardContent>
+              <Typography color="textSecondary" gutterBottom variant="h6">
+                TODAY'S PROVISIONS
+              </Typography>
+              <Typography variant="h3" sx={{ fontWeight: 'bold', color: '#2e7d32' }}>
+                {todayProvisions}
+              </Typography>
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+      <Alert severity="info" sx={{ mt: 4 }}>
+        Subscriber counts are fetched from the DynamoDB table. "Today's Provisions" is a client-side simulation updated on every successful Create/Delete operation.
+      </Alert>
+    </Box>
   );
 };
 
-// --- III. Search/Modify View ---
-const SubscriberSearch = ({ setAppState }) => {
+
+// --- View B: Create Subscriber ---
+const SubscriberCreate = ({ totalSubs, setTotalSubs, fetchCounts }) => {
+  const [formData, setFormData] = useState(DEFAULT_SUBSCRIBER);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState({ type: '', text: '' });
+  
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setMessage({ type: '', text: '' });
+    setLoading(true);
+
+    if (!formData.uid || !formData.imsi) {
+      setMessage({ type: 'error', text: 'UID and IMSI are mandatory fields.' });
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await API.post('/provision/subscriber', formData);
+      
+      setMessage({ type: 'success', text: response.data?.msg || 'Subscriber created successfully!' });
+      
+      // Simulate real-time dashboard update (increment count)
+      setTotalSubs(prev => prev + 1);
+      fetchCounts();
+
+      // Reset form after success
+      setFormData(DEFAULT_SUBSCRIBER); 
+      
+    } catch (err) {
+      const errorMsg = err.response?.data?.msg || 'An unknown error occurred during creation.';
+      setMessage({ type: 'error', text: errorMsg });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Box>
+      <Typography variant="h4" gutterBottom sx={{ mb: 3, display: 'flex', alignItems: 'center' }}>
+        <Add sx={{ mr: 1 }} /> Create New Subscriber
+      </Typography>
+      
+      <Card variant="outlined" sx={{ p: 3, boxShadow: 3 }}>
+        <Typography variant="h6" sx={{ mb: 3, display: 'flex', alignItems: 'center', borderBottom: '1px solid #eee', pb: 1 }}>
+          <AccountCircle sx={{ mr: 1 }} /> Subscriber Profile Data
+        </Typography>
+        
+        {message.text && <Alert severity={message.type} sx={{ mb: 3 }} onClose={() => setMessage({ type: '', text: '' })}>{message.text}</Alert>}
+
+        <form onSubmit={handleSubmit}>
+          <SubscriberForm formData={formData} setFormData={setFormData} isEditing={false} />
+          <Box sx={{ mt: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <Button 
+              type="button"
+              variant="outlined"
+              onClick={() => setFormData(DEFAULT_SUBSCRIBER)}
+            >
+              Reset Form
+            </Button>
+            <Button 
+              type="submit" 
+              variant="contained" 
+              color="primary" 
+              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CheckCircleOutline />}
+              disabled={loading || !formData.uid || !formData.imsi}
+            >
+              {loading ? 'Creating...' : 'Create Subscriber'}
+            </Button>
+          </Box>
+        </form>
+      </Card>
+    </Box>
+  );
+};
+
+
+// --- View C: Search, Modify, & Delete Subscriber ---
+const SubscriberSearch = ({ totalSubs, setTotalSubs, fetchCounts, isDeleteMode }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [subscriber, setSubscriber] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [message, setMessage] = useState({ type: '', text: '' });
+  const [isEditing, setIsEditing] = useState(false);
+  const [formData, setFormData] = useState({});
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
-  const handleSearch = async () => {
-    const searchIdentifier = searchTerm.trim();
-    if (!searchIdentifier) {
-      setError('Please enter a UID, IMSI, or MSISDN to search.');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    setMessage('');
-    setSubscriber(null);
-
-    try {
-      const { data } = await API.get(`/provision/search?identifier=${searchIdentifier}`);
-      setSubscriber({ ...data, source: data.subscriberId ? 'Cloud' : 'Legacy' });
-      setMessage(`Subscriber found. Source: ${data.subscriberId ? 'Cloud' : 'Legacy'}`);
-    } catch (err) {
-      if (err.response?.status === 404) {
-        setError('Subscriber not found in cloud or legacy database.');
-      } else {
-        setError(err.response?.data?.msg || 'An error occurred during search.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUpdate = async (formData) => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    setIsFormOpen(false); // Close the form immediately
-
-    try {
-      const uid = formData.uid || formData.subscriberId;
-      await API.put(`/provision/subscriber/${uid}`, formData);
-      setMessage(`Subscriber ${uid} updated successfully!`);
-      // Refresh the detailed view
-      handleSearch(); 
-    } catch (err) {
-      setError(err.response?.data?.msg || 'Update operation failed.');
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  const openEditForm = (sub) => {
-    setSubscriber(sub); // Ensure the latest data is in state before opening form
-    setIsFormOpen(true);
-  };
-  
-  const handleInitiateDelete = (uid) => {
-    // Navigate to the dedicated delete view, passing the UID
-    setAppState({ view: 'Delete', initialSearchTerm: uid });
-  };
-
-  return (
-    <Paper sx={{ p: 4, my: 3, boxShadow: 6 }}>
-        <Typography variant="h4" gutterBottom sx={{ mb: 2 }}>Search / Modify Subscriber</Typography>
-        <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
-          Enter subscriber identifier (UID, IMSI, or MSISDN) to retrieve profile for display or modification.
-        </Typography>
-
-        <Box display="flex" alignItems="center" mb={4}>
-          <TextField 
-            fullWidth 
-            label="Search Identifier (UID, IMSI, or MSISDN)" 
-            value={searchTerm} 
-            onChange={e => setSearchTerm(e.target.value)} 
-            variant="outlined" 
-            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-          />
-          <Button variant="contained" startIcon={<Search />} onClick={handleSearch} disabled={loading || !searchTerm} sx={{ ml: 2, py: '15px' }}>
-            Search
-          </Button>
-        </Box>
-
-        {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}><CircularProgress /></Box>}
-        {error && <Alert severity="error" onClose={() => setError('')} sx={{ my: 2 }}>{error}</Alert>}
-        {message && <Alert severity="success" onClose={() => setMessage('')} sx={{ my: 2 }}>{message}</Alert>}
-        
-        {subscriber && <SubscriberDetail subscriber={subscriber} onEdit={openEditForm} onDelete={handleInitiateDelete} />}
-
-        {/* Modify Form Dialog (Only opens when searching finds a subscriber) */}
-        <SubscriberForm 
-          open={isFormOpen}
-          onClose={() => setIsFormOpen(false)}
-          subscriber={subscriber}
-          onSave={handleUpdate}
-          isEditing={true}
-        />
-    </Paper>
-  );
-};
-
-// --- IV. Dedicated Create View ---
-const SubscriberCreate = ({ setAppState }) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  const [isFormOpen, setIsFormOpen] = useState(true); // Always open the form in this view
-
-  const handleCreate = async (formData) => {
-    setLoading(true);
-    setError('');
-    setMessage('');
-    
-    try {
-      const { data } = await API.post('/provision/subscriber', formData);
-      setMessage(`Subscriber ${data.uid} created successfully! Redirecting to search view...`);
-      setTimeout(() => {
-        // Redirect to search view with the new UID for immediate display
-        setAppState({ view: 'SearchModify', initialSearchTerm: data.uid });
-      }, 1500); 
-    } catch (err) {
-      // Handles the specific backend validation error format
-      const errMsg = err.response?.data?.msg || 'Creation failed due to an unknown error.';
-      setError(errMsg);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Paper sx={{ p: 4, my: 3, boxShadow: 6 }}>
-      <Typography variant="h4" gutterBottom>Create New Subscriber</Typography>
-      <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
-        Enter a complete profile. **All identifiers (UID, IMSI, MSISDN) must be unique** across all databases.
-      </Typography>
-      
-      {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}><CircularProgress /></Box>}
-      {error && <Alert severity="error" onClose={() => setError('')} sx={{ my: 2 }}>{error}</Alert>}
-      {message && <Alert severity="success" onClose={() => setMessage('')} sx={{ my: 2 }}>{message}</Alert>}
-
-      {/* The form logic is reused but always set to creation mode */}
-      <SubscriberForm 
-        open={isFormOpen} 
-        onClose={() => setIsFormOpen(false)} // Should ideally be disabled in this view
-        subscriber={null} // No existing subscriber for creation
-        onSave={handleCreate}
-        isEditing={false}
-      />
-    </Paper>
-  );
-};
-
-
-// --- V. Dedicated Delete View ---
-const SubscriberDelete = ({ setAppState, initialSearchTerm }) => {
-  const [searchTerm, setSearchTerm] = useState(initialSearchTerm || '');
-  const [subscriber, setSubscriber] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
-  
-  useEffect(() => {
-      if (initialSearchTerm) {
-          handleSearch(initialSearchTerm);
-      }
-  }, [initialSearchTerm]);
+  // Set the title based on the mode
+  const title = isDeleteMode ? 'Delete Subscriber Profile' : 'Search & Modify Subscriber';
 
   const handleSearch = async (term = searchTerm) => {
     const searchIdentifier = term.trim();
     if (!searchIdentifier) {
-      setError('Please enter an identifier to proceed with deletion.');
+      setMessage({ type: 'warning', text: 'Please enter an identifier to search.' });
       return;
     }
     setLoading(true);
-    setError('');
-    setMessage('');
+    setMessage({ type: '', text: '' });
     setSubscriber(null);
+    setIsEditing(false);
 
     try {
       const { data } = await API.get(`/provision/search?identifier=${searchIdentifier}`);
-      setSubscriber({ ...data, source: data.subscriberId ? 'Cloud' : 'Legacy' });
-      setMessage(`Subscriber profile found for deletion confirmation.`);
+      setSubscriber(data);
+      // Initialize form data with the fetched subscriber data
+      setFormData(data); 
+      setMessage({ type: 'success', text: `Subscriber ${data.uid} found. Source: ${data.source || 'Cloud/DynamoDB'}` });
     } catch (err) {
       if (err.response?.status === 404) {
-        setError('Subscriber not found. Cannot delete.');
+        setMessage({ type: 'error', text: `Subscriber identifier '${searchIdentifier}' not found.` });
       } else {
-        setError(err.response?.data?.msg || 'An error occurred during search.');
+        setMessage({ type: 'error', text: err.response?.data?.msg || 'An unknown error occurred during search.' });
       }
     } finally {
       setLoading(false);
     }
   };
-  
-  const handleDelete = async (uid) => {
-    // Note: window.confirm is used here as a final step confirmation before an irreversible action
-    if (window.confirm(`WARNING: Are you sure you want to PERMANENTLY delete subscriber ${uid}? This action is irreversible across both Cloud and Legacy databases.`)) {
-        setLoading(true);
-        setError('');
-        setMessage('');
-        try {
-            await API.delete(`/provision/subscriber/${uid}`);
-            setMessage(`Subscriber ${uid} permanently deleted successfully!`);
-            setSubscriber(null); 
-            setSearchTerm(''); 
-        } catch (err) {
-            setError(err.response?.data?.msg || 'Delete operation failed.');
-        } finally {
-            setLoading(false);
-        }
+
+  const handleModify = async (e) => {
+    e.preventDefault();
+    setMessage({ type: '', text: '' });
+    setLoading(true);
+
+    if (!formData.uid || !formData.imsi) {
+      setMessage({ type: 'error', text: 'UID and IMSI are mandatory fields.' });
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await API.put(`/provision/subscriber/${formData.uid}`, formData);
+      
+      setMessage({ type: 'success', text: response.data?.msg || 'Subscriber updated successfully!' });
+      setIsEditing(false);
+      
+      // Re-fetch data to update the detail view with fresh data
+      await handleSearch(formData.uid); 
+      
+    } catch (err) {
+      const errorMsg = err.response?.data?.msg || 'An unknown error occurred during update.';
+      setMessage({ type: 'error', text: errorMsg });
+    } finally {
+      setLoading(false);
     }
   };
+  
+  const handleDeleteConfirm = async (uid) => {
+    setMessage({ type: '', text: '' });
+    setLoading(true);
+    setIsDeleteModalOpen(false);
 
+    try {
+        await API.delete(`/provision/subscriber/${uid}`);
+        
+        setMessage({ type: 'success', text: 'Subscriber deleted successfully!' });
+        setSubscriber(null); 
+        setSearchTerm(''); 
+        
+        // Simulate real-time dashboard update (decrement count)
+        setTotalSubs(prev => Math.max(0, prev - 1));
+        fetchCounts();
+
+    } catch (err) {
+        setMessage({ type: 'error', text: err.response?.data?.msg || 'Delete operation failed.' });
+    } finally {
+        setLoading(false);
+    }
+  };
+  
+  // Render the form if in edit mode, otherwise render the detail view
+  const renderContent = () => {
+    if (isEditing) {
+      return (
+        <form onSubmit={handleModify} sx={{ mt: 3 }}>
+          <Alert severity="info" sx={{ my: 2 }}>
+            You are editing Subscriber **{formData.uid}**. Changes will be saved to both Cloud and Legacy DBs (if enabled).
+          </Alert>
+          <SubscriberForm formData={formData} setFormData={setFormData} isEditing={true} />
+          <Box sx={{ mt: 4, display: 'flex', justifyContent: 'space-between' }}>
+            <Button variant="outlined" onClick={() => { setIsEditing(false); setFormData(subscriber); }}>
+              Cancel Edit
+            </Button>
+            <Button 
+              type="submit" 
+              variant="contained" 
+              color="secondary" 
+              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <Edit />}
+              disabled={loading}
+            >
+              {loading ? 'Saving Changes...' : 'Save Modifications'}
+            </Button>
+          </Box>
+        </form>
+      );
+    }
+    
+    // Default view: Details + Action Buttons
+    return (
+      <Box>
+        {subscriber && (
+            <Box display="flex" justifyContent="flex-end" gap={1} sx={{ mt: 3 }}>
+                <Button 
+                    variant="contained" 
+                    startIcon={<Edit />} 
+                    onClick={() => setIsEditing(true)} 
+                    color="primary"
+                >
+                    Modify Profile
+                </Button>
+                <Button 
+                    variant="contained" 
+                    color="error" 
+                    startIcon={<Delete />} 
+                    onClick={() => setIsDeleteModalOpen(true)}
+                    disabled={isDeleteMode} // Disable here if we are already in the Delete dedicated view
+                >
+                    Delete Subscriber
+                </Button>
+            </Box>
+        )}
+        {subscriber && <SubscriberDetail subscriber={subscriber} />}
+      </Box>
+    );
+  };
+  
   return (
-    <Paper sx={{ p: 4, my: 3, boxShadow: 6, borderColor: 'error.main', border: '1px solid' }}>
-        <Typography variant="h4" gutterBottom sx={{ mb: 2, color: 'error.main' }}><Delete sx={{ mr: 1 }} /> Delete Subscriber Profile</Typography>
-        <Typography variant="body1" color="textSecondary" sx={{ mb: 3 }}>
-          This operation performs a permanent deletion across all provisioning systems (Cloud & Legacy).
+    <Box>
+      <Typography variant="h4" gutterBottom sx={{ mb: 3, display: 'flex', alignItems: 'center' }}>
+        {isDeleteMode ? <Delete sx={{ mr: 1, color: 'error.main' }} /> : <Search sx={{ mr: 1 }} />} {title}
+      </Typography>
+      
+      {/* Search Input Block */}
+      <Card variant="outlined" sx={{ p: 3, mb: 3, bgcolor: '#f0f4f8' }}>
+        <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center' }}>
+            <VpnKey sx={{ mr: 1, color: 'primary.main' }} /> Search By Identifier
         </Typography>
-
-        <Box display="flex" alignItems="center" mb={4}>
+        <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
+          Enter **UID**, **IMSI**, or **MSISDN** to retrieve the profile.
+        </Typography>
+        <Box display="flex" alignItems="center" gap={2}>
           <TextField 
             fullWidth 
-            label="Identifier to Delete (UID, IMSI, or MSISDN)" 
+            label="UID, IMSI, or MSISDN" 
             value={searchTerm} 
             onChange={e => setSearchTerm(e.target.value)} 
             variant="outlined" 
+            size="small"
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+            disabled={loading}
           />
-          <Button variant="contained" color="error" startIcon={<Search />} onClick={() => handleSearch()} disabled={loading || !searchTerm} sx={{ ml: 2, py: '15px' }}>
-            Find Profile
+          <Button 
+            variant="contained" 
+            startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <Search />} 
+            onClick={() => handleSearch()} 
+            disabled={loading || !searchTerm.trim()} 
+            sx={{ py: '8px', whiteSpace: 'nowrap' }}
+          >
+            Search
           </Button>
         </Box>
+      </Card>
+      
+      {/* Status Messages */}
+      {message.text && <Alert severity={message.type.includes('Validation') || message.type.includes('error') ? 'error' : message.type} sx={{ my: 2 }} onClose={() => setMessage({ type: '', text: '' })}>{message.text}</Alert>}
+      
+      {/* Content Rendering (Detail or Edit Form) */}
+      {renderContent()}
 
-        {loading && <Box sx={{ display: 'flex', justifyContent: 'center', my: 3 }}><CircularProgress /></Box>}
-        {error && <Alert severity="error" onClose={() => setError('')} sx={{ my: 2 }}>{error}</Alert>}
-        {message && <Alert severity="success" onClose={() => setMessage('')} sx={{ my: 2 }}>{message}</Alert>}
-        
-        {subscriber && (
-            <Card sx={{ mt: 3, p: 3, bgcolor: 'error.main', color: '#fff' }}>
-                <Typography variant="h6" sx={{ color: 'inherit' }}>Profile Found - Confirm Deletion</Typography>
-                <Divider sx={{ my: 1, bgcolor: '#fff' }} />
-                <Typography variant="body1" sx={{ mt: 1, fontWeight: 'bold' }}>UID: {subscriber.uid || subscriber.subscriberId}</Typography>
-                <Typography variant="body1" sx={{ fontWeight: 'bold' }}>IMSI: {subscriber.imsi}</Typography>
-                <Typography variant="body1">Source: {subscriber.source}</Typography>
-                <Typography variant="body2" sx={{ mt: 2 }}>
-                    Press the button below to **permanently erase** this profile.
-                </Typography>
-                <Button 
-                    variant="contained" 
-                    color="warning" 
-                    startIcon={<Delete />} 
-                    onClick={() => handleDelete(subscriber.uid || subscriber.subscriberId)} 
-                    sx={{ mt: 2 }}
-                >
-                    Confirm Permanent Delete
-                </Button>
-            </Card>
-        )}
-    </Paper>
+      {/* Delete Modal */}
+      {subscriber && (
+        <DeleteConfirmModal 
+          open={isDeleteModalOpen || isDeleteMode} // Open if in delete view or triggered by button
+          onClose={() => setIsDeleteModalOpen(false)}
+          subscriber={subscriber}
+          onConfirm={handleDeleteConfirm}
+        />
+      )}
+    </Box>
   );
 };
 
 
-// --- VI. Dashboard View ---
-// Accessing PROV_MODE directly from the backend context or mock data for display
-const MODE = 'cloud'; 
+// ----------------------------------------------------------------------------------
+// --- ROOT COMPONENT ---
+// ----------------------------------------------------------------------------------
 
-const ProvisioningDashboard = () => {
-  const [totalSubscribers, setTotalSubscribers] = useState(0);
-  const [loading, setLoading] = useState(true);
-  
-  useEffect(() => {
-    const fetchCount = async () => {
-      try {
-        const { data } = await API.get('/provision/count');
-        setTotalSubscribers(data.count);
-      } catch (e) {
-        console.error("Failed to fetch subscriber count:", e);
-        setTotalSubscribers('N/A');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchCount();
-  }, []);
-  
-  return (
-    <Paper sx={{ p: 4, my: 3, boxShadow: 6 }}>
-        <Typography variant="h4" gutterBottom sx={{ borderBottom: '1px solid #ddd', pb: 1 }}>
-            <DashboardIcon sx={{ mr: 1, color: 'primary.main' }} /> Provisioning Dashboard
-        </Typography>
-        
-        <Grid container spacing={3} sx={{ mt: 2 }}>
-            <Grid item xs={12} md={4}>
-                <Card sx={{ bgcolor: 'primary.light', color: '#fff', textAlign: 'center', p: 3 }}>
-                    <Typography variant="h6">Total Subscribers (Cloud DB)</Typography>
-                    {loading ? (
-                        <CircularProgress color="inherit" sx={{ mt: 1 }} />
-                    ) : (
-                        <Typography variant="h3" sx={{ mt: 1 }}>
-                            {totalSubscribers.toLocaleString()}
-                        </Typography>
-                    )}
-                </Card>
-            </Grid>
-             <Grid item xs={12} md={4}>
-                <Card sx={{ bgcolor: 'success.light', color: '#fff', textAlign: 'center', p: 3 }}>
-                    <Typography variant="h6">Dual Provisioning Status</Typography>
-                    <Typography variant="h3" sx={{ mt: 1 }}>{MODE === 'cloud' ? 'Cloud Only' : 'Active'}</Typography>
-                </Card>
-            </Grid>
-            <Grid item xs={12} md={4}>
-                <Card sx={{ bgcolor: 'secondary.light', color: '#fff', textAlign: 'center', p: 3 }}>
-                    <Typography variant="h6">Today's Provisions (Mock)</Typography>
-                    <Typography variant="h3" sx={{ mt: 1 }}>{Math.floor(Math.random() * 50) + 10}</Typography>
-                </Card>
-            </Grid>
-        </Grid>
-        
-        <Box sx={{ mt: 5 }}>
-            <Typography variant="h5" sx={{ mb: 2 }}>System Overview</Typography>
-            <Alert severity="info">
-                This dashboard reflects data primarily from the high-performance Cloud (DynamoDB) system. 
-                Legacy lookups occur only during search operations. **PROV_MODE is set to CLOUD.**
-            </Alert>
-        </Box>
-    </Paper>
-  );
-};
-
-// --- VII. Main Provisioning Router Component ---
+// SubscriberProvision is the main container that manages view state
 export default function SubscriberProvision() {
-  // Central state to manage which sub-view is active, and any state passed between them
-  const [appState, setAppState] = useState({ 
-    view: 'Dashboard', 
-    initialSearchTerm: null 
-  }); 
+  const [activeTab, setActiveTab] = useState(0); // 0=Dashboard, 1=Create, 2=Search/Modify, 3=Delete
+  const [totalSubs, setTotalSubs] = useState(0);
+  const [todayProvisions, setTodayProvisions] = useState(0);
 
-  // Function to render the correct component based on the current view
-  const renderView = () => {
-    switch (appState.view) {
-      case 'Dashboard':
-        return <ProvisioningDashboard />;
-      case 'Create':
-        return <SubscriberCreate setAppState={setAppState} />;
-      case 'SearchModify':
-        return <SubscriberSearch setAppState={setAppState} />;
-      case 'Delete':
-        return <SubscriberDelete setAppState={setAppState} initialSearchTerm={appState.initialSearchTerm} />;
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+  
+  // Function to fetch dashboard counts from the backend (used by both dashboard and create/delete success)
+  const fetchCounts = async () => {
+      try {
+          const { data } = await API.get('/provision/count');
+          setTotalSubs(data.total_subscribers);
+          setTodayProvisions(data.today_provisions);
+      } catch (err) {
+          console.error("Failed to fetch subscriber counts:", err);
+          // Set a fallback count
+          setTotalSubs('N/A');
+          setTodayProvisions('N/A');
+      }
+  };
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 0:
+        return <ProvisioningDashboard totalSubs={totalSubs} todayProvisions={todayProvisions} fetchCounts={fetchCounts} />;
+      case 1:
+        return <SubscriberCreate totalSubs={totalSubs} setTotalSubs={setTotalSubs} fetchCounts={fetchCounts} />;
+      case 2:
+        return <SubscriberSearch totalSubs={totalSubs} setTotalSubs={setTotalSubs} fetchCounts={fetchCounts} isDeleteMode={false} />;
+      case 3:
+        // Use the same search component but force the delete modal open upon search result
+        return <SubscriberSearch totalSubs={totalSubs} setTotalSubs={setTotalSubs} fetchCounts={fetchCounts} isDeleteMode={true} />;
       default:
-        return <ProvisioningDashboard />;
+        return <Typography>Select a Provisioning Option</Typography>;
     }
   };
 
-  const navItems = [
-    { label: 'Dashboard', icon: <DashboardIcon />, view: 'Dashboard' },
-    { label: 'Create Subscriber', icon: <Add />, view: 'Create' },
-    { label: 'Search / Modify', icon: <Search />, view: 'SearchModify' },
-    { label: 'Delete Subscriber', icon: <Delete />, view: 'Delete', color: 'error.main' },
-  ];
-
   return (
-    <Box sx={{ display: 'flex', mt: 3, bgcolor: '#f5f5f5', minHeight: '80vh' }}>
-      {/* Sidebar Navigation */}
-      <Paper sx={{ width: 280, p: 2, mr: 3, boxShadow: 4 }}>
-        <Typography variant="h6" sx={{ mb: 3, color: 'primary.dark' }}>Mobile Subscriber Admin</Typography>
-        <List>
-          {navItems.map((item) => (
-            <ListItem 
-              button 
-              key={item.label} 
-              onClick={() => setAppState({ view: item.view, initialSearchTerm: null })} 
-              sx={{ 
-                borderRadius: 1, 
-                mb: 1,
-                bgcolor: appState.view === item.view ? 'primary.main' : 'transparent',
-                color: appState.view === item.view ? '#fff' : (item.color || 'text.primary'),
-                '&:hover': { 
-                    bgcolor: appState.view === item.view ? 'primary.dark' : 'primary.light',
-                    color: appState.view === item.view ? '#fff' : '#fff',
-                }
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', '& svg': { mr: 2, fontSize: '1.2rem' } }}>
-                  {item.icon}
-                  <ListItemText primary={item.label} />
-              </Box>
-            </ListItem>
-          ))}
-        </List>
-      </Paper>
-      
-      {/* Content Area */}
-      <Box sx={{ flexGrow: 1, p: 2 }}>
-        {renderView()}
+    <Paper sx={{ p: 4, my: 3, boxShadow: 6 }}>
+      <Typography variant="h4" gutterBottom sx={{ mb: 3, borderBottom: '2px solid #1976d2', pb: 1 }}>
+        Subscriber Provisioning Operations
+      </Typography>
+
+      <Box sx={{ width: '100%', mb: 4 }}>
+        <Tabs value={activeTab} onChange={handleTabChange} aria-label="provisioning tabs" variant="fullWidth">
+          <Tab label="Dashboard" icon={<Dashboard />} iconPosition="start" />
+          <Tab label="Create Subscriber" icon={<Add />} iconPosition="start" />
+          <Tab label="Search & Modify" icon={<Edit />} iconPosition="start" />
+          <Tab label="Delete Subscriber" icon={<Delete />} iconPosition="start" />
+        </Tabs>
       </Box>
-    </Box>
+
+      {renderContent()}
+    </Paper>
   );
 }
