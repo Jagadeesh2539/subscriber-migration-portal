@@ -44,7 +44,6 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides DomainName=${{ secrets.DOMAIN_NAME }}
 
-      # --- INTEGRATION FIX: Get all required outputs from CloudFormation ---
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
@@ -87,7 +86,6 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- INTEGRATION FIX: Set all required environment variables on the Lambda ---
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
@@ -96,11 +94,9 @@ jobs:
             --environment "Variables={ \
               FRONTEND_DOMAIN_URL=https://portal.${{ secrets.DOMAIN_NAME }}, \
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
-              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
-              AWS_REGION=us-east-1 \
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }} \
             }"
             
-      # --- ★★★ THIS IS THE NEW DEBUGGING STEP ★★★ ---
       - name: DEBUG Check API_ID Structure
         run: |
           API_ID_VALUE="${{ secrets.REST_API_ID }}"
@@ -116,9 +112,6 @@ jobs:
             echo "API_ID structure looks correct (no colons). Proceeding."
           fi
 
-      # ---------------------
-      # CRITICAL API GATEWAY REDEPLOYMENT FIX
-      # ---------------------
       - name: Deploy API Gateway Stage
         if: env.API_ID != ''
         env:
