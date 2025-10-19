@@ -83,8 +83,7 @@ jobs:
             --function-name ${{ steps.cfn_outputs.outputs.function_name }}
           echo "Function update complete."
 
-      # --- MODIFIED STEP ---
-      # This step now sets PROV_MODE=dual_prov and adds legacy DB variables.
+      # This step requires LEGACY_DB_PASSWORD to be set in GitHub secrets
       - name: Update Lambda Environment Variables
         if: steps.cfn_outputs.outputs.function_name != ''
         run: |
