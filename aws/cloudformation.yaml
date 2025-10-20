@@ -199,7 +199,7 @@ Resources:
       MultiAZ: false
 
   # ---------------------------------------------------------------------
-  # S3 Buckets
+  # S3 Buckets (Frontend only, Migration bucket created separately)
   # ---------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -328,7 +328,7 @@ Resources:
           SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
           AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
           MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
+          REPORT_BUCKET_NAME: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
           LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
           LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
       VpcConfig:
@@ -347,8 +347,20 @@ Resources:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
+  # S3 Trigger Permission (created before bucket)
+  MigrationUploadTriggerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt MigrationProcessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      SourceAccount: !Ref AWS::AccountId
+
+  # Migration Upload Bucket (with notification configuration)
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
+    DependsOn: MigrationUploadTriggerPermission
     Properties:
       BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
       PublicAccessBlockConfiguration:
@@ -363,23 +375,6 @@ Resources:
             AllowedOrigins:
               - !GetAtt FrontendBucket.WebsiteURL
               - http://localhost:3000
-
-  # S3 Trigger Permission (must be created before the notification configuration)
-  MigrationUploadTriggerPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt MigrationProcessorFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}"
-      SourceAccount: !Ref AWS::AccountId
-
-  # S3 Bucket Notification Configuration (separate resource to avoid circular dependency)
-  MigrationUploadBucketNotification:
-    Type: AWS::S3::Bucket
-    DependsOn: MigrationUploadTriggerPermission
-    Properties:
-      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}-notifications"
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:Put
