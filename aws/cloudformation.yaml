@@ -350,7 +350,6 @@ Resources:
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
@@ -371,7 +370,6 @@ Resources:
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt BackendLambdaRole.Arn
