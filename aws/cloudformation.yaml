@@ -243,7 +243,7 @@ Resources:
           - AllowedHeaders: ["*"]
             AllowedMethods: [PUT] # Only PUT is needed for presigned URL uploads
             AllowedOrigins:
-              - !Sub "http://subscriber-portal-${AWS::AccountId}-${AWS::Region}.s3-website.${AWS::Region}.amazonaws.com"
+              - !Sub "http://${FrontendBucket.WebsiteURL}" # Use website URL for accuracy
               - http://localhost:3000
       # Configure S3 event notification to trigger the Lambda
       NotificationConfiguration:
@@ -366,7 +366,7 @@ Resources:
                 Action: [ logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents ]
                 Resource: "arn:aws:logs:*:*:*"
               - Effect: Allow # Read/Write/Delete from Migration Bucket
-                Action: [ s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging ]
+                Action: [ s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging ] # Added tagging permissions for metadata
                 Resource: !Sub "${MigrationUploadBucket.Arn}/*"
               - Effect: Allow # Access DynamoDB Tables
                 Action: [ dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem ]
@@ -402,16 +402,17 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
-      Code: # Start with placeholder, workflow updates it
+       # Start with placeholder, workflow updates it
+      Code:
         ZipFile: |
           def lambda_handler(event, context): return {"statusCode": 200, "body": "Placeholder"}
-      Timeout: 300
+      Timeout: 300 # 5 minutes
       Environment:
         Variables:
           SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
           AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
           MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket # Use the upload bucket for reports too
           LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
           LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
       VpcConfig:
@@ -431,7 +432,7 @@ Resources:
       SourceAccount: !Ref AWS::AccountId
 
   # NOTE: The S3 Trigger itself is now configured directly on the MigrationUploadBucket resource above.
-  # The old AWS::Lambda::EventSourceMapping resource has been removed as it's not needed with NotificationConfiguration.
+  # The old S3Trigger and AddS3Notification resources have been removed as NotificationConfiguration is simpler and works correctly here.
 
   # ---------------------------------------------------------------------
   # API Gateway
