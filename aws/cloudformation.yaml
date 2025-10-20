@@ -174,7 +174,7 @@ Resources:
       DBSubnetGroupDescription: "Subnet group for Legacy DB"
       SubnetIds:
         - !Ref PrivateSubnet1
-		- !Ref PrivateSubnet2   # add a second private subnet from another AZ, e.g., us-east-1b
+        - !Ref PrivateSubnet2   # add a second private subnet from another AZ, e.g., us-east-1b
 
   LegacyDBInstance:
     Type: AWS::RDS::DBInstance
