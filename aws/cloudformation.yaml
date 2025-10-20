@@ -66,6 +66,18 @@ Resources:
       Tags:
         - Key: Name
           Value: private-subnet-1
+  
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: CreateNewVPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24 # Use a different CIDR block, e.g., 10.0.3.0/24
+      AvailabilityZone: !Select [1, !GetAZs ''] # Use the SECOND Availability Zone
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: private-subnet-2
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -125,11 +137,19 @@ Resources:
     Properties:
       VpcId: !Ref VPC
 
-  PrivateSubnetRouteTableAssociation:
+  PrivateSubnet2RouteTableAssociation: # Renamed from PrivateSubnetRouteTableAssociation
     Type: AWS::EC2::SubnetRouteTableAssociation
     Condition: CreateNewVPC
     Properties:
-      SubnetId: !Ref PrivateSubnet1
+      SubnetId: !Ref PrivateSubnet2 # Associate with PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # --- Existing PrivateSubnet1 association (adjust logical ID if needed) ---
+  PrivateSubnet1RouteTableAssociation: # Make sure the logical ID is unique
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
+    Properties:
+      SubnetId: !Ref PrivateSubnet1 # Associate with PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
 
   PrivateRouteToNat:
