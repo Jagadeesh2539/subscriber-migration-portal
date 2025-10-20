@@ -9,7 +9,7 @@ import legacy_db # Use the real DB connector
 # Get env variables set by CloudFormation/deploy script
 SUBSCRIBERS_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
 MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
-REPORT_BUCKET_NAME = os.environ.get('MIGRATION_UPLOAD_BUCKET_NAME')
+REPORT_BUCKET_NAME = os.environ.get('REPORT_BUCKET_NAME')
 LEGACY_DB_SECRET_ARN = os.environ.get('LEGACY_DB_SECRET_ARN')
 LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST') # The RDS endpoint
 
@@ -67,7 +67,6 @@ def lambda_handler(event, context):
     report_data = [['Identifier', 'Status', 'Details']]
 
     try:
-        # Configure the legacy_db connector with RDS details
         db_creds = get_db_credentials()
         legacy_db.init_connection_details(**db_creds)
         print("Successfully configured legacy DB connector.")
@@ -96,15 +95,12 @@ def lambda_handler(event, context):
                 continue
 
             try:
-                # Fetch full profile from Legacy DB
                 legacy_data = legacy_db.get_subscriber_by_any_id(identifier_val)
-                # Check if already exists in Cloud DB
                 cloud_data = subscribers_table.get_item(Key={'subscriberId': identifier_val}).get('Item')
 
                 if legacy_data and not cloud_data:
                     status_detail = "Migrated successfully."
                     if not is_simulate_mode:
-                        # Ensure subscriberId is set for DynamoDB
                         legacy_data['subscriberId'] = legacy_data['uid']
                         subscribers_table.put_item(Item=legacy_data)
                     else:
@@ -121,13 +117,11 @@ def lambda_handler(event, context):
                 counts['failed'] += 1
                 report_data.append([identifier_val, 'FAILED', str(e)])
 
-        # Generate and upload report
         report_key = f"reports/{migration_id}.csv"
         report_buffer = io.StringIO()
         csv.writer(report_buffer).writerows(report_data)
         s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
         
-        # Finalize job status
         jobs_table.update_item(
             Key={'migrationId': migration_id},
             UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
@@ -138,7 +132,6 @@ def lambda_handler(event, context):
         print(f"FATAL ERROR during processing: {e}")
         jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
     finally:
-        # Clean up the original uploaded file
         s3_client.delete_object(Bucket=bucket, Key=key)
 
     return {'status': 'success'}
