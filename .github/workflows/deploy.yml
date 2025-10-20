@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+env:
+  STACK_NAME: subscriber-migration-stack-prod
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -25,25 +28,35 @@ jobs:
         run: |
           echo "Checking AWS identity..."
           aws sts get-caller-identity
+
+      # Health-check stack to avoid manual deletions
+      - name: Ensure stack is healthy or removed if stuck
+        run: |
+          set -e
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
+          echo "Current stack status: $STATUS"
+          if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "ROLLBACK_FAILED" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+            echo "Stack is stuck. Deleting..."
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+            echo "Deleted stuck stack."
+          fi
       
       # ---------------------
       # Step 1: Build & Deploy Backend
       # ---------------------
       - name: Setup Python
-        uses: actions/setup-python@v5 
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11' 
+          python-version: '3.11'
 
       - name: Install and Package All Backends
         run: |
           echo "--- Packaging Main Flask API ---"
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
-          # Copy shared files needed by the migration processor into its directory
-          if [ -d "migration_processor" ]; then
-             if [ -f "legacy_db.py" ]; then
-               cp legacy_db.py migration_processor/
-             fi
+          if [ -d "migration_processor" ] && [ -f "legacy_db.py" ]; then
+            cp legacy_db.py migration_processor/
           fi
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
           cd ..
@@ -68,16 +81,16 @@ jobs:
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
-            --stack-name subscriber-migration-stack-v3 \
+            --stack-name "$STACK_NAME" \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
-              DomainName=${{ secrets.DOMAIN_NAME }} \
-              LegacyDBPassword=${{ secrets.LEGACY_DB_PASSWORD }}
+              DomainName='${{ secrets.DOMAIN_NAME }}' \
+              LegacyDBPassword='${{ secrets.LEGACY_DB_PASSWORD }}'
 
       - name: Get CloudFormation Outputs
         id: cfn_outputs
         run: |
-          STACK_NAME="subscriber-migration-stack-v3"
+          STACK_NAME="${STACK_NAME}"
           FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" --output text)
           SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
           AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
@@ -158,31 +171,20 @@ jobs:
             aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }}
           fi
 
-      # NEW STEP: Configure S3 bucket notification for Lambda trigger
       - name: Configure S3 bucket notification for migration processor
         run: |
-          # Get the Lambda function ARN
           MIG_PROCESSOR_ARN=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.FunctionArn' --output text)
-          echo "Migration processor ARN: $MIG_PROCESSOR_ARN"
-          
-          # Configure S3 bucket notification
           aws s3api put-bucket-notification-configuration \
             --bucket "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" \
             --notification-configuration '{
               "LambdaFunctionConfigurations": [{
                 "LambdaFunctionArn": "'"$MIG_PROCESSOR_ARN"'",
                 "Events": ["s3:ObjectCreated:Put"],
-                "Filter": {
-                  "Key": {
-                    "FilterRules": [
-                      {"Name": "prefix", "Value": "uploads/"},
-                      {"Name": "suffix", "Value": ".csv"}
-                    ]
-                  }
-                }
-              }]
-            }'
-          echo "S3 bucket notification configured successfully"
+                "Filter": {"Key": {"FilterRules": [
+                  {"Name":"prefix","Value":"uploads/"},
+                  {"Name":"suffix","Value":".csv"}
+                ]}}
+              }]}'
 
       - name: Deploy API Gateway Stage
         env:
@@ -220,4 +222,3 @@ jobs:
           echo "Frontend URL: ${{ steps.cfn_outputs.outputs.frontend_url }}"
           echo "API Gateway URL: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.us-east-1.amazonaws.com/prod"
           echo "Migration Upload Bucket: ${{ steps.cfn_outputs.outputs.mig_upload_bucket }}"
-          echo "S3 notification configured for Lambda triggers on CSV uploads"
