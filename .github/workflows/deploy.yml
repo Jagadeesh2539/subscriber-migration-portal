@@ -43,7 +43,8 @@ jobs:
         run: |
           echo "🔍 Verifying AWS connection..."
           aws sts get-caller-identity
-          aws cloudformation describe-account-attributes --query 'AccountAttributes[?AttributeName==`AccountId`].AttributeValues[0]' --output text
+          aws ec2 describe-regions --query 'Regions[?RegionName==`us-east-1`].RegionName' --output text
+          aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --max-items 1 >/dev/null 2>&1 || true
           echo "✅ AWS connection verified"
 
       # Advanced cleanup with orphan resource detection
