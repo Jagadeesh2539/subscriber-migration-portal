@@ -211,7 +211,10 @@ Resources:
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
+      BucketName:
+        Fn::Sub:
+          - "subscriber-portal-${AWS::AccountId}-${ShortRegion}"
+          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
@@ -237,7 +240,10 @@ Resources:
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
+      BucketName:
+        Fn::Sub:
+          - "mig-up-${AWS::AccountId}-${ShortRegion}"
+          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -332,7 +338,12 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
-              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}/*" }
+              - Resource:
+                  Fn::Sub:
+                    - "arn:aws:s3:::mig-up-${AWS::AccountId}-${ShortRegion}/*"
+                    - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging]
               - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
               - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
 
@@ -375,7 +386,10 @@ Resources:
       FunctionName: !GetAtt MigrationProcessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub "arn:aws:s3:::mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
+      SourceArn:
+        Fn::Sub:
+          - "arn:aws:s3:::mig-up-${AWS::AccountId}-${ShortRegion}"
+          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
       SourceAccount: !Ref AWS::AccountId
 
   BackendApi:
