@@ -16,7 +16,7 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: "Skip Aurora for 3min deploy (vs 15min with Aurora)"
+    Description: "Skip Aurora for 3min deploy (vs 8min with Aurora)"
 
 Conditions:
   CreateDatabase: !Equals [!Ref DevelopmentMode, "false"]
@@ -467,7 +467,7 @@ Resources:
           - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
       SourceAccount: !Ref AWS::AccountId
 
-  # API Gateway
+  # API Gateway (Fixed - removed invalid TracingConfig)
   BackendApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
@@ -536,7 +536,6 @@ Resources:
           MetricsEnabled: true
           ThrottlingBurstLimit: 200
           ThrottlingRateLimit: 100
-      TracingConfig: { TracingEnabled: true }
 
   # CloudWatch Log Groups
   BackendLambdaLogGroup:
