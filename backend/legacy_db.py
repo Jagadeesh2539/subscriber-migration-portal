@@ -11,7 +11,7 @@ DB_PORT = int(os.environ.get('LEGACY_DB_PORT', 3307))
 DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
 DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
 DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
-IS_LEGACY_DB_DISABLED = False # Default
+IS_LEGACY_DB_DISABLED = (os.environ.get('AWS_REGION') is not None) and (DB_HOST in ['host.docker.internal', '127.0.0.1'])
 
 def init_connection_details(host, port, user, password, database):
     """Allows runtime configuration of DB connection, used by the Lambda."""
