@@ -255,9 +255,11 @@ Resources:
     Properties:
       TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
       AttributeDefinitions:
-        - AttributeName: subscriberId # Main key
+        - AttributeName: subscriberId
           AttributeType: S
-        - AttributeName: imsi # New index key
+        - AttributeName: imsi
+          AttributeType: S
+        - AttributeName: msisdn
           AttributeType: S
       KeySchema:
         - AttributeName: subscriberId
@@ -267,6 +269,12 @@ Resources:
         - IndexName: ImsiIndex
           KeySchema:
             - AttributeName: imsi
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: MsisdnIndex
+          KeySchema:
+            - AttributeName: msisdn
               KeyType: HASH
           Projection:
             ProjectionType: ALL
@@ -398,12 +406,10 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
-      # --- FIX: Use placeholder code for initial creation ---
       Code:
         ZipFile: |
           def lambda_handler(event, context):
               return {"statusCode": 200, "body": "Migration Processor Lambda created"}
-      # --- END FIX ---
       Timeout: 300
       Environment:
         Variables:
@@ -463,7 +469,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-3-31/functions/${BackendLambda.Arn}/invocations"
       ResourceId: !Ref ApiProxyResource
       RestApiId: !Ref BackendApi
 
@@ -475,7 +481,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-3-31/functions/${BackendLambda.Arn}/invocations"
       ResourceId: !GetAtt BackendApi.RootResourceId
       RestApiId: !Ref BackendApi
 
