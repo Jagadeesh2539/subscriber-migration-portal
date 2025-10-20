@@ -25,14 +25,14 @@ jobs:
         run: |
           echo "Checking AWS identity..."
           aws sts get-caller-identity
-      
+
       # ---------------------
       # Step 1: Build & Deploy Backend
       # ---------------------
       - name: Setup Python
-        uses: actions/setup-python@v5 
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11' 
+          python-version: '3.11'
 
       - name: Install and Package All Backends
         run: |
@@ -47,11 +47,7 @@ jobs:
           else
             echo "::warning:: legacy_db.py not found in backend/ - Processor might fail if it needs it."
           fi
-           if [ -f "bulk_ops.py" ]; then # Only needed if processor still uses MOCK
-            cp bulk_ops.py migration_processor/
-          else
-            echo "::warning:: bulk_ops.py not found in backend/ - Processor might fail if it needs MOCK data."
-          fi
+           # bulk_ops.py is no longer used by the processor, copy omitted
           # Create zip file in the root directory, excluding specific files/dirs
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
           cd .. # Return to project root
@@ -144,7 +140,12 @@ jobs:
         env:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
-          BUCKET_NAME=$(echo $FRONTEND_URL | sed 's/http:\/\///' | sed 's/.s3-website.*//')
+          # Extract bucket name safely from the S3 website URL
+          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then
+             echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"
+             exit 1
+          fi
           aws s3 cp processor.zip s3://$BUCKET_NAME/processor.zip
 
       - name: Update MIGRATION Processor Lambda code
@@ -152,12 +153,16 @@ jobs:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
           MIG_PROCESSOR_NAME: ${{ steps.cfn_outputs.outputs.mig_processor_name }}
         run: |
-          BUCKET_NAME=$(echo $FRONTEND_URL | sed 's/http:\/\///' | sed 's/.s3-website.*//')
+          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then
+             echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"
+             exit 1
+          fi
           aws lambda update-function-code \
             --function-name $MIG_PROCESSOR_NAME \
             --s3-bucket $BUCKET_NAME \
             --s3-key "processor.zip"
-      
+
       - name: Update MIGRATION Lambda Environment Variables
         run: |
            aws lambda update-function-configuration \
@@ -187,17 +192,17 @@ jobs:
             --description "CI/CD code update $(date +%s)" \
             --query 'id' \
             --output text --region us-east-1)
-          
+
           if [ -z "$DEPLOYMENT_ID" ]; then
             echo "Failed to create deployment"
             exit 1
           fi
-          
+
           aws apigateway update-stage \
             --rest-api-id $API_ID \
             --stage-name prod \
             --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID
-          
+
           echo "API Gateway stage 'prod' updated"
 
       # ---------------------
@@ -214,5 +219,12 @@ jobs:
           CI=false npm run build
 
       - name: Deploy frontend to S3
+        env:
+          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
-          aws s3 sync frontend/build/ s3://subscriber-portal-${{ secrets.AWS_ACCOUNT_ID }}-us-east-1 --delete
+          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then
+             echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"
+             exit 1
+          fi
+          aws s3 sync frontend/build/ s3://$BUCKET_NAME --delete
