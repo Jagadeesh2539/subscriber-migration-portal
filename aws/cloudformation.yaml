@@ -16,7 +16,7 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: "Skip Aurora for 3min deploy (vs 8min with Aurora)"
+    Description: "Skip Aurora for ~3	65 min deploys (vs ~8	610 min with Aurora)"
 
 Conditions:
   CreateDatabase: !Equals [!Ref DevelopmentMode, "false"]
@@ -39,10 +39,8 @@ Resources:
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
-        - Key: Name
-          Value: !Sub "${AWS::StackName}-VPC"
-        - Key: Environment
-          Value: !If [CreateDatabase, "Production", "Development"]
+        - { Key: Name, Value: !Sub "${AWS::StackName}-VPC" }
+        - { Key: Environment, Value: !If [CreateDatabase, "Production", "Development"] }
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
@@ -130,7 +128,6 @@ Resources:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties: { SubnetId: !Ref PrivateSubnet2, RouteTableId: !Ref PrivateRouteTable }
 
-  # Security Groups
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -152,7 +149,6 @@ Resources:
           ToPort: 3306
           SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
-  # Aurora Serverless (Much faster than RDS)
   LegacyDBSecret:
     Type: AWS::SecretsManager::Secret
     Condition: CreateDatabase
@@ -199,14 +195,13 @@ Resources:
       Engine: aurora-mysql
       PubliclyAccessible: false
 
-  # S3 Buckets (Short names)
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName:
         Fn::Sub:
           - "portal-${AWS::AccountId}-${ShortRegion}"
-          - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
+          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
@@ -215,7 +210,8 @@ Resources:
         BlockPublicPolicy: false
         IgnorePublicAcls: false
         RestrictPublicBuckets: false
-      VersioningConfiguration: { Status: Enabled }
+      VersioningConfiguration:
+        Status: Enabled
 
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -236,13 +232,14 @@ Resources:
       BucketName:
         Fn::Sub:
           - "mig-${AWS::AccountId}-${ShortRegion}"
-          - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
+          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      VersioningConfiguration: { Status: Enabled }
+      VersioningConfiguration:
+        Status: Enabled
       LifecycleConfiguration:
         Rules:
           - Status: Enabled
@@ -257,7 +254,6 @@ Resources:
               - http://localhost:3000
               - https://localhost:3000
 
-  # DynamoDB Tables
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -266,7 +262,8 @@ Resources:
         - { AttributeName: subscriberId, AttributeType: S }
         - { AttributeName: imsi, AttributeType: S }
         - { AttributeName: msisdn, AttributeType: S }
-      KeySchema: [{ AttributeName: subscriberId, KeyType: HASH }]
+      KeySchema:
+        - { AttributeName: subscriberId, KeyType: HASH }
       BillingMode: PAY_PER_REQUEST
       GlobalSecondaryIndexes:
         - IndexName: ImsiIndex
@@ -275,7 +272,8 @@ Resources:
         - IndexName: MsisdnIndex
           KeySchema: [{ AttributeName: msisdn, KeyType: HASH }]
           Projection: { ProjectionType: ALL }
-      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
 
   AuditLogTable:
     Type: AWS::DynamoDB::Table
@@ -299,20 +297,23 @@ Resources:
       AttributeDefinitions:
         - { AttributeName: migrationId, AttributeType: S }
         - { AttributeName: status, AttributeType: S }
-      KeySchema: [{ AttributeName: migrationId, KeyType: HASH }]
+      KeySchema:
+        - { AttributeName: migrationId, KeyType: HASH }
       GlobalSecondaryIndexes:
         - IndexName: StatusIndex
           KeySchema: [{ AttributeName: status, KeyType: HASH }]
           Projection: { ProjectionType: ALL }
       BillingMode: PAY_PER_REQUEST
 
-  # IAM Roles (Auto-named)
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
-        Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
@@ -340,7 +341,11 @@ Resources:
                   - !GetAtt MigrationJobsTable.Arn
                   - !Sub "${MigrationJobsTable.Arn}/index/*"
               - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket]
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
                 Resource:
                   - !GetAtt MigrationUploadBucket.Arn
                   - !Sub "${MigrationUploadBucket.Arn}/*"
@@ -351,7 +356,9 @@ Resources:
                   Resource: !Ref LegacyDBSecret
                 - !Ref AWS::NoValue
               - Effect: Allow
-                Action: [sqs:SendMessage, sqs:GetQueueAttributes]
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
                 Resource: !GetAtt DeadLetterQueue.Arn
 
   MigrationProcessorRole:
@@ -359,7 +366,10 @@ Resources:
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
-        Statement: [{ Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }]
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
         - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
@@ -372,12 +382,7 @@ Resources:
                 Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
                 Resource: "arn:aws:logs:*:*:*"
               - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:GetObjectTagging
-                  - s3:PutObjectTagging
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging]
                 Resource:
                   Fn::Sub:
                     - "arn:aws:s3:::mig-${AWS::AccountId}-${ShortRegion}/*"
@@ -400,7 +405,6 @@ Resources:
                 Action: [sqs:SendMessage, sqs:GetQueueAttributes]
                 Resource: !GetAtt DeadLetterQueue.Arn
 
-  # Lambda Functions (Auto-named)
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -452,7 +456,7 @@ Resources:
   DeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
-      VisibilityTimeoutSeconds: 60
+      VisibilityTimeout: 60
       MessageRetentionPeriod: 1209600
 
   MigrationUploadTriggerPermission:
@@ -467,7 +471,6 @@ Resources:
           - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
       SourceAccount: !Ref AWS::AccountId
 
-  # API Gateway (Fixed - removed invalid TracingConfig)
   BackendApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
@@ -537,7 +540,6 @@ Resources:
           ThrottlingBurstLimit: 200
           ThrottlingRateLimit: 100
 
-  # CloudWatch Log Groups
   BackendLambdaLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
