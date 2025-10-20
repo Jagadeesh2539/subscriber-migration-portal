@@ -199,7 +199,7 @@ Resources:
       MultiAZ: false
 
   # ---------------------------------------------------------------------
-  # S3 Buckets (Frontend only, Migration bucket created separately)
+  # S3 Buckets
   # ---------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -226,6 +226,24 @@ Resources:
             Principal: "*"
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  # Migration Upload Bucket (NO notification configuration - will be added via GitHub Actions)
+  MigrationUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT]
+            AllowedOrigins:
+              - !GetAtt FrontendBucket.WebsiteURL
+              - http://localhost:3000
 
   # ---------------------------------------------------------------------
   # DynamoDB Tables
@@ -328,7 +346,7 @@ Resources:
           SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
           AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
           MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          REPORT_BUCKET_NAME: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
           LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
       VpcConfig:
@@ -347,7 +365,7 @@ Resources:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
-  # S3 Trigger Permission (created before bucket)
+  # Lambda permission for S3 to invoke the migration processor
   MigrationUploadTriggerPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -356,36 +374,6 @@ Resources:
       Principal: s3.amazonaws.com
       SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}"
       SourceAccount: !Ref AWS::AccountId
-
-  # Migration Upload Bucket (with notification configuration)
-  MigrationUploadBucket:
-    Type: AWS::S3::Bucket
-    DependsOn: MigrationUploadTriggerPermission
-    Properties:
-      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedHeaders: ["*"]
-            AllowedMethods: [PUT]
-            AllowedOrigins:
-              - !GetAtt FrontendBucket.WebsiteURL
-              - http://localhost:3000
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:Put
-            Function: !GetAtt MigrationProcessorFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .csv
 
   # ---------------------------------------------------------------------
   # API Gateway
