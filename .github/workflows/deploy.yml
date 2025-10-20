@@ -170,7 +170,11 @@ jobs:
           echo "  Region: $AWS_DEFAULT_REGION"
           
           EXISTING_VPC_ID="${{ github.event.inputs.existing_vpc_id }}"
-          
+
+          if [ "$EXISTING_VPC_ID" = "new" ]; then
+            EXISTING_VPC_ID=""
+          fi
+
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
