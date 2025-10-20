@@ -12,6 +12,13 @@ Parameters:
     AllowedPattern: ".{8,}"
     ConstraintDescription: "Must be at least 8 characters."
 
+Mappings:
+  RegionShort:
+    us-east-1: { Code: use1 }
+    us-west-2: { Code: usw2 }
+    eu-west-1: { Code: euw1 }
+    ap-south-1: { Code: aps1 }
+
 Resources:
 
   # ---------------------------------------------------------------------
@@ -36,7 +43,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-Public-1"
+          Value: !Sub "${AWS::StackName}-Pub-1"
   
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -47,7 +54,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-Public-2"
+          Value: !Sub "${AWS::StackName}-Pub-2"
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -58,7 +65,7 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-Private-1"
+          Value: !Sub "${AWS::StackName}-Priv-1"
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -69,7 +76,7 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "${AWS::StackName}-Private-2"
+          Value: !Sub "${AWS::StackName}-Priv-2"
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -199,12 +206,12 @@ Resources:
       MultiAZ: false
 
   # ---------------------------------------------------------------------
-  # S3 Buckets
+  # S3 Buckets (Short, deterministic names)
   # ---------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
@@ -227,11 +234,10 @@ Resources:
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
-  # Migration Upload Bucket (NO notification configuration - will be added via GitHub Actions)
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
+      BucketName: !Sub "mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -290,7 +296,7 @@ Resources:
       BillingMode: PAY_PER_REQUEST
 
   # ---------------------------------------------------------------------
-  # IAM Roles & Lambdas
+  # IAM Roles & Lambdas (RoleName removed for idempotency)
   # ---------------------------------------------------------------------
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -326,7 +332,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
-              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}/*" }
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}/*" }
               - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
               - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
 
@@ -363,19 +369,15 @@ Resources:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
-  # Lambda permission for S3 to invoke the migration processor
   MigrationUploadTriggerPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt MigrationProcessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
+      SourceArn: !Sub "arn:aws:s3:::mig-up-${AWS::AccountId}-${RegionShort.${AWS::Region}.Code}"
       SourceAccount: !Ref AWS::AccountId
 
-  # ---------------------------------------------------------------------
-  # API Gateway
-  # ---------------------------------------------------------------------
   BackendApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
