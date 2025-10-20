@@ -199,7 +199,7 @@ Resources:
       MultiAZ: false
 
   # ---------------------------------------------------------------------
-  # S3 Buckets for Frontend and Migrations
+  # S3 Buckets
   # ---------------------------------------------------------------------
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -229,7 +229,7 @@ Resources:
 
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
-    # DependsOn needed to ensure Lambda permission exists before NotificationConfiguration tries to use it
+    # DependsOn needed to ensure Lambda permission exists before NotificationConfiguration
     DependsOn: MigrationUploadTriggerPermission 
     Properties:
       BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
@@ -241,11 +241,10 @@ Resources:
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders: ["*"]
-            AllowedMethods: [PUT] # Only PUT is needed for presigned URL uploads
+            AllowedMethods: [PUT]
             AllowedOrigins:
-              - !Sub "http://${FrontendBucket.WebsiteURL}" # Use website URL for accuracy
+              - !GetAtt FrontendBucket.WebsiteURL # Use Fn::GetAtt for WebsiteURL
               - http://localhost:3000
-      # Configure S3 event notification to trigger the Lambda
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:Put
@@ -266,44 +265,30 @@ Resources:
     Properties:
       TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
       AttributeDefinitions:
-        - AttributeName: subscriberId
-          AttributeType: S
-        - AttributeName: imsi
-          AttributeType: S
-        - AttributeName: msisdn
-          AttributeType: S
+        - { AttributeName: subscriberId, AttributeType: S }
+        - { AttributeName: imsi, AttributeType: S }
+        - { AttributeName: msisdn, AttributeType: S }
       KeySchema:
-        - AttributeName: subscriberId
-          KeyType: HASH
+        - { AttributeName: subscriberId, KeyType: HASH }
       BillingMode: PAY_PER_REQUEST
       GlobalSecondaryIndexes:
         - IndexName: ImsiIndex
-          KeySchema:
-            - AttributeName: imsi
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+          KeySchema: [{ AttributeName: imsi, KeyType: HASH }]
+          Projection: { ProjectionType: ALL }
         - IndexName: MsisdnIndex
-          KeySchema:
-            - AttributeName: msisdn
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+          KeySchema: [{ AttributeName: msisdn, KeyType: HASH }]
+          Projection: { ProjectionType: ALL }
 
   AuditLogTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}"
       AttributeDefinitions:
-        - AttributeName: id
-          AttributeType: S
-        - AttributeName: timestamp
-          AttributeType: S
+        - { AttributeName: id, AttributeType: S }
+        - { AttributeName: timestamp, AttributeType: S }
       KeySchema:
-        - AttributeName: id
-          KeyType: HASH
-        - AttributeName: timestamp
-          KeyType: RANGE
+        - { AttributeName: id, KeyType: HASH }
+        - { AttributeName: timestamp, KeyType: RANGE }
       BillingMode: PAY_PER_REQUEST
 
   MigrationJobsTable:
@@ -311,15 +296,13 @@ Resources:
     Properties:
       TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}"
       AttributeDefinitions:
-        - AttributeName: migrationId
-          AttributeType: S
+        - { AttributeName: migrationId, AttributeType: S }
       KeySchema:
-        - AttributeName: migrationId
-          KeyType: HASH
+        - { AttributeName: migrationId, KeyType: HASH }
       BillingMode: PAY_PER_REQUEST
 
   # ---------------------------------------------------------------------
-  # IAM Roles for Lambdas
+  # IAM Roles & Lambdas
   # ---------------------------------------------------------------------
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -328,22 +311,18 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess # Needed for presigned URLs
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
         - PolicyName: SecretReadPolicy
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref LegacyDBSecret
+              - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
 
   MigrationProcessorRole:
     Type: AWS::IAM::Role
@@ -352,9 +331,7 @@ Resources:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
@@ -362,25 +339,11 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow # CloudWatch Logs
-                Action: [ logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents ]
-                Resource: "arn:aws:logs:*:*:*"
-              - Effect: Allow # Read/Write/Delete from Migration Bucket
-                Action: [ s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging ] # Added tagging permissions for metadata
-                Resource: !Sub "${MigrationUploadBucket.Arn}/*"
-              - Effect: Allow # Access DynamoDB Tables
-                Action: [ dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem ]
-                Resource:
-                  - !GetAtt MigrationJobsTable.Arn
-                  - !GetAtt SubscriberTable.Arn
-                  - !GetAtt AuditLogTable.Arn
-              - Effect: Allow # Read RDS Credentials
-                Action: secretsmanager:GetSecretValue
-                Resource: !Ref LegacyDBSecret
+              - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "${MigrationUploadBucket.Arn}/*" }
+              - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
+              - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
 
-  # ---------------------------------------------------------------------
-  # Lambda Functions
-  # ---------------------------------------------------------------------
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -388,9 +351,7 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt BackendLambdaRole.Arn
-      Code: # Start with placeholder, workflow updates it
-        ZipFile: |
-          def lambda_handler(event, context): return {"statusCode": 200, "body": "Placeholder"}
+      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
       VpcConfig:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
@@ -402,26 +363,21 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
-       # Start with placeholder, workflow updates it
-      Code:
-        ZipFile: |
-          def lambda_handler(event, context): return {"statusCode": 200, "body": "Placeholder"}
-      Timeout: 300 # 5 minutes
+      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
+      Timeout: 300
       Environment:
         Variables:
           SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
           AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
           MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket # Use the upload bucket for reports too
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
           LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
       VpcConfig:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
-  # ---------------------------------------------------------------------
-  # S3 Trigger Permission (Lambda needs permission to be invoked by S3)
-  # ---------------------------------------------------------------------
+  # S3 Trigger Permission
   MigrationUploadTriggerPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -431,9 +387,6 @@ Resources:
       SourceArn: !GetAtt MigrationUploadBucket.Arn
       SourceAccount: !Ref AWS::AccountId
 
-  # NOTE: The S3 Trigger itself is now configured directly on the MigrationUploadBucket resource above.
-  # The old S3Trigger and AddS3Notification resources have been removed as NotificationConfiguration is simpler and works correctly here.
-
   # ---------------------------------------------------------------------
   # API Gateway
   # ---------------------------------------------------------------------
@@ -441,7 +394,6 @@ Resources:
     Type: AWS::ApiGateway::RestApi
     Properties:
       Name: !Sub "migration-portal-api-${AWS::Region}"
-      Description: "API for the Subscriber Migration Portal"
       EndpointConfiguration: { Types: [REGIONAL] }
 
   ApiProxyResource:
@@ -456,10 +408,7 @@ Resources:
     Properties:
       AuthorizationType: NONE
       HttpMethod: ANY
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      Integration: { Type: AWS_PROXY, IntegrationHttpMethod: POST, Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations" }
       ResourceId: !Ref ApiProxyResource
       RestApiId: !Ref BackendApi
 
@@ -468,10 +417,7 @@ Resources:
     Properties:
       AuthorizationType: NONE
       HttpMethod: ANY
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
+      Integration: { Type: AWS_PROXY, IntegrationHttpMethod: POST, Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations" }
       ResourceId: !GetAtt BackendApi.RootResourceId
       RestApiId: !Ref BackendApi
 
@@ -493,15 +439,11 @@ Resources:
     Type: AWS::ApiGateway::Stage
     Properties:
       StageName: prod
-      Description: Production Stage
       RestApiId: !Ref BackendApi
       DeploymentId: !Ref ApiDeployment
 
 Outputs:
-  FrontendURL:
-    Description: URL of the frontend S3 website
-    Value: !GetAtt FrontendBucket.WebsiteURL
-
+  FrontendURL: { Description: URL of the frontend S3 website, Value: !GetAtt FrontendBucket.WebsiteURL }
   SubscriberTableName: { Description: DynamoDB subscriber table name, Value: !Ref SubscriberTable }
   AuditLogTableName: { Description: DynamoDB audit log table name, Value: !Ref AuditLogTable }
   MigrationJobsTableName: { Description: DynamoDB migration jobs table name, Value: !Ref MigrationJobsTable }
