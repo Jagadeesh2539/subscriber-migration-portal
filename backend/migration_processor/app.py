@@ -59,7 +59,6 @@ def lambda_handler(event, context):
             raise Exception("MigrationId not found in S3 metadata.")
     except Exception as e:
         print(f"Error getting metadata: {e}")
-        # Update job table to reflect this critical failure
         if 'migration_id' in locals() and migration_id:
              jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
         return {'status': 'error', 'message': str(e)}
