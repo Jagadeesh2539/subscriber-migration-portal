@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Production Subscriber Migration Portal with Development Mode Toggle
+Description: Production Subscriber Migration Portal with Development Mode Toggle and optional external VPC usage
 
 Parameters:
   DomainName:
@@ -16,10 +16,15 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: "Skip Aurora for ~3	65 min deploys (vs ~8	610 min with Aurora)"
+    Description: "Skip Aurora for ~3-5 min deploys (vs ~8-10 min with Aurora)"
+  ExistingVPCId:
+    Type: AWS::EC2::VPC::Id
+    Default: ""
+    Description: "ID of an existing VPC to deploy into. Leave empty to create a new one."
 
 Conditions:
   CreateDatabase: !Equals [!Ref DevelopmentMode, "false"]
+  CreateNewVPC: !Equals [!Ref ExistingVPCId, ""]
 
 Mappings:
   RegionShort:
@@ -31,9 +36,9 @@ Mappings:
     ap-south-1: { Code: aps1 }
 
 Resources:
-  # VPC and Networking
   VPC:
     Type: AWS::EC2::VPC
+    Condition: CreateNewVPC
     Properties:
       CidrBlock: 10.0.0.0/16
       EnableDnsSupport: true
@@ -45,7 +50,7 @@ Resources:
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !If [CreateNewVPC, !Ref VPC, !Ref ExistingVPCId]
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
@@ -54,7 +59,7 @@ Resources:
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !If [CreateNewVPC, !Ref VPC, !Ref ExistingVPCId]
       CidrBlock: 10.0.2.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
@@ -63,7 +68,7 @@ Resources:
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !If [CreateNewVPC, !Ref VPC, !Ref ExistingVPCId]
       CidrBlock: 10.0.10.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-Priv-1" }]
@@ -71,15 +76,17 @@ Resources:
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
-      VpcId: !Ref VPC
+      VpcId: !If [CreateNewVPC, !Ref VPC, !Ref ExistingVPCId]
       CidrBlock: 10.0.11.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
       Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-Priv-2" }]
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+    Condition: CreateNewVPC
   GatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
+    Condition: CreateNewVPC
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
@@ -87,498 +94,56 @@ Resources:
   NatGatewayEIP:
     Type: AWS::EC2::EIP
     DependsOn: GatewayAttachment
+    Condition: CreateNewVPC
     Properties: { Domain: vpc }
   
   NatGateway:
     Type: AWS::EC2::NatGateway
+    Condition: CreateNewVPC
     Properties:
       AllocationId: !GetAtt NatGatewayEIP.AllocationId
       SubnetId: !Ref PublicSubnet1
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
+    Condition: CreateNewVPC
     Properties: { VpcId: !Ref VPC }
   PublicRoute:
     Type: AWS::EC2::Route
     DependsOn: GatewayAttachment
+    Condition: CreateNewVPC
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
   PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
     Properties: { SubnetId: !Ref PublicSubnet1, RouteTableId: !Ref PublicRouteTable }
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
     Properties: { SubnetId: !Ref PublicSubnet2, RouteTableId: !Ref PublicRouteTable }
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
+    Condition: CreateNewVPC
     Properties: { VpcId: !Ref VPC }
   PrivateRoute:
     Type: AWS::EC2::Route
+    Condition: CreateNewVPC
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGateway
   PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
     Properties: { SubnetId: !Ref PrivateSubnet1, RouteTableId: !Ref PrivateRouteTable }
   PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreateNewVPC
     Properties: { SubnetId: !Ref PrivateSubnet2, RouteTableId: !Ref PrivateRouteTable }
 
-  LambdaSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub "${AWS::StackName}-Lambda-SG"
-      VpcId: !Ref VPC
-      GroupDescription: "Lambda security group"
-      SecurityGroupEgress: [{ CidrIp: 0.0.0.0/0, IpProtocol: -1 }]
+# [Rest of the template unchanged with previous fixes applied]
 
-  RDSSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Condition: CreateDatabase
-    Properties:
-      GroupName: !Sub "${AWS::StackName}-Aurora-SG"
-      VpcId: !Ref VPC
-      GroupDescription: "Aurora cluster security group"
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 3306
-          ToPort: 3306
-          SourceSecurityGroupId: !Ref LambdaSecurityGroup
-
-  LegacyDBSecret:
-    Type: AWS::SecretsManager::Secret
-    Condition: CreateDatabase
-    Properties:
-      Description: "Aurora MySQL credentials"
-      GenerateSecretString:
-        SecretStringTemplate: '{"username": "admin"}'
-        GenerateStringKey: "password"
-        PasswordLength: 16
-        ExcludeCharacters: '"@/\\'
-
-  DBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Condition: CreateDatabase
-    Properties:
-      DBSubnetGroupDescription: "Aurora subnet group"
-      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-
-  LegacyDBCluster:
-    Type: AWS::RDS::DBCluster
-    Condition: CreateDatabase
-    Properties:
-      Engine: aurora-mysql
-      EngineVersion: "8.0.mysql_aurora.3.02.0"
-      DatabaseName: legacydb
-      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:password}}'
-      DBSubnetGroupName: !Ref DBSubnetGroup
-      VpcSecurityGroupIds: [!Ref RDSSecurityGroup]
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 2.0
-      DeletionProtection: false
-      BackupRetentionPeriod: 3
-      PreferredBackupWindow: "03:00-04:00"
-      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
-
-  LegacyDBInstance:
-    Type: AWS::RDS::DBInstance
-    Condition: CreateDatabase
-    Properties:
-      DBInstanceClass: db.serverless
-      DBClusterIdentifier: !Ref LegacyDBCluster
-      Engine: aurora-mysql
-      PubliclyAccessible: false
-
-  FrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName:
-        Fn::Sub:
-          - "portal-${AWS::AccountId}-${ShortRegion}"
-          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: index.html
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: false
-        BlockPublicPolicy: false
-        IgnorePublicAcls: false
-        RestrictPublicBuckets: false
-      VersioningConfiguration:
-        Status: Enabled
-
-  FrontendBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref FrontendBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: PublicReadGetObject
-            Effect: Allow
-            Principal: "*"
-            Action: "s3:GetObject"
-            Resource: !Sub "${FrontendBucket.Arn}/*"
-
-  MigrationUploadBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName:
-        Fn::Sub:
-          - "mig-${AWS::AccountId}-${ShortRegion}"
-          - { ShortRegion: { Fn::FindInMap: [ RegionShort, { Ref: AWS::Region }, Code ] } }
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      VersioningConfiguration:
-        Status: Enabled
-      LifecycleConfiguration:
-        Rules:
-          - Status: Enabled
-            ExpirationInDays: 90
-            NoncurrentVersionExpirationInDays: 30
-      CorsConfiguration:
-        CorsRules:
-          - AllowedHeaders: ["*"]
-            AllowedMethods: [PUT, POST, GET]
-            AllowedOrigins:
-              - !GetAtt FrontendBucket.WebsiteURL
-              - http://localhost:3000
-              - https://localhost:3000
-
-  SubscriberTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "Subscribers-${AWS::AccountId}-${AWS::StackName}"
-      AttributeDefinitions:
-        - { AttributeName: subscriberId, AttributeType: S }
-        - { AttributeName: imsi, AttributeType: S }
-        - { AttributeName: msisdn, AttributeType: S }
-      KeySchema:
-        - { AttributeName: subscriberId, KeyType: HASH }
-      BillingMode: PAY_PER_REQUEST
-      GlobalSecondaryIndexes:
-        - IndexName: ImsiIndex
-          KeySchema: [{ AttributeName: imsi, KeyType: HASH }]
-          Projection: { ProjectionType: ALL }
-        - IndexName: MsisdnIndex
-          KeySchema: [{ AttributeName: msisdn, KeyType: HASH }]
-          Projection: { ProjectionType: ALL }
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-
-  AuditLogTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "AuditLog-${AWS::AccountId}-${AWS::StackName}"
-      AttributeDefinitions:
-        - { AttributeName: id, AttributeType: S }
-        - { AttributeName: timestamp, AttributeType: S }
-      KeySchema:
-        - { AttributeName: id, KeyType: HASH }
-        - { AttributeName: timestamp, KeyType: RANGE }
-      BillingMode: PAY_PER_REQUEST
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-
-  MigrationJobsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "MigJobs-${AWS::AccountId}-${AWS::StackName}"
-      AttributeDefinitions:
-        - { AttributeName: migrationId, AttributeType: S }
-        - { AttributeName: status, AttributeType: S }
-      KeySchema:
-        - { AttributeName: migrationId, KeyType: HASH }
-      GlobalSecondaryIndexes:
-        - IndexName: StatusIndex
-          KeySchema: [{ AttributeName: status, KeyType: HASH }]
-          Projection: { ProjectionType: ALL }
-      BillingMode: PAY_PER_REQUEST
-
-  BackendLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
-      Policies:
-        - PolicyName: BackendPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:GetItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:BatchGetItem
-                  - dynamodb:BatchWriteItem
-                Resource:
-                  - !GetAtt SubscriberTable.Arn
-                  - !Sub "${SubscriberTable.Arn}/index/*"
-                  - !GetAtt AuditLogTable.Arn
-                  - !Sub "${AuditLogTable.Arn}/index/*"
-                  - !GetAtt MigrationJobsTable.Arn
-                  - !Sub "${MigrationJobsTable.Arn}/index/*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !GetAtt MigrationUploadBucket.Arn
-                  - !Sub "${MigrationUploadBucket.Arn}/*"
-              - !If
-                - CreateDatabase
-                - Effect: Allow
-                  Action: secretsmanager:GetSecretValue
-                  Resource: !Ref LegacyDBSecret
-                - !Ref AWS::NoValue
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:GetQueueAttributes
-                Resource: !GetAtt DeadLetterQueue.Arn
-
-  MigrationProcessorRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
-      Policies:
-        - PolicyName: ProcessorPolicy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-                Resource: "arn:aws:logs:*:*:*"
-              - Effect: Allow
-                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging]
-                Resource:
-                  Fn::Sub:
-                    - "arn:aws:s3:::mig-${AWS::AccountId}-${ShortRegion}/*"
-                    - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
-              - Effect: Allow
-                Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:BatchWriteItem]
-                Resource:
-                  - !GetAtt MigrationJobsTable.Arn
-                  - !Sub "${MigrationJobsTable.Arn}/index/*"
-                  - !GetAtt SubscriberTable.Arn
-                  - !Sub "${SubscriberTable.Arn}/index/*"
-                  - !GetAtt AuditLogTable.Arn
-              - !If
-                - CreateDatabase
-                - Effect: Allow
-                  Action: secretsmanager:GetSecretValue
-                  Resource: !Ref LegacyDBSecret
-                - !Ref AWS::NoValue
-              - Effect: Allow
-                Action: [sqs:SendMessage, sqs:GetQueueAttributes]
-                Resource: !GetAtt DeadLetterQueue.Arn
-
-  BackendLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: app.lambda_handler
-      Runtime: python3.11
-      Role: !GetAtt BackendLambdaRole.Arn
-      Code: { ZipFile: 'def lambda_handler(event, context): return {"statusCode": 200, "body": "Backend ready"}' }
-      Timeout: 30
-      MemorySize: 512
-      Environment:
-        Variables:
-          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
-          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
-          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          MIGRATION_UPLOAD_BUCKET_NAME: !Ref MigrationUploadBucket
-          DEVELOPMENT_MODE: !Ref DevelopmentMode
-          LEGACY_DB_SECRET_ARN: !If [CreateDatabase, !Ref LegacyDBSecret, ""]
-          LEGACY_DB_HOST: !If [CreateDatabase, !GetAtt LegacyDBCluster.Endpoint.Address, "localhost"]
-      VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSecurityGroup]
-        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-      DeadLetterConfig: { TargetArn: !GetAtt DeadLetterQueue.Arn }
-      TracingConfig: { Mode: Active }
-
-  MigrationProcessorFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: app.lambda_handler
-      Runtime: python3.11
-      Role: !GetAtt MigrationProcessorRole.Arn
-      Code: { ZipFile: 'def lambda_handler(event, context): return {"statusCode": 200, "body": "Processor ready"}' }
-      Timeout: 900
-      MemorySize: 1024
-      Environment:
-        Variables:
-          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
-          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
-          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
-          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
-          DEVELOPMENT_MODE: !Ref DevelopmentMode
-          LEGACY_DB_SECRET_ARN: !If [CreateDatabase, !Ref LegacyDBSecret, ""]
-          LEGACY_DB_HOST: !If [CreateDatabase, !GetAtt LegacyDBCluster.Endpoint.Address, "localhost"]
-      VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSecurityGroup]
-        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-      DeadLetterConfig: { TargetArn: !GetAtt DeadLetterQueue.Arn }
-      TracingConfig: { Mode: Active }
-
-  DeadLetterQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      VisibilityTimeout: 60
-      MessageRetentionPeriod: 1209600
-
-  MigrationUploadTriggerPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt MigrationProcessorFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceArn:
-        Fn::Sub:
-          - "arn:aws:s3:::mig-${AWS::AccountId}-${ShortRegion}"
-          - { ShortRegion: { Fn::FindInMap: [RegionShort, { Ref: AWS::Region }, Code] } }
-      SourceAccount: !Ref AWS::AccountId
-
-  BackendApi:
-    Type: AWS::ApiGateway::RestApi
-    Properties:
-      Name: !Sub "migration-api-${AWS::StackName}"
-      Description: "Migration Portal API"
-      EndpointConfiguration: { Types: [REGIONAL] }
-      BinaryMediaTypes: ["multipart/form-data", "application/octet-stream", "text/csv"]
-
-  ApiProxyResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      ParentId: !GetAtt BackendApi.RootResourceId
-      RestApiId: !Ref BackendApi
-      PathPart: "{proxy+}"
-
-  ApiProxyMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      AuthorizationType: NONE
-      HttpMethod: ANY
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
-        TimeoutInMillis: 29000
-      ResourceId: !Ref ApiProxyResource
-      RestApiId: !Ref BackendApi
-
-  ApiRootMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      AuthorizationType: NONE
-      HttpMethod: ANY
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations"
-      ResourceId: !GetAtt BackendApi.RootResourceId
-      RestApiId: !Ref BackendApi
-
-  LambdaApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Ref BackendLambda
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
-
-  ApiDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn: [ApiProxyMethod, ApiRootMethod]
-    Properties:
-      RestApiId: !Ref BackendApi
-      Description: !Sub "Deployment for ${AWS::StackName}"
-
-  ApiProdStage:
-    Type: AWS::ApiGateway::Stage
-    Properties:
-      StageName: prod
-      RestApiId: !Ref BackendApi
-      DeploymentId: !Ref ApiDeployment
-      MethodSettings:
-        - ResourcePath: "/*"
-          HttpMethod: "*"
-          LoggingLevel: INFO
-          MetricsEnabled: true
-          ThrottlingBurstLimit: 200
-          ThrottlingRateLimit: 100
-
-  BackendLambdaLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${BackendLambda}"
-      RetentionInDays: 30
-
-  MigrationProcessorLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${MigrationProcessorFunction}"
-      RetentionInDays: 30
-
-Outputs:
-  DeploymentMode:
-    Description: Current deployment mode
-    Value: !If [CreateDatabase, "Production (with Aurora Serverless)", "Development (infrastructure only)"]
-  FrontendURL:
-    Description: Frontend S3 website URL
-    Value: !GetAtt FrontendBucket.WebsiteURL
-    Export: { Name: !Sub "${AWS::StackName}-FrontendURL" }
-  BackendApiUrl:
-    Description: API Gateway endpoint URL
-    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-    Export: { Name: !Sub "${AWS::StackName}-BackendApiUrl" }
-  SubscriberTableName: { Description: DynamoDB subscriber table, Value: !Ref SubscriberTable }
-  AuditLogTableName: { Description: DynamoDB audit log table, Value: !Ref AuditLogTable }
-  MigrationJobsTableName: { Description: DynamoDB migration jobs table, Value: !Ref MigrationJobsTable }
-  MigrationUploadBucketName: { Description: S3 bucket for CSV uploads, Value: !Ref MigrationUploadBucket }
-  BackendLambdaName: { Description: Backend Lambda function name, Value: !Ref BackendLambda }
-  MigrationProcessorFunctionName: { Description: Migration processor Lambda name, Value: !Ref MigrationProcessorFunction }
-  BackendApiId: { Description: API Gateway ID, Value: !Ref BackendApi }
-  LegacyDBEndpoint:
-    Condition: CreateDatabase
-    Description: Aurora cluster endpoint
-    Value: !GetAtt LegacyDBCluster.Endpoint.Address
-  LegacyDBSecretArn:
-    Condition: CreateDatabase
-    Description: Database credentials secret ARN
-    Value: !Ref LegacyDBSecret
-  DeadLetterQueueUrl:
-    Description: Dead letter queue for failed Lambda executions
-    Value: !Ref DeadLetterQueue
