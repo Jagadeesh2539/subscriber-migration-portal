@@ -141,6 +141,7 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGateway
 
+
   ####################################
   # Security Groups                  #
   ####################################
@@ -267,27 +268,36 @@ Resources:
     Properties:
       BucketName: !Sub "${AWS::StackName}-migration-uploads"
 
-FrontendBucket:
-  Properties:
-    # no AccessControl property
-    OwnershipControls:
-      Rules:
-        - ObjectOwnership: BucketOwnerEnforced
-    PublicAccessBlockConfiguration:
-      BlockPublicAcls: true
-      BlockPublicPolicy: false
-      IgnorePublicAcls: true
-      RestrictPublicBuckets: false
+  # Correct indentation for FrontendBucket
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-frontend"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false
 
-FrontendBucketPolicy:
-  Properties:
-    Bucket: !Ref FrontendBucket
-    PolicyDocument:
-      Statement:
-        - Effect: Allow
-          Principal: "*"
-          Action: s3:GetObject
-          Resource: !Join ['', [!GetAtt FrontendBucket.Arn, '/*']]
+  # Correct indentation for FrontendBucketPolicy
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Join ['', [!GetAtt FrontendBucket.Arn, '/*']]
 
   ####################################
   # IAM Roles and Policies          #
