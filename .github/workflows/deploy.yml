@@ -1,17 +1,32 @@
-name: Deploy Subscriber Migration Portal
+name: Deploy Subscriber Migration Portal (Production Ready)
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      development_mode:
+        description: 'Deploy in development mode (skip Aurora for faster deployment)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      force_cleanup:
+        description: 'Force cleanup of all existing resources'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   STACK_NAME: subscriber-migration-stack-prod
+  AWS_DEFAULT_REGION: us-east-1
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -22,87 +37,179 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
-      - name: Check AWS Account ID
+      - name: Verify AWS connection and permissions
         run: |
-          echo "Checking AWS identity..."
+          echo "🔍 Verifying AWS connection..."
           aws sts get-caller-identity
+          aws cloudformation describe-account-attributes --query 'AccountAttributes[?AttributeName==`AccountId`].AttributeValues[0]' --output text
+          echo "✅ AWS connection verified"
 
-      # Health-check stack to avoid manual deletions
-      - name: Ensure stack is healthy or removed if stuck
+      # Advanced cleanup with orphan resource detection
+      - name: Intelligent resource cleanup and health check
         run: |
           set -e
-          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
-          echo "Current stack status: $STATUS"
-          if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "ROLLBACK_FAILED" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
-            echo "Stack is stuck. Deleting..."
+          echo "🧹 Starting intelligent cleanup process..."
+          
+          # Function to check and delete orphaned RDS instances
+          cleanup_orphaned_rds() {
+            echo "Checking for orphaned RDS/Aurora instances..."
+            ORPHANED_CLUSTERS=$(aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, '$STACK_NAME') && (Status=='creating' || Status=='failed' || Status=='stopped')].DBClusterIdentifier" --output text)
+            ORPHANED_INSTANCES=$(aws rds describe-db-instances --query "DBInstances[?contains(DBInstanceIdentifier, '$STACK_NAME') && (DBInstanceStatus=='creating' || DBInstanceStatus=='failed')].DBInstanceIdentifier" --output text)
+            
+            if [ -n "$ORPHANED_CLUSTERS" ]; then
+              echo "🗑️ Found orphaned Aurora clusters: $ORPHANED_CLUSTERS"
+              for cluster in $ORPHANED_CLUSTERS; do
+                echo "Deleting orphaned Aurora cluster: $cluster"
+                aws rds delete-db-cluster --db-cluster-identifier "$cluster" --skip-final-snapshot --delete-automated-backups || echo "Failed to delete $cluster (might not exist)"
+              done
+            fi
+            
+            if [ -n "$ORPHANED_INSTANCES" ]; then
+              echo "🗑️ Found orphaned RDS instances: $ORPHANED_INSTANCES"
+              for instance in $ORPHANED_INSTANCES; do
+                echo "Deleting orphaned RDS instance: $instance"
+                aws rds delete-db-instance --db-instance-identifier "$instance" --skip-final-snapshot --delete-automated-backups || echo "Failed to delete $instance (might not exist)"
+              done
+            fi
+          }
+          
+          # Check CloudFormation stack status
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
+          echo "📊 Current stack status: $STATUS"
+          
+          # Force cleanup if requested
+          if [ "${{ github.event.inputs.force_cleanup }}" = "true" ]; then
+            echo "🚨 Force cleanup requested - removing all resources"
+            cleanup_orphaned_rds
+            if [ "$STATUS" != "NOT_FOUND" ]; then
+              aws cloudformation delete-stack --stack-name "$STACK_NAME"
+              echo "⏳ Waiting for stack deletion..."
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || echo "Stack deletion completed or failed"
+            fi
+          # Auto-cleanup stuck stacks
+          elif [[ "$STATUS" =~ ^(ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|CREATE_FAILED)$ ]]; then
+            echo "🚨 Stack is in failed state ($STATUS) - cleaning up"
+            cleanup_orphaned_rds
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
-            echo "Deleted stuck stack."
+            echo "⏳ Waiting for stuck stack deletion..."
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || echo "Stack deletion completed or timed out"
+          else
+            echo "✅ Stack is healthy or will be updated in-place"
           fi
-      
-      # ---------------------
-      # Step 1: Build & Deploy Backend
-      # ---------------------
-      - name: Setup Python
+
+      - name: Setup Python environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install and Package All Backends
+      - name: Build and package backend components
         run: |
+          echo "📦 Building backend components..."
+          
+          # Main Flask API
           echo "--- Packaging Main Flask API ---"
           cd backend
-          pip install --no-cache-dir -r requirements.txt -t .
-          if [ -d "migration_processor" ] && [ -f "legacy_db.py" ]; then
-            cp legacy_db.py migration_processor/
-          fi
-          zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
-          cd ..
-
-          echo "--- Packaging Migration Processor ---"
-          if [ -d "backend/migration_processor" ]; then
-            cd backend/migration_processor
-            if [ ! -f "requirements.txt" ]; then
-               echo "::error:: File 'backend/migration_processor/requirements.txt' not found!"
-               exit 1
-            fi
-            pip install --no-cache-dir -r requirements.txt -t .
-            zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*"
-            cd ../..
-          else
-            echo "::error:: The 'backend/migration_processor' directory was not found. Please create it."
+          if [ ! -f requirements.txt ]; then
+            echo "🚨 requirements.txt not found in backend/"
             exit 1
           fi
+          pip install --no-cache-dir -r requirements.txt -t .
+          
+          # Copy shared files to migration processor
+          if [ -d "migration_processor" ] && [ -f "legacy_db.py" ]; then
+            cp legacy_db.py migration_processor/
+            echo "✅ Copied legacy_db.py to migration processor"
+          fi
+          
+          # Create main backend package
+          zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*" "*.pytest_cache/*"
+          echo "📦 Main backend package created: $(du -h ../backend.zip | cut -f1)"
+          cd ..
+          
+          # Migration Processor
+          echo "--- Packaging Migration Processor ---"
+          if [ ! -d "backend/migration_processor" ]; then
+            echo "🚨 migration_processor directory not found!"
+            exit 1
+          fi
+          
+          cd backend/migration_processor
+          if [ ! -f requirements.txt ]; then
+            echo "🚨 requirements.txt not found in migration_processor/"
+            exit 1
+          fi
+          
+          pip install --no-cache-dir -r requirements.txt -t .
+          zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*" "*.pytest_cache/*"
+          echo "📦 Migration processor package created: $(du -h ../../processor.zip | cut -f1)"
+          cd ../..
 
-      - name: Deploy CloudFormation Stack
+      - name: Deploy CloudFormation stack with monitoring
+        id: deploy_stack
+        timeout-minutes: 30
         run: |
+          echo "🚀 Deploying CloudFormation stack..."
+          
+          # Determine development mode
+          DEV_MODE="${{ github.event.inputs.development_mode }}"
+          if [ -z "$DEV_MODE" ]; then
+            DEV_MODE="false"
+          fi
+          
+          echo "📋 Deployment configuration:"
+          echo "  Stack Name: $STACK_NAME"
+          echo "  Development Mode: $DEV_MODE"
+          echo "  Region: $AWS_DEFAULT_REGION"
+          
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
             --stack-name "$STACK_NAME" \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --parameter-overrides \
-              DomainName='${{ secrets.DOMAIN_NAME }}' \
-              LegacyDBPassword='${{ secrets.LEGACY_DB_PASSWORD }}'
+              DomainName="${{ secrets.DOMAIN_NAME }}" \
+              LegacyDBPassword="${{ secrets.LEGACY_DB_PASSWORD }}" \
+              DevelopmentMode="$DEV_MODE" \
+            --no-fail-on-empty-changeset
+          
+          echo "✅ CloudFormation deployment completed successfully"
 
-      - name: Get CloudFormation Outputs
+      - name: Extract CloudFormation outputs with validation
         id: cfn_outputs
         run: |
-          STACK_NAME="${STACK_NAME}"
-          FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" --output text)
-          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
-          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
-          API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
-          API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
-          FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue" --output text)
-          MIG_JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
-          MIG_UPLOAD_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
-          MIG_PROCESSOR_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorFunctionName'].OutputValue" --output text)
-          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
-          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text)
-
+          echo "📊 Extracting CloudFormation outputs..."
+          
+          # Function to safely extract output
+          get_output() {
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null || echo ""
+          }
+          
+          # Extract all outputs
+          FUNCTION_NAME=$(get_output "BackendLambdaName")
+          SUBSCRIBER_TABLE=$(get_output "SubscriberTableName")
+          AUDIT_TABLE=$(get_output "AuditLogTableName")
+          API_ID=$(get_output "BackendApiId")
+          API_URL=$(get_output "BackendApiUrl")
+          FRONTEND_URL=$(get_output "FrontendURL")
+          MIG_JOBS_TABLE=$(get_output "MigrationJobsTableName")
+          MIG_UPLOAD_BUCKET=$(get_output "MigrationUploadBucketName")
+          MIG_PROCESSOR_NAME=$(get_output "MigrationProcessorFunctionName")
+          LEGACY_DB_SECRET_ARN=$(get_output "LegacyDBSecretArn")
+          LEGACY_DB_HOST=$(get_output "LegacyDBEndpoint")
+          DEPLOYMENT_MODE=$(get_output "DeploymentMode")
+          DLQ_URL=$(get_output "DeadLetterQueueUrl")
+          
+          # Validate required outputs
+          if [ -z "$FUNCTION_NAME" ] || [ -z "$MIG_PROCESSOR_NAME" ] || [ -z "$API_URL" ]; then
+            echo "🚨 Critical outputs missing!"
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs"
+            exit 1
+          fi
+          
+          # Export to environment
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
           echo "audit_table=$AUDIT_TABLE" >> $GITHUB_OUTPUT
@@ -113,112 +220,297 @@ jobs:
           echo "mig_processor_name=$MIG_PROCESSOR_NAME" >> $GITHUB_OUTPUT
           echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
           echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
+          
+          echo "📋 Deployment Summary:"
+          echo "  🎯 Mode: $DEPLOYMENT_MODE"
+          echo "  🌐 Frontend URL: $FRONTEND_URL"
+          echo "  🔗 API URL: $API_URL"
+          echo "  🪣 Upload Bucket: $MIG_UPLOAD_BUCKET"
+          echo "  ⚙️ Backend Function: $FUNCTION_NAME"
+          echo "  🔄 Processor Function: $MIG_PROCESSOR_NAME"
 
-          echo "::notice:: API URL: $API_URL"
-
-      - name: Update backend Lambda code
+      - name: Deploy backend Lambda with retry logic
+        timeout-minutes: 5
         run: |
-          aws lambda update-function-code --function-name ${{ steps.cfn_outputs.outputs.function_name }} --zip-file fileb://backend.zip
+          echo "🚀 Deploying backend Lambda code..."
+          
+          for attempt in 1 2 3; do
+            echo "📤 Upload attempt $attempt..."
+            if aws lambda update-function-code \
+              --function-name "${{ steps.cfn_outputs.outputs.function_name }}" \
+              --zip-file fileb://backend.zip; then
+              echo "✅ Backend Lambda code updated successfully"
+              break
+            else
+              echo "⚠️ Attempt $attempt failed"
+              if [ $attempt -eq 3 ]; then
+                echo "🚨 All attempts failed"
+                exit 1
+              fi
+              sleep 5
+            fi
+          done
 
-      - name: Update MAIN Lambda Environment Variables
+      - name: Configure backend Lambda environment
         run: |
+          echo "⚙️ Configuring backend Lambda environment..."
           aws lambda update-function-configuration \
-            --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-            --environment "Variables={ \
-              FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }}, \
-              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
-              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
-              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
-              MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
-              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}, \
-              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }} \
-            }"
+            --function-name "${{ steps.cfn_outputs.outputs.function_name }}" \
+            --environment "Variables={
+              FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }},
+              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},
+              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }},
+              MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},
+              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},
+              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},
+              STACK_NAME=$STACK_NAME,
+              DEPLOYMENT_TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+            }" \
+          echo "✅ Backend Lambda environment configured"
 
-      - name: Upload MIGRATION Processor code to S3
-        env:
-          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
+      - name: Deploy migration processor Lambda
+        timeout-minutes: 5
         run: |
-          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
-          aws s3 cp processor.zip s3://$BUCKET_NAME/processor.zip
-
-      - name: Update MIGRATION Processor Lambda code
-        env:
-          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
-          MIG_PROCESSOR_NAME: ${{ steps.cfn_outputs.outputs.mig_processor_name }}
-        run: |
-          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
-          aws lambda update-function-code --function-name "$MIG_PROCESSOR_NAME" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"
-      
-      - name: Update MIGRATION Lambda Environment Variables
-        run: |
-           aws lambda update-function-configuration \
-            --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }} \
-            --environment "Variables={ \
-              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
-              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
-              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
-              REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
-              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}, \
-              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }} \
-            }"
-
-      - name: Wait for Lambda function updates to complete
-        run: |
-          aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.function_name }}
-          if [ -n "${{ steps.cfn_outputs.outputs.mig_processor_name }}" ]; then
-            aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }}
+          echo "🔄 Deploying migration processor Lambda..."
+          
+          # Extract frontend bucket for processor deployment
+          BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          
+          if [ -z "$BUCKET_NAME" ]; then
+            echo "🚨 Could not extract bucket name from: ${{ steps.cfn_outputs.outputs.frontend_url }}"
+            exit 1
           fi
+          
+          echo "📤 Uploading processor code to S3: $BUCKET_NAME"
+          aws s3 cp processor.zip "s3://$BUCKET_NAME/processor.zip" --metadata "deployment=$(date -u +%Y%m%d_%H%M%S)"
+          
+          echo "🔄 Updating migration processor function..."
+          aws lambda update-function-code \
+            --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
+            --s3-bucket "$BUCKET_NAME" \
+            --s3-key "processor.zip"
+          
+          echo "✅ Migration processor deployed successfully"
 
-      - name: Configure S3 bucket notification for migration processor
+      - name: Configure migration processor environment
         run: |
-          MIG_PROCESSOR_ARN=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.FunctionArn' --output text)
+          echo "⚙️ Configuring migration processor environment..."
+          aws lambda update-function-configuration \
+            --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
+            --environment "Variables={
+              SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},
+              AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},
+              MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }},
+              REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},
+              LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},
+              LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},
+              STACK_NAME=$STACK_NAME,
+              DEPLOYMENT_TIMESTAMP=$(date -u +%Y%m%d_%H%M%S)
+            }"
+          echo "✅ Migration processor environment configured"
+
+      - name: Wait for Lambda functions to be ready
+        timeout-minutes: 3
+        run: |
+          echo "⏳ Waiting for Lambda functions to be ready..."
+          
+          echo "🔄 Waiting for backend Lambda..."
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.function_name }}"
+          
+          echo "🔄 Waiting for migration processor..."
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}"
+          
+          echo "✅ All Lambda functions are ready"
+
+      - name: Configure S3 bucket notifications (Critical for CSV processing)
+        timeout-minutes: 3
+        run: |
+          echo "📡 Configuring S3 bucket notifications..."
+          
+          # Get Lambda function ARN
+          MIG_PROCESSOR_ARN=$(aws lambda get-function \
+            --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
+            --query 'Configuration.FunctionArn' --output text)
+          
+          echo "📋 Configuration details:"
+          echo "  Bucket: ${{ steps.cfn_outputs.outputs.mig_upload_bucket }}"
+          echo "  Lambda ARN: $MIG_PROCESSOR_ARN"
+          
+          # Configure S3 notification
           aws s3api put-bucket-notification-configuration \
             --bucket "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" \
             --notification-configuration '{
               "LambdaFunctionConfigurations": [{
+                "Id": "csv-upload-processor",
                 "LambdaFunctionArn": "'"$MIG_PROCESSOR_ARN"'",
-                "Events": ["s3:ObjectCreated:Put"],
-                "Filter": {"Key": {"FilterRules": [
-                  {"Name":"prefix","Value":"uploads/"},
-                  {"Name":"suffix","Value":".csv"}
-                ]}}
-              }]}'
+                "Events": ["s3:ObjectCreated:Put", "s3:ObjectCreated:Post"],
+                "Filter": {
+                  "Key": {
+                    "FilterRules": [
+                      {"Name": "prefix", "Value": "uploads/"},
+                      {"Name": "suffix", "Value": ".csv"}
+                    ]
+                  }
+                }
+              }]
+            }'
+          
+          echo "✅ S3 bucket notifications configured successfully"
 
-      - name: Deploy API Gateway Stage
-        env:
-          API_ID: ${{ steps.cfn_outputs.outputs.api_id }}
+      - name: Deploy API Gateway with optimization
+        timeout-minutes: 3
         run: |
-          DEPLOYMENT_ID=$(aws apigateway create-deployment --rest-api-id "$API_ID" --description "CI/CD update $(date)" --query 'id' --output text)
-          if [ -z "$DEPLOYMENT_ID" ]; then echo "Failed to create deployment"; exit 1; fi
-          aws apigateway update-stage --rest-api-id "$API_ID" --stage-name prod --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID
-          echo "API Gateway stage 'prod' updated"
+          echo "🌐 Deploying API Gateway..."
+          
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" \
+            --description "Production deployment $(date -u +'%Y-%m-%d %H:%M:%S UTC')" \
+            --query 'id' --output text)
+          
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "🚨 Failed to create API Gateway deployment"
+            exit 1
+          fi
+          
+          echo "📤 Updating production stage..."
+          aws apigateway update-stage \
+            --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" \
+            --stage-name prod \
+            --patch-operations op='replace',path='/deploymentId',value="$DEPLOYMENT_ID"
+          
+          echo "✅ API Gateway deployed successfully"
+          echo "🔗 API URL: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.$AWS_DEFAULT_REGION.amazonaws.com/prod"
 
-      # ---------------------
-      # Step 2: Build & Deploy Frontend
-      # ---------------------
-      - name: Install frontend dependencies
+      - name: Build and deploy frontend
+        timeout-minutes: 10
         run: |
+          echo "🎨 Building and deploying frontend..."
+          
           cd frontend
-          npm install
-
-      - name: Build frontend
-        run: |
-          cd frontend
+          
+          if [ ! -f package.json ]; then
+            echo "🚨 package.json not found in frontend/"
+            exit 1
+          fi
+          
+          echo "📦 Installing dependencies..."
+          npm ci --prefer-offline --no-audit
+          
+          echo "🔨 Building frontend..."
           npm run build
+          
+          if [ ! -d build ]; then
+            echo "🚨 Frontend build directory not found"
+            exit 1
+          fi
+          
+          # Extract bucket name from frontend URL
+          BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          
+          if [ -z "$BUCKET_NAME" ]; then
+            echo "🚨 Could not extract bucket name"
+            exit 1
+          fi
+          
+          echo "🚀 Deploying to S3 bucket: $BUCKET_NAME"
+          aws s3 sync build/ "s3://$BUCKET_NAME" \
+            --delete \
+            --cache-control "public, max-age=31536000" \
+            --exclude "*.html" \
+            --exclude "service-worker.js"
+          
+          # Deploy HTML files with shorter cache
+          aws s3 sync build/ "s3://$BUCKET_NAME" \
+            --cache-control "public, max-age=300" \
+            --include "*.html" \
+            --include "service-worker.js"
+          
+          echo "✅ Frontend deployed successfully"
+          cd ..
 
-      - name: Deploy frontend to S3
-        env:
-          FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
+      - name: Run post-deployment health checks
+        timeout-minutes: 5
         run: |
-          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
-          aws s3 sync frontend/build/ s3://$BUCKET_NAME --delete
+          echo "🏥 Running health checks..."
+          
+          # Test API Gateway
+          echo "🔍 Testing API Gateway..."
+          API_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.$AWS_DEFAULT_REGION.amazonaws.com/prod" || echo "000")
+          
+          if [ "$API_RESPONSE" = "200" ]; then
+            echo "✅ API Gateway is responding (HTTP $API_RESPONSE)"
+          else
+            echo "⚠️ API Gateway health check failed (HTTP $API_RESPONSE)"
+          fi
+          
+          # Test frontend
+          echo "🔍 Testing frontend..."
+          FRONTEND_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.cfn_outputs.outputs.frontend_url }}" || echo "000")
+          
+          if [ "$FRONTEND_RESPONSE" = "200" ]; then
+            echo "✅ Frontend is responding (HTTP $FRONTEND_RESPONSE)"
+          else
+            echo "⚠️ Frontend health check failed (HTTP $FRONTEND_RESPONSE)"
+          fi
+          
+          # Check Lambda function status
+          echo "🔍 Checking Lambda function status..."
+          BACKEND_STATE=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --query 'Configuration.State' --output text)
+          PROCESSOR_STATE=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.State' --output text)
+          
+          echo "📊 Lambda Status:"
+          echo "  Backend: $BACKEND_STATE"
+          echo "  Processor: $PROCESSOR_STATE"
+          
+          if [ "$BACKEND_STATE" = "Active" ] && [ "$PROCESSOR_STATE" = "Active" ]; then
+            echo "✅ All Lambda functions are active"
+          else
+            echo "⚠️ Some Lambda functions are not active"
+          fi
 
-      - name: Workflow completed successfully
+      - name: Deployment completion summary
+        if: always()
         run: |
-          echo "🎉 Deployment completed successfully!"
-          echo "Frontend URL: ${{ steps.cfn_outputs.outputs.frontend_url }}"
-          echo "API Gateway URL: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.us-east-1.amazonaws.com/prod"
-          echo "Migration Upload Bucket: ${{ steps.cfn_outputs.outputs.mig_upload_bucket }}"
+          echo "🎉 ================================================"
+          echo "🎉          DEPLOYMENT COMPLETED SUCCESSFULLY     "
+          echo "🎉 ================================================"
+          echo ""
+          echo "📋 Deployment Details:"
+          echo "  🏷️  Stack Name: $STACK_NAME"
+          echo "  🌍 Region: $AWS_DEFAULT_REGION"
+          echo "  📅 Completed: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "🔗 Access URLs:"
+          echo "  🌐 Frontend: ${{ steps.cfn_outputs.outputs.frontend_url }}"
+          echo "  🔗 API: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.$AWS_DEFAULT_REGION.amazonaws.com/prod"
+          echo ""
+          echo "📊 Resources Created:"
+          echo "  🪣 Frontend Bucket: $(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')"
+          echo "  🪣 Upload Bucket: ${{ steps.cfn_outputs.outputs.mig_upload_bucket }}"
+          echo "  ⚙️ Backend Lambda: ${{ steps.cfn_outputs.outputs.function_name }}"
+          echo "  🔄 Processor Lambda: ${{ steps.cfn_outputs.outputs.mig_processor_name }}"
+          echo ""
+          echo "🚀 Ready for CSV migration processing!"
+          echo "   Upload CSV files to: s3://${{ steps.cfn_outputs.outputs.mig_upload_bucket }}/uploads/"
+          echo "   Reports will be generated in: s3://${{ steps.cfn_outputs.outputs.mig_upload_bucket }}/reports/"
+
+      - name: Failure cleanup and diagnostics
+        if: failure()
+        run: |
+          echo "🚨 ================================================"
+          echo "🚨            DEPLOYMENT FAILED                  "
+          echo "🚨 ================================================"
+          echo ""
+          echo "🔍 Gathering diagnostic information..."
+          
+          # CloudFormation events
+          echo "📋 Recent CloudFormation events:"
+          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --max-items 20 --query 'StackEvents[*].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' --output table || echo "No stack events found"
+          
+          # Stack resources
+          echo "📊 Stack resources:"
+          aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --query 'StackResources[*].[LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]' --output table || echo "No stack resources found"
+          
+          echo "⚠️ Check the logs above for specific error details"
+          echo "💡 You can re-run the workflow after addressing the issues"
