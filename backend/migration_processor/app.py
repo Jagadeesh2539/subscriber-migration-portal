@@ -7,7 +7,7 @@ from datetime import datetime
 import legacy_db # Use the real DB connector
 
 # Get env variables set by CloudFormation/deploy script
-SUBSCRIBERS_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
+SUBSCRIBER_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
 MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
 REPORT_BUCKET_NAME = os.environ.get('REPORT_BUCKET_NAME')
 LEGACY_DB_SECRET_ARN = os.environ.get('LEGACY_DB_SECRET_ARN')
@@ -16,7 +16,7 @@ LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST') # The RDS endpoint
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
-subscribers_table = dynamodb.Table(SUBSCRIBERS_TABLE_NAME)
+subscribers_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME)
 
 def get_db_credentials():
     """Fetches database credentials securely from AWS Secrets Manager."""
