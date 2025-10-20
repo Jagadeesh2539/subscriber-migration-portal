@@ -227,36 +227,6 @@ Resources:
             Action: "s3:GetObject"
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
-  MigrationUploadBucket:
-    Type: AWS::S3::Bucket
-    # DependsOn needed to ensure Lambda permission exists before NotificationConfiguration
-    DependsOn: MigrationUploadTriggerPermission 
-    Properties:
-      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      CorsConfiguration:
-        CorsRules:
-          - AllowedHeaders: ["*"]
-            AllowedMethods: [PUT]
-            AllowedOrigins:
-              - !GetAtt FrontendBucket.WebsiteURL # Use Fn::GetAtt for WebsiteURL
-              - http://localhost:3000
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:Put
-            Function: !GetAtt MigrationProcessorFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .csv
-
   # ---------------------------------------------------------------------
   # DynamoDB Tables
   # ---------------------------------------------------------------------
@@ -340,21 +310,9 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
-              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "${MigrationUploadBucket.Arn}/*" }
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}/*" }
               - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
               - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
-
-  BackendLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
-      Handler: app.lambda_handler
-      Runtime: python3.11
-      Role: !GetAtt BackendLambdaRole.Arn
-      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
-      VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSecurityGroup]
-        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
@@ -377,15 +335,62 @@ Resources:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
-  # S3 Trigger Permission
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  MigrationUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT]
+            AllowedOrigins:
+              - !GetAtt FrontendBucket.WebsiteURL
+              - http://localhost:3000
+
+  # S3 Trigger Permission (must be created before the notification configuration)
   MigrationUploadTriggerPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt MigrationProcessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !GetAtt MigrationUploadBucket.Arn
+      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}"
       SourceAccount: !Ref AWS::AccountId
+
+  # S3 Bucket Notification Configuration (separate resource to avoid circular dependency)
+  MigrationUploadBucketNotification:
+    Type: AWS::S3::Bucket
+    DependsOn: MigrationUploadTriggerPermission
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}-notifications"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Function: !GetAtt MigrationProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .csv
 
   # ---------------------------------------------------------------------
   # API Gateway
@@ -421,7 +426,7 @@ Resources:
       ResourceId: !GetAtt BackendApi.RootResourceId
       RestApiId: !Ref BackendApi
 
-  LambdaApiPermission: # Allow API Gateway to invoke the BackendLambda
+  LambdaApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
@@ -429,13 +434,13 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
 
-  ApiDeployment: # Initial deployment needed for the stage
+  ApiDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn: [ApiProxyMethod, ApiRootMethod]
     Properties:
       RestApiId: !Ref BackendApi
 
-  ApiProdStage: # The 'prod' stage
+  ApiProdStage:
     Type: AWS::ApiGateway::Stage
     Properties:
       StageName: prod
