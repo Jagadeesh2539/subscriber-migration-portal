@@ -204,7 +204,7 @@ Resources:
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
@@ -231,7 +231,7 @@ Resources:
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -251,7 +251,7 @@ Resources:
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
+      TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       AttributeDefinitions:
         - { AttributeName: subscriberId, AttributeType: S }
         - { AttributeName: imsi, AttributeType: S }
@@ -270,7 +270,7 @@ Resources:
   AuditLogTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}"
+      TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       AttributeDefinitions:
         - { AttributeName: id, AttributeType: S }
         - { AttributeName: timestamp, AttributeType: S }
@@ -282,7 +282,7 @@ Resources:
   MigrationJobsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}"
+      TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       AttributeDefinitions:
         - { AttributeName: migrationId, AttributeType: S }
       KeySchema:
@@ -295,7 +295,6 @@ Resources:
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -315,7 +314,6 @@ Resources:
   MigrationProcessorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "MigrationProcessorRole-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -328,14 +326,14 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
-              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}/*" }
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}/*" }
               - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
               - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
 
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}"
+      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
@@ -356,7 +354,7 @@ Resources:
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt BackendLambdaRole.Arn
@@ -372,7 +370,7 @@ Resources:
       FunctionName: !GetAtt MigrationProcessorFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      SourceArn: !Sub "arn:aws:s3:::migration-uploads-${AWS::AccountId}-${AWS::Region}-${AWS::StackName}"
       SourceAccount: !Ref AWS::AccountId
 
   # ---------------------------------------------------------------------
@@ -381,7 +379,7 @@ Resources:
   BackendApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: !Sub "migration-portal-api-${AWS::Region}"
+      Name: !Sub "migration-portal-api-${AWS::Region}-${AWS::StackName}"
       EndpointConfiguration: { Types: [REGIONAL] }
 
   ApiProxyResource:
