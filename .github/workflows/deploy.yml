@@ -41,17 +41,16 @@ jobs:
           echo "--- Packaging Main Flask API ---"
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
-          # Ensure legacy_db.py exists before copying
+          # Copy shared files needed by the migration processor into its directory
           if [ -f "legacy_db.py" ]; then
             cp legacy_db.py migration_processor/
           else
             echo "::warning:: legacy_db.py not found in backend/ - Processor might fail if it needs it."
           fi
-          # Ensure bulk_ops.py exists before copying (needed for MOCK data in processor)
-           if [ -f "bulk_ops.py" ]; then
+           if [ -f "bulk_ops.py" ]; then # Only needed if processor still uses MOCK
             cp bulk_ops.py migration_processor/
           else
-            echo "::warning:: bulk_ops.py not found in backend/ - Processor might fail if it needs it."
+            echo "::warning:: bulk_ops.py not found in backend/ - Processor might fail if it needs MOCK data."
           fi
           # Create zip file in the root directory, excluding specific files/dirs
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
@@ -95,22 +94,17 @@ jobs:
         id: cfn_outputs
         run: |
           STACK_NAME="subscriber-migration-stack-v3"
-          # Get MAIN Flask API outputs
           FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendLambdaName'].OutputValue" --output text)
+          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
+          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
           API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiId'].OutputValue" --output text)
           API_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BackendApiUrl'].OutputValue" --output text)
           FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='FrontendURL'].OutputValue" --output text)
-          
-          # Get SHARED outputs
-          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
-          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
-
-          # Get NEW MIGRATION outputs
           MIG_JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
           MIG_UPLOAD_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
           MIG_PROCESSOR_NAME=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorFunctionName'].OutputValue" --output text)
           LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
-          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text) # Get RDS host
+          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text)
 
           echo "function_name=$FUNCTION_NAME" >> $GITHUB_OUTPUT
           echo "subscriber_table=$SUBSCRIBER_TABLE" >> $GITHUB_OUTPUT
