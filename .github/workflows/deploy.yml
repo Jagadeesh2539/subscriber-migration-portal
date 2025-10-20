@@ -45,63 +45,34 @@ jobs:
 
       - name: Verify AWS connection and permissions
         run: |
-          echo "🔍 Verifying AWS connection..."
           aws sts get-caller-identity
           aws ec2 describe-regions --query 'Regions[?RegionName==`us-east-1`].RegionName' --output text
-          aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --max-items 1 >/dev/null 2>&1 || true
-          echo "✅ AWS connection verified"
 
-      # Advanced cleanup with orphan resource detection
       - name: Intelligent resource cleanup and health check
         run: |
           set -e
-          echo "🧹 Starting intelligent cleanup process..."
-          
-          # Function to check and delete orphaned RDS instances
           cleanup_orphaned_rds() {
-            echo "Checking for orphaned RDS/Aurora instances..."
             ORPHANED_CLUSTERS=$(aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, '$STACK_NAME') && (Status=='creating' || Status=='failed' || Status=='stopped')].DBClusterIdentifier" --output text)
             ORPHANED_INSTANCES=$(aws rds describe-db-instances --query "DBInstances[?contains(DBInstanceIdentifier, '$STACK_NAME') && (DBInstanceStatus=='creating' || DBInstanceStatus=='failed')].DBInstanceIdentifier" --output text)
-            
             if [ -n "$ORPHANED_CLUSTERS" ]; then
-              echo "🗑️ Found orphaned Aurora clusters: $ORPHANED_CLUSTERS"
-              for cluster in $ORPHANED_CLUSTERS; do
-                echo "Deleting orphaned Aurora cluster: $cluster"
-                aws rds delete-db-cluster --db-cluster-identifier "$cluster" --skip-final-snapshot --delete-automated-backups || echo "Failed to delete $cluster (might not exist)"
-              done
+              for c in $ORPHANED_CLUSTERS; do aws rds delete-db-cluster --db-cluster-identifier "$c" --skip-final-snapshot --delete-automated-backups || true; done
             fi
-            
             if [ -n "$ORPHANED_INSTANCES" ]; then
-              echo "🗑️ Found orphaned RDS instances: $ORPHANED_INSTANCES"
-              for instance in $ORPHANED_INSTANCES; do
-                echo "Deleting orphaned RDS instance: $instance"
-                aws rds delete-db-instance --db-instance-identifier "$instance" --skip-final-snapshot --delete-automated-backups || echo "Failed to delete $instance (might not exist)"
-              done
+              for i in $ORPHANED_INSTANCES; do aws rds delete-db-instance --db-instance-identifier "$i" --skip-final-snapshot --delete-automated-backups || true; done
             fi
           }
-          
-          # Check CloudFormation stack status
-          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_FOUND")
-          echo "📊 Current stack status: $STATUS"
-          
-          # Force cleanup if requested
+
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NOT_FOUND)
           if [ "${{ github.event.inputs.force_cleanup }}" = "true" ]; then
-            echo "🚨 Force cleanup requested - removing all resources"
             cleanup_orphaned_rds
             if [ "$STATUS" != "NOT_FOUND" ]; then
               aws cloudformation delete-stack --stack-name "$STACK_NAME"
-              echo "⏳ Waiting for stack deletion..."
-              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || echo "Stack deletion completed or failed"
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
             fi
-          # Auto-cleanup stuck stacks
           elif [[ "$STATUS" =~ ^(ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|CREATE_FAILED)$ ]]; then
-            echo "🚨 Stack is in failed state ($STATUS) - cleaning up"
             cleanup_orphaned_rds
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
-            echo "⏳ Waiting for stuck stack deletion..."
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" || echo "Stack deletion completed or timed out"
-          else
-            echo "✅ Stack is healthy or will be updated in-place"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
           fi
 
       - name: Setup Python environment
@@ -112,69 +83,23 @@ jobs:
 
       - name: Build and package backend components
         run: |
-          echo "📦 Building backend components..."
-          
-          # Main Flask API
-          echo "--- Packaging Main Flask API ---"
           cd backend
-          if [ ! -f requirements.txt ]; then
-            echo "🚨 requirements.txt not found in backend/"
-            exit 1
-          fi
           pip install --no-cache-dir -r requirements.txt -t .
-          
-          # Copy shared files to migration processor
-          if [ -d "migration_processor" ] && [ -f "legacy_db.py" ]; then
-            cp legacy_db.py migration_processor/
-            echo "✅ Copied legacy_db.py to migration processor"
-          fi
-          
-          # Create main backend package
+          cp legacy_db.py migration_processor/ || true
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*" "*.pytest_cache/*"
-          echo "📦 Main backend package created: $(du -h ../backend.zip | cut -f1)"
-          cd ..
-          
-          # Migration Processor
-          echo "--- Packaging Migration Processor ---"
-          if [ ! -d "backend/migration_processor" ]; then
-            echo "🚨 migration_processor directory not found!"
-            exit 1
-          fi
-          
-          cd backend/migration_processor
-          if [ ! -f requirements.txt ]; then
-            echo "🚨 requirements.txt not found in migration_processor/"
-            exit 1
-          fi
-          
+          cd migration_processor
           pip install --no-cache-dir -r requirements.txt -t .
           zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*" "*.pytest_cache/*"
-          echo "📦 Migration processor package created: $(du -h ../../processor.zip | cut -f1)"
           cd ../..
 
       - name: Deploy CloudFormation stack with monitoring
         id: deploy_stack
-        timeout-minutes: 30
         run: |
-          echo "🚀 Deploying CloudFormation stack..."
-          
-          # Determine development mode
           DEV_MODE="${{ github.event.inputs.development_mode }}"
-          if [ -z "$DEV_MODE" ]; then
-            DEV_MODE="false"
-          fi
-          
-          echo "📋 Deployment configuration:"
-          echo "  Stack Name: $STACK_NAME"
-          echo "  Development Mode: $DEV_MODE"
-          echo "  Region: $AWS_DEFAULT_REGION"
-          
+          if [ -z "$DEV_MODE" ]; then DEV_MODE="false"; fi
           EXISTING_VPC_ID="${{ github.event.inputs.existing_vpc_id }}"
-
-          if [ "$EXISTING_VPC_ID" = "new" ]; then
-            EXISTING_VPC_ID=""
-          fi
-
+          EXISTING_VPC_ID_LOWER=$(echo "$EXISTING_VPC_ID" | tr '[:upper:]' '[:lower:]')
+          if [ -z "$EXISTING_VPC_ID" ] || [ "$EXISTING_VPC_ID_LOWER" = "new" ]; then EXISTING_VPC_ID=""; fi
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
@@ -186,7 +111,111 @@ jobs:
               DevelopmentMode="$DEV_MODE" \
               ExistingVPCId="$EXISTING_VPC_ID" \
             --no-fail-on-empty-changeset
-          
-          echo "✅ CloudFormation deployment completed successfully"
 
-      # (Remaining workflow steps unchanged)
+      - name: Extract CloudFormation outputs
+        id: cfn_outputs
+        run: |
+          get_output() {
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          echo "function_name=$(get_output BackendLambdaName)" >> $GITHUB_OUTPUT
+          echo "subscriber_table=$(get_output SubscriberTableName)" >> $GITHUB_OUTPUT
+          echo "audit_table=$(get_output AuditLogTableName)" >> $GITHUB_OUTPUT
+          echo "api_id=$(get_output BackendApiId)" >> $GITHUB_OUTPUT
+          echo "frontend_url=$(get_output FrontendURL)" >> $GITHUB_OUTPUT
+          echo "mig_jobs_table=$(get_output MigrationJobsTableName)" >> $GITHUB_OUTPUT
+          echo "mig_upload_bucket=$(get_output MigrationUploadBucketName)" >> $GITHUB_OUTPUT
+          echo "mig_processor_name=$(get_output MigrationProcessorFunctionName)" >> $GITHUB_OUTPUT
+          echo "legacy_db_secret_arn=$(get_output LegacyDBSecretArn)" >> $GITHUB_OUTPUT
+          echo "legacy_db_host=$(get_output LegacyDBEndpoint)" >> $GITHUB_OUTPUT
+
+      - name: Set Frontend API URL
+        run: |
+          echo "REACT_APP_API_URL=https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod" > frontend/.env
+
+      - name: Build and deploy frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          aws s3 sync build/ "s3://$BUCKET_NAME" --delete --cache-control "public, max-age=31536000" --exclude "*.html" --exclude "service-worker.js"
+          aws s3 sync build/ "s3://$BUCKET_NAME" --cache-control "public, max-age=300" --include "*.html" --include "service-worker.js"
+
+      - name: Deploy backend Lambda with retries
+        run: |
+          for i in {1..3}; do
+            if aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --zip-file fileb://backend.zip; then break; fi
+            if [ $i -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+      - name: Configure backend Lambda environment
+        run: |
+          aws lambda update-function-configuration --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --environment Variables="FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }},SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=$STACK_NAME"
+
+      - name: Deploy migration processor Lambda
+        run: |
+          BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          aws s3 cp processor.zip "s3://$BUCKET_NAME/processor.zip"
+          aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"
+
+      - name: Configure migration processor environment
+        run: |
+          aws lambda update-function-configuration --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --environment Variables="SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=$STACK_NAME"
+
+      - name: Wait for Lambda functions ready
+        run: |
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.function_name }}"
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}"
+
+      - name: Configure S3 bucket notifications
+        run: |
+          PROCESSOR_ARN=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.FunctionArn' --output text)
+          aws s3api put-bucket-notification-configuration --bucket "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" --notification-configuration '{
+            "LambdaFunctionConfigurations": [{
+              "Id": "csv-upload-processor",
+              "LambdaFunctionArn": "'"$PROCESSOR_ARN"'",
+              "Events": ["s3:ObjectCreated:Put", "s3:ObjectCreated:Post"],
+              "Filter": {
+                "Key": {
+                  "FilterRules": [
+                    {"Name": "prefix", "Value": "uploads/"},
+                    {"Name": "suffix", "Value": ".csv"}
+                  ]
+                }
+              }
+            }]
+          }'
+
+      - name: Deploy API Gateway
+        run: |
+          DEPLOY_ID=$(aws apigateway create-deployment --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" --description "Deployment $(date)" --query "id" --output text)
+          aws apigateway update-stage --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" --stage-name prod --patch-operations op=replace,path=/deploymentId,value=$DEPLOY_ID
+
+      - name: Run health checks
+        run: |
+          API_URL="https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.$AWS_DEFAULT_REGION.amazonaws.com/prod"
+          FRONTEND_URL="${{ steps.cfn_outputs.outputs.frontend_url }}"
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $API_URL)
+          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL)
+          echo "API HTTP status: $API_STATUS"
+          echo "Frontend HTTP status: $FRONTEND_STATUS"
+          if [[ "$API_STATUS" != "200" || "$FRONTEND_STATUS" != "200" ]]; then
+            echo "::error::Health check failed."
+            exit 1
+          fi
+
+      - name: Deployment complete summary
+        if: success()
+        run: |
+          echo "Deployment finished successfully."
+          echo "API URL: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.$AWS_DEFAULT_REGION.amazonaws.com/prod"
+          echo "Frontend URL: ${{ steps.cfn_outputs.outputs.frontend_url }}"
+
+      - name: Failure diagnostics
+        if: failure()
+        run: |
+          echo "Deployment failed - fetching diagnostics..."
+          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --max-items 20 --output table
+          aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --output table
