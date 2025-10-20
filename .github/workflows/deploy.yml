@@ -36,8 +36,6 @@ jobs:
 
       - name: Install and Package All Backends
         run: |
-          echo "Current directory: $(pwd)"
-          echo "Listing files in backend: $(ls -la backend)"
           echo "--- Packaging Main Flask API ---"
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
@@ -45,35 +43,24 @@ jobs:
           if [ -d "migration_processor" ]; then
              if [ -f "legacy_db.py" ]; then
                cp legacy_db.py migration_processor/
-             else
-               echo "::warning:: legacy_db.py not found in backend/ - Processor might fail if it needs it."
              fi
           fi
-          # Create zip file in the root directory, excluding specific files/dirs
           zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*"
-          cd .. # Return to project root
-          echo "Current directory after main API packaging: $(pwd)"
+          cd ..
 
           echo "--- Packaging Migration Processor ---"
           if [ -d "backend/migration_processor" ]; then
             cd backend/migration_processor
-            echo "Current directory for processor packaging: $(pwd)"
-            echo "Listing files in migration_processor: $(ls -la .)"
-            # Check if requirements.txt exists BEFORE running pip
             if [ ! -f "requirements.txt" ]; then
-               echo "::error:: File 'backend/migration_processor/requirements.txt' not found inside directory!"
+               echo "::error:: File 'backend/migration_processor/requirements.txt' not found!"
                exit 1
             fi
-            # Install dependencies (will do nothing if requirements.txt is empty)
-            echo "Running pip install in $(pwd)..."
             pip install --no-cache-dir -r requirements.txt -t .
-            # Create zip file in the project root directory
             zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*"
-            cd ../.. # Return to project root
-            echo "Current directory after processor packaging: $(pwd)"
+            cd ../..
           else
-            echo "::warning:: The 'backend/migration_processor' directory was not found. Skipping processor packaging."
-            # Allow the workflow to continue, but the processor Lambda won't be updated.
+            echo "::error:: The 'backend/migration_processor' directory was not found. Please create it."
+            exit 1
           fi
 
       - name: Deploy CloudFormation Stack
@@ -115,18 +102,10 @@ jobs:
           echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
 
           echo "::notice:: API URL: $API_URL"
-          echo "::notice:: Frontend URL: $FRONTEND_URL"
 
       - name: Update backend Lambda code
         run: |
-          # Only run if backend.zip was created
-          if [ -f "backend.zip" ]; then
-            aws lambda update-function-code \
-              --function-name ${{ steps.cfn_outputs.outputs.function_name }} \
-              --zip-file fileb://backend.zip
-          else
-             echo "::warning:: backend.zip not found. Skipping main Lambda code update."
-          fi
+          aws lambda update-function-code --function-name ${{ steps.cfn_outputs.outputs.function_name }} --zip-file fileb://backend.zip
 
       - name: Update MAIN Lambda Environment Variables
         run: |
@@ -143,46 +122,23 @@ jobs:
             }"
 
       - name: Upload MIGRATION Processor code to S3
-        if: steps.cfn_outputs.outputs.mig_processor_name != '' && github.ref == 'refs/heads/main' # Only if processor exists and on main branch
         env:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
-          # Extract bucket name safely from the S3 website URL
-          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then
-             echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"
-             exit 1
-          fi
-          # Only run if processor.zip was created
-          if [ -f "processor.zip" ]; then
-             aws s3 cp processor.zip s3://$BUCKET_NAME/processor.zip
-          else
-             echo "::warning:: processor.zip not found. Skipping migration processor code upload."
-          fi
+          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
+          aws s3 cp processor.zip s3://$BUCKET_NAME/processor.zip
 
       - name: Update MIGRATION Processor Lambda code
-        if: steps.cfn_outputs.outputs.mig_processor_name != '' && github.ref == 'refs/heads/main'
         env:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
           MIG_PROCESSOR_NAME: ${{ steps.cfn_outputs.outputs.mig_processor_name }}
         run: |
-          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then
-             echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"
-             exit 1
-          fi
-          # Only run if processor.zip was created and uploaded
-          if aws s3 ls s3://$BUCKET_NAME/processor.zip; then
-            aws lambda update-function-code \
-              --function-name $MIG_PROCESSOR_NAME \
-              --s3-bucket $BUCKET_NAME \
-              --s3-key "processor.zip"
-          else
-             echo "::warning:: processor.zip not found in S3 bucket $BUCKET_NAME. Skipping migration processor code update."
-          fi
+          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
+          aws lambda update-function-code --function-name "$MIG_PROCESSOR_NAME" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"
       
       - name: Update MIGRATION Lambda Environment Variables
-        if: steps.cfn_outputs.outputs.mig_processor_name != ''
         run: |
            aws lambda update-function-configuration \
             --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }} \
@@ -190,7 +146,6 @@ jobs:
               SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }}, \
               AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }}, \
               MIGRATION_JOBS_TABLE_NAME=${{ steps.cfn_outputs.outputs.mig_jobs_table }}, \
-              MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
               REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }}, \
               LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}, \
               LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }} \
@@ -199,7 +154,6 @@ jobs:
       - name: Wait for Lambda function updates to complete
         run: |
           aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.function_name }}
-          # Only wait if the processor name was found
           if [ -n "${{ steps.cfn_outputs.outputs.mig_processor_name }}" ]; then
             aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }}
           fi
@@ -208,23 +162,9 @@ jobs:
         env:
           API_ID: ${{ steps.cfn_outputs.outputs.api_id }}
         run: |
-          echo "Starting deployment for API Gateway: $API_ID"
-          DEPLOYMENT_ID=$(aws apigateway create-deployment \
-            --rest-api-id $API_ID \
-            --description "CI/CD code update $(date +%s)" \
-            --query 'id' \
-            --output text --region us-east-1)
-
-          if [ -z "$DEPLOYMENT_ID" ]; then
-            echo "Failed to create deployment"
-            exit 1
-          fi
-
-          aws apigateway update-stage \
-            --rest-api-id $API_ID \
-            --stage-name prod \
-            --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID
-
+          DEPLOYMENT_ID=$(aws apigateway create-deployment --rest-api-id "$API_ID" --description "CI/CD update $(date)" --query 'id' --output text)
+          if [ -z "$DEPLOYMENT_ID" ]; then echo "Failed to create deployment"; exit 1; fi
+          aws apigateway update-stage --rest-api-id "$API_ID" --stage-name prod --patch-operations op='replace',path='/deploymentId',value=$DEPLOYMENT_ID
           echo "API Gateway stage 'prod' updated"
 
       # ---------------------
@@ -244,6 +184,854 @@ jobs:
         env:
           FRONTEND_URL: ${{ steps.cfn_outputs.outputs.frontend_url }}
         run: |
-          BUCKET_NAME=$(echo $FRONTEND_URL | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then exit 1; fi
+          BUCKET_NAME=$(echo "$FRONTEND_URL" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
+          if [ -z "$BUCKET_NAME" ]; then echo "::error:: Could not extract bucket name from FrontendURL: $FRONTEND_URL"; exit 1; fi
           aws s3 sync frontend/build/ s3://$BUCKET_NAME --delete
+```
+
+---
+#### 2. CloudFormation Template (`aws/cloudformation.yaml`)
+
+This is the final infrastructure code, with the S3 trigger syntax corrected to break the circular dependency.
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Full Subscriber Migration Portal Infrastructure with RDS and enhanced DynamoDB
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: "Optional domain name for the frontend site"
+  LegacyDBPassword:
+    Type: String
+    Description: "Password for the legacy MySQL database. Min 8 characters."
+    NoEcho: true
+    AllowedPattern: ".{8,}"
+    ConstraintDescription: "Must be at least 8 characters."
+
+Resources:
+
+  # ---------------------------------------------------------------------
+  # Networking (VPC, Subnets, etc.)
+  # ---------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-1"
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Public-2"
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Private-2"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+  
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+      
+  # ---------------------------------------------------------------------
+  # Security Groups and DB Secret
+  # ---------------------------------------------------------------------
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-Lambda-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for Lambda functions"
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-RDS-SG"
+      VpcId: !Ref VPC
+      GroupDescription: "Security group for RDS instance"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  LegacyDBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: "Credentials for the legacy MySQL database"
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: "password"
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\\'
+
+  # ---------------------------------------------------------------------
+  # RDS MySQL Database Instance
+  # ---------------------------------------------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: "Subnet group for the legacy RDS instance"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  LegacyDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: "legacydb"
+      Engine: "mysql"
+      EngineVersion: "8.0"
+      DBInstanceClass: "db.t3.micro"
+      AllocatedStorage: "20"
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDBSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      PubliclyAccessible: false
+      StorageType: "gp2"
+      DeletionProtection: false
+      MultiAZ: false
+
+  # ---------------------------------------------------------------------
+  # S3 Buckets
+  # ---------------------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "subscriber-portal-${AWS::AccountId}-${AWS::Region}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  MigrationUploadBucket:
+    Type: AWS::S3::Bucket
+    # DependsOn needed to ensure Lambda permission exists before NotificationConfiguration
+    DependsOn: MigrationUploadTriggerPermission 
+    Properties:
+      BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT]
+            AllowedOrigins:
+              - !GetAtt FrontendBucket.WebsiteURL
+              - http://localhost:3000
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Function: !GetAtt MigrationProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .csv
+
+  # ---------------------------------------------------------------------
+  # DynamoDB Tables
+  # ---------------------------------------------------------------------
+  SubscriberTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "SubscriberTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - { AttributeName: subscriberId, AttributeType: S }
+        - { AttributeName: imsi, AttributeType: S }
+        - { AttributeName: msisdn, AttributeType: S }
+      KeySchema:
+        - { AttributeName: subscriberId, KeyType: HASH }
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: ImsiIndex
+          KeySchema: [{ AttributeName: imsi, KeyType: HASH }]
+          Projection: { ProjectionType: ALL }
+        - IndexName: MsisdnIndex
+          KeySchema: [{ AttributeName: msisdn, KeyType: HASH }]
+          Projection: { ProjectionType: ALL }
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "AuditLogTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - { AttributeName: id, AttributeType: S }
+        - { AttributeName: timestamp, AttributeType: S }
+      KeySchema:
+        - { AttributeName: id, KeyType: HASH }
+        - { AttributeName: timestamp, KeyType: RANGE }
+      BillingMode: PAY_PER_REQUEST
+
+  MigrationJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "MigrationJobsTable-${AWS::AccountId}-${AWS::Region}"
+      AttributeDefinitions:
+        - { AttributeName: migrationId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: migrationId, KeyType: HASH }
+      BillingMode: PAY_PER_REQUEST
+
+  # ---------------------------------------------------------------------
+  # IAM Roles & Lambdas
+  # ---------------------------------------------------------------------
+  BackendLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "SubscriberBackendRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: SecretReadPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
+
+  MigrationProcessorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "MigrationProcessorRole-${AWS::AccountId}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: lambda.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: MigrationProcessorPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - { Effect: Allow, Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents], Resource: "arn:aws:logs:*:*:*" }
+              - { Effect: Allow, Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging], Resource: !Sub "${MigrationUploadBucket.Arn}/*" }
+              - { Effect: Allow, Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem], Resource: [!GetAtt MigrationJobsTable.Arn, !GetAtt SubscriberTable.Arn, !GetAtt AuditLogTable.Arn] }
+              - { Effect: Allow, Action: secretsmanager:GetSecretValue, Resource: !Ref LegacyDBSecret }
+
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "subscriber-backend-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt BackendLambdaRole.Arn
+      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  MigrationProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "migration-processor-${AWS::AccountId}-${AWS::Region}"
+      Handler: app.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt MigrationProcessorRole.Arn
+      Code: { ZipFile: 'def handler(event, context): return {"statusCode": 200, "body": "Placeholder"}' }
+      Timeout: 300
+      Environment:
+        Variables:
+          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
+          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
+          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
+          REPORT_BUCKET_NAME: !Ref MigrationUploadBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+
+  # S3 Trigger Permission
+  MigrationUploadTriggerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt MigrationProcessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt MigrationUploadBucket.Arn
+      SourceAccount: !Ref AWS::AccountId
+
+  # ---------------------------------------------------------------------
+  # API Gateway
+  # ---------------------------------------------------------------------
+  BackendApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "migration-portal-api-${AWS::Region}"
+      EndpointConfiguration: { Types: [REGIONAL] }
+
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+      PathPart: "{proxy+}"
+
+  ApiProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration: { Type: AWS_PROXY, IntegrationHttpMethod: POST, Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations" }
+      ResourceId: !Ref ApiProxyResource
+      RestApiId: !Ref BackendApi
+
+  ApiRootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: ANY
+      Integration: { Type: AWS_PROXY, IntegrationHttpMethod: POST, Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations" }
+      ResourceId: !GetAtt BackendApi.RootResourceId
+      RestApiId: !Ref BackendApi
+
+  LambdaApiPermission: # Allow API Gateway to invoke the BackendLambda
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref BackendLambda
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
+
+  ApiDeployment: # Initial deployment needed for the stage
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [ApiProxyMethod, ApiRootMethod]
+    Properties:
+      RestApiId: !Ref BackendApi
+
+  ApiProdStage: # The 'prod' stage
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      RestApiId: !Ref BackendApi
+      DeploymentId: !Ref ApiDeployment
+
+Outputs:
+  FrontendURL: { Description: URL of the frontend S3 website, Value: !GetAtt FrontendBucket.WebsiteURL }
+  SubscriberTableName: { Description: DynamoDB subscriber table name, Value: !Ref SubscriberTable }
+  AuditLogTableName: { Description: DynamoDB audit log table name, Value: !Ref AuditLogTable }
+  MigrationJobsTableName: { Description: DynamoDB migration jobs table name, Value: !Ref MigrationJobsTable }
+  MigrationUploadBucketName: { Description: S3 bucket for CSV uploads, Value: !Ref MigrationUploadBucket }
+  BackendLambdaName: { Description: Name of the backend Lambda, Value: !Ref BackendLambda }
+  MigrationProcessorFunctionName: { Description: Name of the migration processor Lambda, Value: !Ref MigrationProcessorFunction }
+  BackendApiId: { Description: ID of the API Gateway, Value: !Ref BackendApi }
+  BackendApiUrl: { Description: Public URL for the API Gateway prod stage, Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod" }
+  LegacyDBEndpoint: { Description: Connection endpoint for the legacy RDS database, Value: !GetAtt LegacyDBInstance.Endpoint.Address }
+  LegacyDBSecretArn: { Description: ARN of the secret containing DB credentials, Value: !Ref LegacyDBSecret }
+```
+
+---
+#### 3. Migration Processor Lambda (`backend/migration_processor/app.py`)
+
+This is the new Lambda function triggered by S3 uploads.
+
+```python
+import boto3
+import os
+import csv
+import io
+import json
+from datetime import datetime
+import legacy_db # Use the real DB connector
+
+# Get env variables set by CloudFormation/deploy script
+SUBSCRIBER_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
+MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
+REPORT_BUCKET_NAME = os.environ.get('REPORT_BUCKET_NAME')
+LEGACY_DB_SECRET_ARN = os.environ.get('LEGACY_DB_SECRET_ARN')
+LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST') # The RDS endpoint
+
+s3_client = boto3.client('s3')
+dynamodb = boto3.resource('dynamodb')
+jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
+subscribers_table = dynamodb.Table(SUBSCRIBERS_TABLE_NAME)
+
+def get_db_credentials():
+    """Fetches database credentials securely from AWS Secrets Manager."""
+    secrets_client = boto3.client('secretsmanager')
+    try:
+        response = secrets_client.get_secret_value(SecretId=LEGACY_DB_SECRET_ARN)
+        secret = json.loads(response['SecretString'])
+        return {
+            'host': LEGACY_DB_HOST,
+            'port': 3306, # Standard RDS MySQL port
+            'user': secret['username'],
+            'password': secret['password'],
+            'database': 'legacydb'
+        }
+    except Exception as e:
+        print(f"FATAL: Could not retrieve DB credentials from Secrets Manager: {e}")
+        raise
+
+def find_identifier_key(headers):
+    """Detects the main identifier from a list of CSV headers."""
+    for header in headers:
+        h_lower = header.lower()
+        if h_lower in ['uid', 'imsi', 'msisdn', 'subscriberid']:
+            return header
+    return None
+
+def lambda_handler(event, context):
+    record = event['Records'][0]
+    bucket = record['s3']['bucket']['name']
+    key = record['s3']['object']['key']
+    
+    print(f"Processing s3://{bucket}/{key}")
+    
+    try:
+        head_object = s3_client.head_object(Bucket=bucket, Key=key)
+        metadata = head_object.get('Metadata', {})
+        migration_id = metadata.get('migrationid')
+        is_simulate_mode = metadata.get('issimulatemode', 'false').lower() == 'true'
+        if not migration_id:
+            raise Exception("MigrationId not found in S3 metadata.")
+    except Exception as e:
+        print(f"Error getting metadata: {e}")
+        if 'migration_id' in locals() and migration_id:
+             jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
+        return {'status': 'error', 'message': str(e)}
+
+    counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
+    report_data = [['Identifier', 'Status', 'Details']]
+
+    try:
+        db_creds = get_db_credentials()
+        legacy_db.init_connection_details(**db_creds)
+        print("Successfully configured legacy DB connector.")
+    except Exception as e:
+        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
+        return {'status': 'error'}
+
+    try:
+        csv_object = s3_client.get_object(Bucket=bucket, Key=key)
+        csv_content = csv_object['Body'].read().decode('utf-8')
+        reader = csv.DictReader(io.StringIO(csv_content))
+        
+        identifier_key = find_identifier_key(reader.fieldnames)
+        if not identifier_key:
+            raise Exception("Could not find a valid identifier (uid, imsi, or msisdn) in CSV header.")
+
+        all_rows = list(reader)
+        counts['total'] = len(all_rows)
+        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
+
+        for row in all_rows:
+            identifier_val = row.get(identifier_key)
+            if not identifier_val:
+                counts['failed'] += 1
+                report_data.append([row.get(identifier_key, 'N/A'), 'FAILED', 'Identifier value was blank in CSV row.'])
+                continue
+
+            try:
+                legacy_data = legacy_db.get_subscriber_by_any_id(identifier_val)
+                cloud_data = subscribers_table.get_item(Key={'subscriberId': identifier_val}).get('Item')
+
+                if legacy_data and not cloud_data:
+                    status_detail = "Migrated successfully."
+                    if not is_simulate_mode:
+                        legacy_data['subscriberId'] = legacy_data['uid']
+                        subscribers_table.put_item(Item=legacy_data)
+                    else:
+                        status_detail = "SIMULATED: Would have been migrated."
+                    counts['migrated'] += 1
+                    report_data.append([identifier_val, 'MIGRATED', status_detail])
+                elif cloud_data:
+                    counts['already_present'] += 1
+                    report_data.append([identifier_val, 'SKIPPED', 'Already present in cloud.'])
+                elif not legacy_data:
+                    counts['not_found_in_legacy'] += 1
+                    report_data.append([identifier_val, 'SKIPPED', 'Not found in legacy DB.'])
+            except Exception as e:
+                counts['failed'] += 1
+                report_data.append([identifier_val, 'FAILED', str(e)])
+
+        report_key = f"reports/{migration_id}.csv"
+        report_buffer = io.StringIO()
+        csv.writer(report_buffer).writerows(report_data)
+        s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
+        
+        jobs_table.update_item(
+            Key={'migrationId': migration_id},
+            UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
+            ExpressionAttributeNames={'#s': 'status'},
+            ExpressionAttributeValues={':s': 'COMPLETED', ':m': counts['migrated'], ':ap': counts['already_present'], ':nf': counts['not_found_in_legacy'], ':f': counts['failed'], ':rk': report_key}
+        )
+    except Exception as e:
+        print(f"FATAL ERROR during processing: {e}")
+        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
+    finally:
+        s3_client.delete_object(Bucket=bucket, Key=key)
+
+    return {'status': 'success'}
+```
+
+---
+#### 4. Migration Processor Requirements (`backend/migration_processor/requirements.txt`)
+
+This file is required by the deployment script, even though it's empty.
+
+```text
+# This file is intentionally left blank.
+# Required by the deploy.yml packaging script.
+```
+
+---
+#### 5. Main Backend Requirements (`backend/requirements.txt`)
+
+Cleaned up to remove the unused PostgreSQL driver.
+
+```text
+Flask==2.2.3
+Flask-CORS==3.0.10
+boto3==1.26.0
+PyJWT==2.6.0
+gunicorn==20.1.0
+requests==2.28.1
+xmltodict==0.13.0
+# psycopg2-binary removed
+PyMySQL==1.1.0
+python-dotenv==1.0.0
+werkzeug==2.2.3
+serverless-wsgi
+```
+
+---
+#### 6. Migration API Endpoint (`backend/migration.py`)
+
+Updated to use the S3 pre-signed URL workflow.
+
+```python
+from flask import Blueprint, request, jsonify
+from auth import login_required
+from audit import log_audit
+import os
+import boto3
+import uuid
+from datetime import datetime
+
+mig_bp = Blueprint('migration', __name__)
+
+MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
+MIGRATION_UPLOAD_BUCKET_NAME = os.environ.get('MIGRATION_UPLOAD_BUCKET_NAME')
+
+dynamodb = boto3.resource('dynamodb')
+jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
+s3_client = boto3.client('s3')
+
+@mig_bp.route('/bulk', methods=['POST', 'OPTIONS'])
+@login_required()
+def start_bulk_migration():
+    user = request.environ['user']
+    data = request.json
+    is_simulate_mode = data.get('isSimulateMode', False)
+    
+    try:
+        migration_id = str(uuid.uuid4())
+        upload_key = f"uploads/{migration_id}.csv" 
+        
+        upload_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': MIGRATION_UPLOAD_BUCKET_NAME,
+                'Key': upload_key,
+                'ContentType': 'text/csv',
+                'Metadata': {
+                    'migrationid': migration_id,
+                    'issimulatemode': str(is_simulate_mode).lower(),
+                    'userid': user['sub']
+                }
+            },
+            ExpiresIn=3600
+        )
+        
+        jobs_table.put_item(
+            Item={
+                'migrationId': migration_id,
+                'status': 'PENDING_UPLOAD',
+                'startedBy': user['sub'],
+                'startedAt': datetime.utcnow().isoformat(),
+                'isSimulateMode': is_simulate_mode
+            }
+        )
+        
+        log_audit(user['sub'], 'START_MIGRATION', {'migrationId': migration_id, 'simulate': is_simulate_mode}, 'SUCCESS')
+        return jsonify(migrationId=migration_id, uploadUrl=upload_url), 200
+        
+    except Exception as e:
+        log_audit(user['sub'], 'START_MIGRATION', {}, f'FAILED: {str(e)}')
+        return jsonify(msg=f'Error initiating migration: {str(e)}'), 500
+
+@mig_bp.route('/status/<migration_id>', methods=['GET'])
+@login_required()
+def get_migration_status(migration_id):
+    try:
+        response = jobs_table.get_item(Key={'migrationId': migration_id})
+        status = response.get('Item')
+        if not status:
+            return jsonify(msg='Job not found'), 404
+        return jsonify(status)
+    except Exception as e:
+        return jsonify(msg=f'Error getting job status: {str(e)}'), 500
+
+@mig_bp.route('/report/<migration_id>', methods=['GET'])
+@login_required()
+def get_migration_report(migration_id):
+    try:
+        response = jobs_table.get_item(Key={'migrationId': migration_id})
+        job = response.get('Item')
+        if not job:
+            return jsonify(msg='Job not found'), 404
+        
+        report_key = job.get('reportS3Key')
+        if not report_key:
+            if job.get('status') == 'FAILED':
+                 return jsonify(msg=f"Job failed: {job.get('failureReason', 'Unknown error')}"), 404
+            return jsonify(msg='Report not yet available or job is still processing'), 404
+            
+        download_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': MIGRATION_UPLOAD_BUCKET_NAME, # Report is in the same bucket
+                'Key': report_key,
+                'ResponseContentDisposition': f'attachment; filename="report-{migration_id}.csv"'
+            },
+            ExpiresIn=3600
+        )
+        
+        return jsonify(downloadUrl=download_url), 200
+        
+    except Exception as e:
+        return jsonify(msg=f'Error generating report URL: {str(e)}'), 500
+```
+
+---
+#### 7. Legacy DB Connector (`backend/legacy_db.py`)
+
+Updated to include the `init_connection_details` function.
+
+```python
+import os
+import pymysql
+import pymysql.cursors
+import json
+import warnings
+from contextlib import contextmanager
+
+# --- Global connection details, used as defaults or can be overridden ---
+DB_HOST = os.environ.get('LEGACY_DB_HOST', 'host.docker.internal')
+DB_PORT = int(os.environ.get('LEGACY_DB_PORT', 3307))
+DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
+DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
+DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
+IS_LEGACY_DB_DISABLED = False # Default
+
+def init_connection_details(host, port, user, password, database):
+    """Allows runtime configuration of DB connection, used by the Lambda."""
+    global DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, IS_LEGACY_DB_DISABLED
+    DB_HOST = host
+    DB_PORT = int(port)
+    DB_USER = user
+    DB_PASSWORD = password
+    DB_NAME = database
+    IS_LEGACY_DB_DISABLED = False # Ensure it's enabled when configured
+
+@contextmanager
+def get_connection():
+    """Provides a database connection that is automatically closed."""
+    if IS_LEGACY_DB_DISABLED:
+        raise RuntimeError("Legacy DB connection is disabled in this environment.")
+        
+    connection = pymysql.connect(host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASSWORD, database=DB_NAME, cursorclass=pymysql.cursors.DictCursor)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+def get_subscriber_by_any_id(identifier):
+    """Fetches a full subscriber profile from the legacy DB using UID, IMSI, or MSISDN."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            sql = """
+            SELECT s.*, hss.subscription_id, hss.profile_type, hss.private_user_id, hss.public_user_id, hlr.call_forward_unconditional, hlr.call_barring_all_outgoing, hlr.clip_provisioned, hlr.clir_provisioned, hlr.call_hold_provisioned, hlr.call_waiting_provisioned, vas.account_status, vas.language_id, vas.sim_type, (SELECT JSON_ARRAYAGG(JSON_OBJECT('context_id', pdp.context_id, 'apn', pdp.apn, 'qos_profile', pdp.qos_profile)) FROM tbl_pdp_contexts pdp WHERE pdp.subscriber_uid = s.uid) AS pdp_contexts
+            FROM subscribers s
+            LEFT JOIN tbl_hss_profiles hss ON s.uid = hss.subscriber_uid
+            LEFT JOIN tbl_hlr_features hlr ON s.uid = hlr.subscriber_uid
+            LEFT JOIN tbl_vas_services vas ON s.uid = vas.subscriber_uid
+            WHERE s.uid = %s OR s.imsi = %s OR s.msisdn = %s;
+            """
+            cursor.execute(sql, (identifier, identifier, identifier))
+            result = cursor.fetchone()
+            
+            if result:
+                if result.get('pdp_contexts'):
+                    try:
+                        result['pdp_contexts'] = json.loads(result['pdp_contexts'])
+                    except (json.JSONDecodeError, TypeError):
+                         result['pdp_contexts'] = []
+                else:
+                    result['pdp_contexts'] = []
+                for key, value in result.items():
+                    if value == 0: result[key] = False
+                    elif value == 1: result[key] = True
+            return result
+
+def create_subscriber_full_profile(data):
+    """Creates a full subscriber profile across all tables within a single transaction."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                conn.begin()
+                sql_sub = """INSERT INTO subscribers (uid, imsi, msisdn, plan, subscription_state, service_class, charging_characteristics) VALUES (%s, %s, %s, %s, %s, %s, %s);"""
+                cursor.execute(sql_sub, (data['uid'], data['imsi'], data.get('msisdn'), data.get('plan'), data.get('subscription_state'), data.get('service_class'), data.get('charging_characteristics')))
+                sql_hss = """INSERT INTO tbl_hss_profiles (subscriber_uid, profile_type) VALUES (%s, %s);"""
+                cursor.execute(sql_hss, (data['uid'], data.get('profile_type')))
+                sql_hlr = """INSERT INTO tbl_hlr_features (subscriber_uid, call_forward_unconditional, call_barring_all_outgoing, clip_provisioned, clir_provisioned, call_hold_provisioned, call_waiting_provisioned) VALUES (%s, %s, %s, %s, %s, %s, %s);"""
+                cursor.execute(sql_hlr, (data['uid'], data.get('call_forward_unconditional'), data.get('call_barring_all_outgoing', False), data.get('clip_provisioned', True), data.get('clir_provisioned', False), data.get('call_hold_provisioned', True), data.get('call_waiting_provisioned', True)))
+                sql_vas = """INSERT INTO tbl_vas_services (subscriber_uid, account_status, language_id, sim_type) VALUES (%s, %s, %s, %s);"""
+                cursor.execute(sql_vas, (data['uid'], data.get('account_status', 'ACTIVE'), data.get('language_id', 'en-US'), data.get('sim_type', '4G_USIM')))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"Transaction failed: {e}")
+                raise
+            
+def delete_subscriber(uid):
+    """Deletes a subscriber. CASCADE constraint handles child tables."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            sql = "DELETE FROM subscribers WHERE uid = %s"
+            cursor.execute(sql, (uid,))
+
