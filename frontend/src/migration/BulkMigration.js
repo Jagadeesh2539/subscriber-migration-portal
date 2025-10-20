@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import {
-    Paper, Button, Typography, LinearProgress, Table, TableBody, TableCell,
+import { 
+    Paper, Button, Typography, LinearProgress, Table, TableBody, TableCell, 
     TableContainer, TableHead, TableRow, Alert, Box, Chip, IconButton,
-    Checkbox, FormControlLabel, Tabs, Tab, Grid, Card, CardContent, CircularProgress
+    Checkbox, FormControlLabel, Tabs, Tab, Grid, Card, CardContent, CircularProgress, TextField
 } from '@mui/material';
 import { CloudUpload, Download, Assessment, FileDownload } from '@mui/icons-material';
 import API from '../api'; // Ensure this path is correct relative to your file structure
@@ -25,18 +25,18 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 
     try {
       // 1. Get the pre-signed URL from the backend API
-      const { data } = await API.post('/migration/bulk', {
-          isSimulateMode: isSimulateMode
+      const { data } = await API.post('/migration/bulk', { 
+          isSimulateMode: isSimulateMode 
       });
-
+      
       const { migrationId, uploadUrl } = data;
-
+      
       setMessage({ type: 'info', text: 'Uploading file securely to S3... This might take a moment.' });
-
+      
       // 2. Upload the file DIRECTLY to S3 using the received URL
       const uploadResponse = await fetch(uploadUrl, {
         method: 'PUT',
-        headers: {
+        headers: { 
           'Content-Type': 'text/csv' // Let S3 know it's a CSV
         },
         body: file,
@@ -70,14 +70,16 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       default: return 'primary'; // PENDING_UPLOAD, etc.
     }
   };
-
+  
   const calculateProgress = (job) => {
     if (job.status === 'COMPLETED') return 100;
+    // Handle potential missing totalRecords early
     if (!job.totalRecords || job.totalRecords === 0 || job.status !== 'IN_PROGRESS') return 0;
-    // Calculate progress based on various counts
-    const processed = (job.migrated || 0) + (job.alreadyPresent || 0) + (job.notFound || 0) + (job.failed || 0);
+    // Calculate progress based on various counts, using || 0 as fallback
+    const processed = (job.migrated || 0) + (job.alreadyPresent || 0) + (job.not_found_in_legacy || 0) + (job.failed || 0);
     return Math.min(100, Math.round((processed / job.totalRecords) * 100)); // Ensure it doesn't exceed 100
   };
+
 
   return (
     <Box>
@@ -92,34 +94,34 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       <Card variant="outlined" sx={{ p: 3, mb: 4 }}>
         <Typography variant="h6" sx={{ mb: 2 }}>Upload Migration File</Typography>
         <Box display="flex" flexDirection={{ xs: 'column', md: 'row' }} alignItems="center" gap={2}>
-          <input
-            type="file"
-            accept=".csv"
-            onChange={e => setFile(e.target.files[0])}
-            style={{ display: 'none' }}
-            id="file-upload"
+          <input 
+            type="file" 
+            accept=".csv" 
+            onChange={e => setFile(e.target.files[0])} 
+            style={{ display: 'none' }} 
+            id="file-upload" 
           />
           <label htmlFor="file-upload">
             <Button variant="outlined" component="span" startIcon={<FileDownload />}>
               Choose CSV File
             </Button>
           </label>
-
+          
           <Typography variant="body2" sx={{ flexGrow: 1, color: file ? 'text.primary' : 'text.secondary' }}>
             {file ? file.name : 'Select a CSV file (must contain uid, imsi, or msisdn header)'}
           </Typography>
-
+         
         </Box>
          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
              <FormControlLabel
                 control={<Checkbox checked={isSimulateMode} onChange={(e) => setIsSimulateMode(e.target.checked)} disabled={!isAuthorized}/>}
                 label="Run in Simulate Mode (Dry Run)"
             />
-            <Button
-                variant="contained"
-                startIcon={uploading ? <CircularProgress size={24} color="inherit" /> : <CloudUpload />}
-                onClick={handleUpload}
-                disabled={!file || uploading || !isAuthorized}
+            <Button 
+                variant="contained" 
+                startIcon={uploading ? <CircularProgress size={24} color="inherit" /> : <CloudUpload />} 
+                onClick={handleUpload} 
+                disabled={!file || uploading || !isAuthorized} 
                 color="primary"
                 sx={{ flexShrink: 0 }}
             >
@@ -170,7 +172,8 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
                   <TableCell>{job.isSimulateMode ? 'Yes' : 'No'}</TableCell>
                   <TableCell>{job.totalRecords ?? '-'}</TableCell>
                   <TableCell>{job.migrated ?? '-'}</TableCell>
-                  <TableCell>{(job.alreadyPresent ?? 0) + (job.notFound_in_legacy ?? 0)}</TableCell> {/* Combine skip reasons */}
+                  {/* Combine AlreadyPresent and NotFound for Skipped count */}
+                  <TableCell>{(job.alreadyPresent ?? 0) + (job.not_found_in_legacy ?? 0)}</TableCell> 
                   <TableCell>{job.failed ?? '-'}</TableCell>
                 </TableRow>
               ))
@@ -185,15 +188,15 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 
 // --- Sub-Component for Migration Reports Tab ---
 const MigrationReports = ({ setMessage }) => {
-  const [reportList, setReportList] = useState([]);
-  const [loadingReports, setLoadingReports] = useState(false);
+  const [reportList, setReportList] = useState([]); // Start empty
+  const [loadingReports, setLoadingReports] = useState(false); // Add loading state
   const [jobIdInput, setJobIdInput] = useState('');
 
   // Example: Fetch recent jobs on mount (replace with actual API call if needed)
   useEffect(() => {
      // TODO: Implement an API call to fetch recent completed jobs if desired
      // e.g., API.get('/migration/jobs?status=COMPLETED').then(...)
-     setLoadingReports(false);
+     setLoadingReports(false); // Set to false after fetch
   }, []);
 
   const handleDownloadReport = async (migrationId) => {
@@ -204,32 +207,32 @@ const MigrationReports = ({ setMessage }) => {
     setMessage({ type: 'info', text: `Requesting download URL for report ${migrationId.substring(0,8)}...` });
     try {
       const { data } = await API.get(`/migration/report/${migrationId.trim()}`);
-      window.location.href = data.downloadUrl;
+      window.location.href = data.downloadUrl; // Trigger browser download
       setMessage({ type: 'success', text: 'Report download started.' });
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.msg || `Could not get report for Job ${migrationId.substring(0,8)}.` });
     }
   };
-
+  
   return (
     <Box>
       <Typography variant="h5" gutterBottom sx={{ mb: 2, borderBottom: '1px solid #ddd', pb: 1 }}>
         <Assessment sx={{ mr: 1 }} /> Migration Reports
       </Typography>
-
+      
       <Card variant="outlined" sx={{ p: 3, mb: 4 }}>
         <Typography variant="h6" sx={{ mb: 2 }}>Download Specific Job Report</Typography>
         <Box display="flex" alignItems="center" gap={2}>
-            <TextField
-            label="Enter Completed Job ID"
-            fullWidth
-            size="small"
+            <TextField 
+            label="Enter Completed Job ID" 
+            fullWidth 
+            size="small" 
             value={jobIdInput}
             onChange={(e) => setJobIdInput(e.target.value)}
             />
-            <Button
-                variant="contained"
-                startIcon={<Download />}
+            <Button 
+                variant="contained" 
+                startIcon={<Download />} 
                 onClick={() => handleDownloadReport(jobIdInput)}
                 disabled={!jobIdInput.trim()}
                 sx={{ whiteSpace: 'nowrap' }}
@@ -238,7 +241,7 @@ const MigrationReports = ({ setMessage }) => {
             </Button>
         </Box>
       </Card>
-
+      
       <Typography variant="h6" sx={{ mt: 4, mb: 1 }}>Recent Report History (Placeholder)</Typography>
       <TableContainer component={Paper}>
         <Table size="small">
@@ -285,10 +288,10 @@ export default function BulkMigration() {
   const [message, setMessage] = useState({ type: '', text: '' });
   const [uploading, setUploading] = useState(false);
   const [jobs, setJobs] = useState([]); // Start with empty jobs list
-
+  
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const userRole = user.role || 'guest';
-
+  
   // Fetch initial job history or active jobs on mount
   useEffect(() => {
       // TODO: Implement API call to fetch recent/active jobs
@@ -322,13 +325,13 @@ export default function BulkMigration() {
     setActiveTab(newValue);
     setMessage({ type: '', text: '' }); // Clear messages on tab change
   };
-
+  
   return (
     <Paper sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom sx={{ mb: 3 }}>
         Migration Management
       </Typography>
-
+      
       {message.text && <Alert severity={message.type} onClose={() => setMessage({ type: '', text: '' })} sx={{ mb: 3 }}>{message.text}</Alert>}
 
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
@@ -339,16 +342,17 @@ export default function BulkMigration() {
       </Box>
 
       {/* Render the active tab content */}
-      {activeTab === 0 && <BulkUploadTool
-          jobs={jobs}
-          setJobs={setJobs}
-          userRole={userRole}
-          uploading={uploading}
+      {activeTab === 0 && <BulkUploadTool 
+          jobs={jobs} 
+          setJobs={setJobs} 
+          userRole={userRole} 
+          uploading={uploading} 
           setUploading={setUploading}
           setMessage={setMessage}
       />}
       {activeTab === 1 && <MigrationReports setMessage={setMessage} />}
-
+          
     </Paper>
   );
 }
+```eof
