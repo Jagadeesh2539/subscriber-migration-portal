@@ -158,6 +158,32 @@ jobs:
             aws lambda wait function-updated --function-name ${{ steps.cfn_outputs.outputs.mig_processor_name }}
           fi
 
+      # NEW STEP: Configure S3 bucket notification for Lambda trigger
+      - name: Configure S3 bucket notification for migration processor
+        run: |
+          # Get the Lambda function ARN
+          MIG_PROCESSOR_ARN=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.FunctionArn' --output text)
+          echo "Migration processor ARN: $MIG_PROCESSOR_ARN"
+          
+          # Configure S3 bucket notification
+          aws s3api put-bucket-notification-configuration \
+            --bucket "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" \
+            --notification-configuration '{
+              "LambdaFunctionConfigurations": [{
+                "LambdaFunctionArn": "'"$MIG_PROCESSOR_ARN"'",
+                "Events": ["s3:ObjectCreated:Put"],
+                "Filter": {
+                  "Key": {
+                    "FilterRules": [
+                      {"Name": "prefix", "Value": "uploads/"},
+                      {"Name": "suffix", "Value": ".csv"}
+                    ]
+                  }
+                }
+              }]
+            }'
+          echo "S3 bucket notification configured successfully"
+
       - name: Deploy API Gateway Stage
         env:
           API_ID: ${{ steps.cfn_outputs.outputs.api_id }}
@@ -193,3 +219,5 @@ jobs:
           echo "🎉 Deployment completed successfully!"
           echo "Frontend URL: ${{ steps.cfn_outputs.outputs.frontend_url }}"
           echo "API Gateway URL: https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.us-east-1.amazonaws.com/prod"
+          echo "Migration Upload Bucket: ${{ steps.cfn_outputs.outputs.mig_upload_bucket }}"
+          echo "S3 notification configured for Lambda triggers on CSV uploads"
