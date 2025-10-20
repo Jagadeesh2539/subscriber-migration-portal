@@ -5,7 +5,7 @@ import {
     Checkbox, FormControlLabel, Tabs, Tab, Grid, Card, CardContent, CircularProgress, TextField
 } from '@mui/material';
 import { CloudUpload, Download, Assessment, FileDownload } from '@mui/icons-material';
-import API from '../api'; // Ensure this path is correct relative to your file structure
+import API from '../api'; // Ensure this path is correct
 
 // --- Sub-Component for Bulk Upload Tab ---
 const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setMessage }) => {
@@ -48,7 +48,6 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       }
 
       // 3. Add the new job to the UI list to start status polling
-      // We set the initial status based on the response, assuming it starts processing immediately
       setJobs(prevJobs => [{ migrationId, status: 'IN_PROGRESS', isSimulateMode, started_by: userRole }, ...prevJobs]);
       setMessage({ type: 'success', text: `Upload successful! Job ${migrationId.substring(0,8)}... is now processing.` });
       setFile(null); // Clear the file input after successful upload
@@ -76,7 +75,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
     // Handle potential missing totalRecords early
     if (!job.totalRecords || job.totalRecords === 0 || job.status !== 'IN_PROGRESS') return 0;
     // Calculate progress based on various counts, using || 0 as fallback
-    const processed = (job.migrated || 0) + (job.alreadyPresent || 0) + (job.not_found_in_legacy || 0) + (job.failed || 0);
+    const processed = (job.migrated || 0) + (job.alreadyPresent || 0) + (job.not_found_in_legacy || 0) + (job.failed || 0); // Correct key name
     return Math.min(100, Math.round((processed / job.totalRecords) * 100)); // Ensure it doesn't exceed 100
   };
 
@@ -355,4 +354,3 @@ export default function BulkMigration() {
     </Paper>
   );
 }
-```eof
