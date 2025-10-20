@@ -229,6 +229,8 @@ Resources:
 
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
+    # DependsOn needed to ensure Lambda permission exists before NotificationConfiguration tries to use it
+    DependsOn: MigrationUploadTriggerPermission 
     Properties:
       BucketName: !Sub "migration-uploads-${AWS::AccountId}-${AWS::Region}"
       PublicAccessBlockConfiguration:
@@ -238,14 +240,23 @@ Resources:
         RestrictPublicBuckets: true
       CorsConfiguration:
         CorsRules:
-          - AllowedHeaders:
-              - "*"
-            AllowedMethods:
-              - PUT
-              - POST
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [PUT] # Only PUT is needed for presigned URL uploads
             AllowedOrigins:
               - !Sub "http://subscriber-portal-${AWS::AccountId}-${AWS::Region}.s3-website.${AWS::Region}.amazonaws.com"
               - http://localhost:3000
+      # Configure S3 event notification to trigger the Lambda
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Function: !GetAtt MigrationProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+                  - Name: suffix
+                    Value: .csv
 
   # ---------------------------------------------------------------------
   # DynamoDB Tables
@@ -318,13 +329,12 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
+            Principal: { Service: lambda.amazonaws.com }
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess # Needed for presigned URLs
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
         - PolicyName: SecretReadPolicy
@@ -343,8 +353,7 @@ Resources:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
+            Principal: { Service: lambda.amazonaws.com }
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
@@ -353,28 +362,19 @@ Resources:
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
+              - Effect: Allow # CloudWatch Logs
+                Action: [ logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents ]
                 Resource: "arn:aws:logs:*:*:*"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
+              - Effect: Allow # Read/Write/Delete from Migration Bucket
+                Action: [ s3:GetObject, s3:PutObject, s3:DeleteObject, s3:GetObjectTagging, s3:PutObjectTagging ]
                 Resource: !Sub "${MigrationUploadBucket.Arn}/*"
-              - Effect: Allow
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:GetItem
-                  - dynamodb:UpdateItem
+              - Effect: Allow # Access DynamoDB Tables
+                Action: [ dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem ]
                 Resource:
                   - !GetAtt MigrationJobsTable.Arn
                   - !GetAtt SubscriberTable.Arn
                   - !GetAtt AuditLogTable.Arn
-              - Effect: Allow
+              - Effect: Allow # Read RDS Credentials
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref LegacyDBSecret
 
@@ -388,16 +388,12 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt BackendLambdaRole.Arn
-      Code:
+      Code: # Start with placeholder, workflow updates it
         ZipFile: |
-          def lambda_handler(event, context):
-              return {"statusCode": 200, "body": "Lambda created"}
+          def lambda_handler(event, context): return {"statusCode": 200, "body": "Placeholder"}
       VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
@@ -406,10 +402,9 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.11
       Role: !GetAtt MigrationProcessorRole.Arn
-      Code:
+      Code: # Start with placeholder, workflow updates it
         ZipFile: |
-          def lambda_handler(event, context):
-              return {"statusCode": 200, "body": "Migration Processor Lambda created"}
+          def lambda_handler(event, context): return {"statusCode": 200, "body": "Placeholder"}
       Timeout: 300
       Environment:
         Variables:
@@ -420,14 +415,11 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDBSecret
           LEGACY_DB_HOST: !GetAtt LegacyDBInstance.Endpoint.Address
       VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
   # ---------------------------------------------------------------------
-  # S3 Trigger for Migration (Corrected Syntax)
+  # S3 Trigger Permission (Lambda needs permission to be invoked by S3)
   # ---------------------------------------------------------------------
   MigrationUploadTriggerPermission:
     Type: AWS::Lambda::Permission
@@ -436,104 +428,10 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
       SourceArn: !GetAtt MigrationUploadBucket.Arn
-      # Add SourceAccount to restrict which account can trigger
       SourceAccount: !Ref AWS::AccountId
 
-  S3TriggerConfiguration:
-    Type: Custom::S3LambdaTrigger # Using a custom resource type for clarity
-    DependsOn: MigrationUploadTriggerPermission # Ensure permission exists first
-    Properties:
-      ServiceToken: !GetAtt AddS3NotificationFunction.Arn # Reference a Lambda function to configure S3 (see below)
-      BucketName: !Ref MigrationUploadBucket
-      LambdaArn: !GetAtt MigrationProcessorFunction.Arn
-
-  # Helper Lambda Function and Role to add S3 Notification (Workaround for complex Filters)
-  AddS3NotificationRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: S3PutNotificationPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: s3:PutBucketNotification
-                Resource: !GetAtt MigrationUploadBucket.Arn
-
-  AddS3NotificationFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.handler
-      Role: !GetAtt AddS3NotificationRole.Arn
-      Runtime: python3.9
-      Timeout: 60
-      Code:
-        ZipFile: |
-          import boto3
-          import cfnresponse
-          import json
-
-          s3 = boto3.client('s3')
-
-          def handler(event, context):
-              response_status = cfnresponse.SUCCESS
-              response_data = {}
-              physical_resource_id = event.get('PhysicalResourceId')
-
-              try:
-                  if event['RequestType'] in ['Create', 'Update']:
-                      bucket_name = event['ResourceProperties']['BucketName']
-                      lambda_arn = event['ResourceProperties']['LambdaArn']
-                      
-                      notification_config = {
-                          'LambdaFunctionConfigurations': [
-                              {
-                                  'Id': 'MigrationProcessorTrigger',
-                                  'LambdaFunctionArn': lambda_arn,
-                                  'Events': ['s3:ObjectCreated:Put'],
-                                  'Filter': {
-                                      'Key': {
-                                          'FilterRules': [
-                                              {'Name': 'prefix', 'Value': 'uploads/'},
-                                              {'Name': 'suffix', 'Value': '.csv'}
-                                          ]
-                                      }
-                                  }
-                              }
-                          ]
-                      }
-                      
-                      s3.put_bucket_notification_configuration(
-                          Bucket=bucket_name,
-                          NotificationConfiguration=notification_config
-                      )
-                      print(f"Set S3 notification for bucket {bucket_name}")
-                      # Use bucket name as physical ID for updates/deletes
-                      physical_resource_id = f"s3-notification-{bucket_name}"
-
-                  elif event['RequestType'] == 'Delete':
-                      bucket_name = event['ResourceProperties']['BucketName']
-                      # On delete, remove the notification configuration
-                      s3.put_bucket_notification_configuration(
-                          Bucket=bucket_name,
-                          NotificationConfiguration={}
-                      )
-                      print(f"Removed S3 notification for bucket {bucket_name}")
-
-              except Exception as e:
-                  print(f"Error configuring S3 notification: {e}")
-                  response_status = cfnresponse.FAILED
-                  response_data = {'Error': str(e)}
-
-              cfnresponse.send(event, context, response_status, response_data, physical_resource_id)
+  # NOTE: The S3 Trigger itself is now configured directly on the MigrationUploadBucket resource above.
+  # The old AWS::Lambda::EventSourceMapping resource has been removed as it's not needed with NotificationConfiguration.
 
   # ---------------------------------------------------------------------
   # API Gateway
@@ -543,9 +441,7 @@ Resources:
     Properties:
       Name: !Sub "migration-portal-api-${AWS::Region}"
       Description: "API for the Subscriber Migration Portal"
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
+      EndpointConfiguration: { Types: [REGIONAL] }
 
   ApiProxyResource:
     Type: AWS::ApiGateway::Resource
@@ -578,7 +474,7 @@ Resources:
       ResourceId: !GetAtt BackendApi.RootResourceId
       RestApiId: !Ref BackendApi
 
-  LambdaApiPermission:
+  LambdaApiPermission: # Allow API Gateway to invoke the BackendLambda
     Type: AWS::Lambda::Permission
     Properties:
       Action: lambda:InvokeFunction
@@ -586,15 +482,13 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*"
 
-  ApiDeployment:
+  ApiDeployment: # Initial deployment needed for the stage
     Type: AWS::ApiGateway::Deployment
-    DependsOn:
-      - ApiProxyMethod
-      - ApiRootMethod
+    DependsOn: [ApiProxyMethod, ApiRootMethod]
     Properties:
       RestApiId: !Ref BackendApi
 
-  ApiProdStage:
+  ApiProdStage: # The 'prod' stage
     Type: AWS::ApiGateway::Stage
     Properties:
       StageName: prod
@@ -604,45 +498,16 @@ Resources:
 
 Outputs:
   FrontendURL:
-    Description: URL of the frontend
-    Value: !Sub "http://${FrontendBucket}.s3-website.${AWS::Region}.amazonaws.com"
+    Description: URL of the frontend S3 website
+    Value: !GetAtt FrontendBucket.WebsiteURL
 
-  SubscriberTableName:
-    Description: DynamoDB subscriber table
-    Value: !Ref SubscriberTable
-
-  AuditLogTableName:
-    Description: DynamoDB audit log table
-    Value: !Ref AuditLogTable
-
-  MigrationJobsTableName:
-    Description: DynamoDB table to track migration jobs
-    Value: !Ref MigrationJobsTable
-
-  MigrationUploadBucketName:
-    Description: S3 bucket for CSV uploads
-    Value: !Ref MigrationUploadBucket
-
-  BackendLambdaName:
-    Description: Name of the backend Lambda
-    Value: !Ref BackendLambda
-
-  MigrationProcessorFunctionName:
-    Description: Name of the migration processor Lambda
-    Value: !Ref MigrationProcessorFunction
-    
-  BackendApiId:
-    Description: The ID of the new API Gateway
-    Value: !Ref BackendApi
-
-  BackendApiUrl:
-    Description: The public URL for the API Gateway prod stage
-    Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-
-  LegacyDBEndpoint:
-    Description: "The connection endpoint for the legacy MySQL database"
-    Value: !GetAtt LegacyDBInstance.Endpoint.Address
-
-  LegacyDBSecretArn:
-    Description: "The ARN of the secret containing the DB credentials"
-    Value: !Ref LegacyDBSecret
+  SubscriberTableName: { Description: DynamoDB subscriber table name, Value: !Ref SubscriberTable }
+  AuditLogTableName: { Description: DynamoDB audit log table name, Value: !Ref AuditLogTable }
+  MigrationJobsTableName: { Description: DynamoDB migration jobs table name, Value: !Ref MigrationJobsTable }
+  MigrationUploadBucketName: { Description: S3 bucket for CSV uploads, Value: !Ref MigrationUploadBucket }
+  BackendLambdaName: { Description: Name of the backend Lambda, Value: !Ref BackendLambda }
+  MigrationProcessorFunctionName: { Description: Name of the migration processor Lambda, Value: !Ref MigrationProcessorFunction }
+  BackendApiId: { Description: ID of the API Gateway, Value: !Ref BackendApi }
+  BackendApiUrl: { Description: Public URL for the API Gateway prod stage, Value: !Sub "https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod" }
+  LegacyDBEndpoint: { Description: Connection endpoint for the legacy RDS database, Value: !GetAtt LegacyDBInstance.Endpoint.Address }
+  LegacyDBSecretArn: { Description: ARN of the secret containing DB credentials, Value: !Ref LegacyDBSecret }
