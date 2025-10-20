@@ -427,20 +427,113 @@ Resources:
           - !Ref PrivateSubnet2
 
   # ---------------------------------------------------------------------
-  # S3 Trigger for Migration
+  # S3 Trigger for Migration (Corrected Syntax)
   # ---------------------------------------------------------------------
-  S3UploadTrigger:
-    Type: AWS::Lambda::EventSourceMapping
+  MigrationUploadTriggerPermission:
+    Type: AWS::Lambda::Permission
     Properties:
-      EventSourceArn: !GetAtt MigrationUploadBucket.Arn
       FunctionName: !GetAtt MigrationProcessorFunction.Arn
-      StartingPosition: LATEST
-      FilterCriteria:
-        Rules:
-          - Name: suffix
-            Value: ".csv"
-          - Name: prefix
-            Value: "uploads/"
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt MigrationUploadBucket.Arn
+      # Add SourceAccount to restrict which account can trigger
+      SourceAccount: !Ref AWS::AccountId
+
+  S3TriggerConfiguration:
+    Type: Custom::S3LambdaTrigger # Using a custom resource type for clarity
+    DependsOn: MigrationUploadTriggerPermission # Ensure permission exists first
+    Properties:
+      ServiceToken: !GetAtt AddS3NotificationFunction.Arn # Reference a Lambda function to configure S3 (see below)
+      BucketName: !Ref MigrationUploadBucket
+      LambdaArn: !GetAtt MigrationProcessorFunction.Arn
+
+  # Helper Lambda Function and Role to add S3 Notification (Workaround for complex Filters)
+  AddS3NotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3PutNotificationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:PutBucketNotification
+                Resource: !GetAtt MigrationUploadBucket.Arn
+
+  AddS3NotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt AddS3NotificationRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+
+          s3 = boto3.client('s3')
+
+          def handler(event, context):
+              response_status = cfnresponse.SUCCESS
+              response_data = {}
+              physical_resource_id = event.get('PhysicalResourceId')
+
+              try:
+                  if event['RequestType'] in ['Create', 'Update']:
+                      bucket_name = event['ResourceProperties']['BucketName']
+                      lambda_arn = event['ResourceProperties']['LambdaArn']
+                      
+                      notification_config = {
+                          'LambdaFunctionConfigurations': [
+                              {
+                                  'Id': 'MigrationProcessorTrigger',
+                                  'LambdaFunctionArn': lambda_arn,
+                                  'Events': ['s3:ObjectCreated:Put'],
+                                  'Filter': {
+                                      'Key': {
+                                          'FilterRules': [
+                                              {'Name': 'prefix', 'Value': 'uploads/'},
+                                              {'Name': 'suffix', 'Value': '.csv'}
+                                          ]
+                                      }
+                                  }
+                              }
+                          ]
+                      }
+                      
+                      s3.put_bucket_notification_configuration(
+                          Bucket=bucket_name,
+                          NotificationConfiguration=notification_config
+                      )
+                      print(f"Set S3 notification for bucket {bucket_name}")
+                      # Use bucket name as physical ID for updates/deletes
+                      physical_resource_id = f"s3-notification-{bucket_name}"
+
+                  elif event['RequestType'] == 'Delete':
+                      bucket_name = event['ResourceProperties']['BucketName']
+                      # On delete, remove the notification configuration
+                      s3.put_bucket_notification_configuration(
+                          Bucket=bucket_name,
+                          NotificationConfiguration={}
+                      )
+                      print(f"Removed S3 notification for bucket {bucket_name}")
+
+              except Exception as e:
+                  print(f"Error configuring S3 notification: {e}")
+                  response_status = cfnresponse.FAILED
+                  response_data = {'Error': str(e)}
+
+              cfnresponse.send(event, context, response_status, response_data, physical_resource_id)
 
   # ---------------------------------------------------------------------
   # API Gateway
@@ -553,4 +646,3 @@ Outputs:
   LegacyDBSecretArn:
     Description: "The ARN of the secret containing the DB credentials"
     Value: !Ref LegacyDBSecret
-
