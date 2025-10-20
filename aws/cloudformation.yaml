@@ -267,14 +267,27 @@ Resources:
     Properties:
       BucketName: !Sub "${AWS::StackName}-migration-uploads"
 
-  FrontendBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${AWS::StackName}-frontend"
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: index.html
-      AccessControl: PublicRead
+FrontendBucket:
+  Properties:
+    # no AccessControl property
+    OwnershipControls:
+      Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+    PublicAccessBlockConfiguration:
+      BlockPublicAcls: true
+      BlockPublicPolicy: false
+      IgnorePublicAcls: true
+      RestrictPublicBuckets: false
+
+FrontendBucketPolicy:
+  Properties:
+    Bucket: !Ref FrontendBucket
+    PolicyDocument:
+      Statement:
+        - Effect: Allow
+          Principal: "*"
+          Action: s3:GetObject
+          Resource: !Join ['', [!GetAtt FrontendBucket.Arn, '/*']]
 
   ####################################
   # IAM Roles and Policies          #
@@ -305,7 +318,7 @@ Resources:
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.8
+      Runtime: python3.11
       Handler: app.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 30
