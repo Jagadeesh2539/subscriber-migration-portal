@@ -351,7 +351,7 @@ Resources:
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.11
+      Runtime: python3.11 # Ensure this matches your build environment
       Handler: app.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Timeout: 30
@@ -365,14 +365,22 @@ Resources:
       Environment:
         Variables:
           DevelopmentMode: !Ref DevelopmentMode
+      # --- Add this VpcConfig section ---
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          # Reference both private subnets for HA and ENI stability
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
 
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.8
+      Runtime: python3.11 # Ensure this matches your build environment
       Handler: app.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 30
+      Timeout: 300 # Increased timeout for potentially long migrations
       Code:
         ZipFile: |
           def lambda_handler(event, context):
@@ -383,6 +391,14 @@ Resources:
       Environment:
         Variables:
           DevelopmentMode: !Ref DevelopmentMode
+      # --- Add this VpcConfig section ---
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          # Reference both private subnets for HA and ENI stability
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
 
   ####################################
   # API Gateway                    #
