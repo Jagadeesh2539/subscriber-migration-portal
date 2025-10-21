@@ -3,14 +3,15 @@ import {
   Paper, TextField, Button, Typography, Alert, Box, CircularProgress, 
   Grid, Card, CardContent, CardHeader, List, ListItem, ListItemText, 
   Dialog, DialogTitle, DialogContent, DialogActions, Tabs, Tab,
-  Tooltip, Checkbox, FormControlLabel, IconButton 
+  Tooltip, Checkbox, FormControlLabel
 } from '@mui/material';
 import { 
-  Search, Add, Edit, Delete, Dashboard, CheckCircleOutline, VpnKey, AccountCircle, InfoOutlined 
+  Search, Add, Edit, Delete, Dashboard, CheckCircleOutline, VpnKey, AccountCircle 
 } from '@mui/icons-material';
 import API from '../api';
 
-// --- Default Data for Forms ---
+// ---Default Data for Forms---
+
 const DEFAULT_SUBSCRIBER = {
   uid: '', imsi: '', msisdn: '', plan: 'Gold',
   subscription_state: 'ACTIVE', service_class: 'DEFAULT_SC',
@@ -22,7 +23,6 @@ const DEFAULT_SUBSCRIBER = {
   account_status: 'ACTIVE', language_id: 'en-US', sim_type: '4G_USIM',
   call_forward_unconditional: '',
 };
-
 // --- Helper Components ---
 
 // --- 1. Subscriber Form (Create/Modify) ---

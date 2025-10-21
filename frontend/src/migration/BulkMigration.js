@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
     Paper, Button, Typography, LinearProgress, Table, TableBody, TableCell, 
     TableContainer, TableHead, TableRow, Alert, Box, Chip, IconButton,
-    Checkbox, FormControlLabel, Tabs, Tab, Grid, Card, CardContent, CircularProgress, TextField
+    Checkbox, FormControlLabel, Tabs, Tab, Card, CircularProgress, TextField
 } from '@mui/material';
 import { CloudUpload, Download, Assessment, FileDownload } from '@mui/icons-material';
 import API from '../api'; // Ensure this path is correct
@@ -187,7 +187,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 
 // --- Sub-Component for Migration Reports Tab ---
 const MigrationReports = ({ setMessage }) => {
-  const [reportList, setReportList] = useState([]); // Start empty
+  const [reportList] = useState([]); // Start empty
   const [loadingReports, setLoadingReports] = useState(false); // Add loading state
   const [jobIdInput, setJobIdInput] = useState('');
 
