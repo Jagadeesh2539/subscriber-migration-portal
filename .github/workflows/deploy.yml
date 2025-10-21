@@ -152,8 +152,14 @@ jobs:
 
       - name: Configure backend Lambda environment
         run: |
-          aws lambda update-function-configuration --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --environment Variables="FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }},SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=$STACK_NAME"
-
+          echo "⚙️ Configuring backend Lambda environment..."
+          # Use single quotes around the Variables=... string
+          # Remove outer curly braces {}
+          aws lambda update-function-configuration \
+            --function-name "${{ steps.cfn_outputs.outputs.function_name }}" \
+            --environment 'Variables=FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }},SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=${{ env.STACK_NAME }}'
+          echo "✅ Backend Lambda environment configured"
+          
       - name: Deploy migration processor Lambda
         run: |
           BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|http://\([^.]*\)\.s3-website.*|\1|p')
@@ -162,8 +168,14 @@ jobs:
 
       - name: Configure migration processor environment
         run: |
-          aws lambda update-function-configuration --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --environment Variables="SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=$STACK_NAME"
-
+          echo "⚙️ Configuring migration processor environment..."
+          # Use single quotes around the Variables=... string
+          # Remove outer curly braces {}
+          aws lambda update-function-configuration \
+            --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
+            --environment 'Variables=SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=${{ env.STACK_NAME }}'
+          echo "✅ Migration processor environment configured"
+          
       - name: Wait for Lambda functions ready
         run: |
           aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.function_name }}"
