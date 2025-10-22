@@ -261,6 +261,7 @@ jobs:
                 "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
                 "AUDIT_LOG_TABLE_NAME": "${{ steps.cfn_outputs.outputs.audit_table }}",
                 "MIGRATION_UPLOAD_BUCKET_NAME": "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}",
+                "MIGRATION_JOBS_TABLE_NAME": "${{ steps.cfn_outputs.outputs.mig_jobs_table }}",
                 "LEGACY_DB_SECRET_ARN": "${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}",
                 "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
                 "STACK_NAME": "${{ env.STACK_NAME }}"
@@ -361,6 +362,7 @@ jobs:
                 "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
                 "AUDIT_LOG_TABLE_NAME": "${{ steps.cfn_outputs.outputs.audit_table }}",
                 "REPORT_BUCKET_NAME": "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}",
+                "MIGRATION_JOBS_TABLE_NAME": "${{ steps.cfn_outputs.outputs.mig_jobs_table }}",
                 "LEGACY_DB_SECRET_ARN": "${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}",
                 "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
                 "STACK_NAME": "${{ env.STACK_NAME }}"

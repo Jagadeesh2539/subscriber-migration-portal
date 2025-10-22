@@ -8,11 +8,23 @@ from datetime import datetime
 
 mig_bp = Blueprint('migration', __name__)
 
-MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
-MIGRATION_UPLOAD_BUCKET_NAME = os.environ.get('MIGRATION_UPLOAD_BUCKET_NAME')
+# Environment variables with fallback and validation
+MIGRATION_JOBS_TABLE_NAME = os.getenv('MIGRATION_JOBS_TABLE_NAME')
+MIGRATION_UPLOAD_BUCKET_NAME = os.getenv('MIGRATION_UPLOAD_BUCKET_NAME')
+
+if not MIGRATION_JOBS_TABLE_NAME or not MIGRATION_UPLOAD_BUCKET_NAME:
+    raise ValueError("MIGRATION_JOBS_TABLE_NAME or MIGRATION_UPLOAD_BUCKET_NAME environment variables are not set")
 
 dynamodb = boto3.resource('dynamodb')
-jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
+										
+																						  
+
+try:
+    jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
+except Exception as e:
+    print(f"Error creating DynamoDB table reference: {e}")
+    jobs_table = None
+
 s3_client = boto3.client('s3')
 
 @mig_bp.route('/bulk', methods=['POST', 'OPTIONS'])
@@ -21,11 +33,11 @@ def start_bulk_migration():
     user = request.environ['user']
     data = request.json
     is_simulate_mode = data.get('isSimulateMode', False)
-    
+
     try:
         migration_id = str(uuid.uuid4())
-        upload_key = f"uploads/{migration_id}.csv" 
-        
+        upload_key = f"uploads/{migration_id}.csv"
+
         upload_url = s3_client.generate_presigned_url(
             'put_object',
             Params={
@@ -40,7 +52,7 @@ def start_bulk_migration():
             },
             ExpiresIn=3600
         )
-        
+
         jobs_table.put_item(
             Item={
                 'migrationId': migration_id,
@@ -50,10 +62,11 @@ def start_bulk_migration():
                 'isSimulateMode': is_simulate_mode
             }
         )
-        
+
         log_audit(user['sub'], 'START_MIGRATION', {'migrationId': migration_id, 'simulate': is_simulate_mode}, 'SUCCESS')
+
         return jsonify(migrationId=migration_id, uploadUrl=upload_url), 200
-        
+
     except Exception as e:
         log_audit(user['sub'], 'START_MIGRATION', {}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error initiating migration: {str(e)}'), 500
@@ -78,13 +91,13 @@ def get_migration_report(migration_id):
         job = response.get('Item')
         if not job:
             return jsonify(msg='Job not found'), 404
-        
+
         report_key = job.get('reportS3Key')
         if not report_key:
             if job.get('status') == 'FAILED':
                  return jsonify(msg=f"Job failed: {job.get('failureReason', 'Unknown error')}"), 404
             return jsonify(msg='Report not yet available or job is still processing'), 404
-            
+
         download_url = s3_client.generate_presigned_url(
             'get_object',
             Params={
@@ -96,6 +109,6 @@ def get_migration_report(migration_id):
         )
         
         return jsonify(downloadUrl=download_url), 200
-        
+
     except Exception as e:
         return jsonify(msg=f'Error generating report URL: {str(e)}'), 500
