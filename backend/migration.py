@@ -45,7 +45,7 @@ def start_bulk_migration():
                 'Key': upload_key,
                 'ContentType': 'text/csv',
                 'Metadata': {
-                    'migrationid': migration_id,
+                    'JobId': migration_id,
                     'issimulatemode': str(is_simulate_mode).lower(),
                     'userid': user['sub']
                 }
@@ -55,7 +55,7 @@ def start_bulk_migration():
 
         jobs_table.put_item(
             Item={
-                'migrationId': migration_id,
+                'JobId': migration_id,
                 'status': 'PENDING_UPLOAD',
                 'startedBy': user['sub'],
                 'startedAt': datetime.utcnow().isoformat(),
@@ -75,7 +75,7 @@ def start_bulk_migration():
 @login_required()
 def get_migration_status(migration_id):
     try:
-        response = jobs_table.get_item(Key={'migrationId': migration_id})
+        response = jobs_table.get_item(Key={'JobId': migration_id})
         status = response.get('Item')
         if not status:
             return jsonify(msg='Job not found'), 404
@@ -87,7 +87,7 @@ def get_migration_status(migration_id):
 @login_required()
 def get_migration_report(migration_id):
     try:
-        response = jobs_table.get_item(Key={'migrationId': migration_id})
+        response = jobs_table.get_item(Key={'JobId': migration_id})
         job = response.get('Item')
         if not job:
             return jsonify(msg='Job not found'), 404

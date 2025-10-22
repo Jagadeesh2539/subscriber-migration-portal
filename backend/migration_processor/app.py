@@ -53,14 +53,14 @@ def lambda_handler(event, context):
     try:
         head_object = s3_client.head_object(Bucket=bucket, Key=key)
         metadata = head_object.get('Metadata', {})
-        migration_id = metadata.get('migrationid')
+        migration_id = metadata.get('jobid')
         is_simulate_mode = metadata.get('issimulatemode', 'false').lower() == 'true'
         if not migration_id:
-            raise Exception("MigrationId not found in S3 metadata.")
+            raise Exception("JobId not found in S3 metadata.")
     except Exception as e:
         print(f"Error getting metadata: {e}")
         if 'migration_id' in locals() and migration_id:
-             jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
+             jobs_table.update_item(Key={'JobId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
         return {'status': 'error', 'message': str(e)}
 
     counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
@@ -71,7 +71,7 @@ def lambda_handler(event, context):
         legacy_db.init_connection_details(**db_creds)
         print("Successfully configured legacy DB connector.")
     except Exception as e:
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
         return {'status': 'error'}
 
     try:
@@ -85,7 +85,7 @@ def lambda_handler(event, context):
 
         all_rows = list(reader)
         counts['total'] = len(all_rows)
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
 
         for row in all_rows:
             identifier_val = row.get(identifier_key)
@@ -123,14 +123,14 @@ def lambda_handler(event, context):
         s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
         
         jobs_table.update_item(
-            Key={'migrationId': migration_id},
+            Key={'JobId': migration_id},
             UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={':s': 'COMPLETED', ':m': counts['migrated'], ':ap': counts['already_present'], ':nf': counts['not_found_in_legacy'], ':f': counts['failed'], ':rk': report_key}
         )
     except Exception as e:
         print(f"FATAL ERROR during processing: {e}")
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
     finally:
         s3_client.delete_object(Bucket=bucket, Key=key)
 
