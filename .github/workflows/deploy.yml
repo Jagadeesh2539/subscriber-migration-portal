@@ -26,6 +26,8 @@ on:
 env:
   STACK_NAME: subscriber-migration-stack-prod
   AWS_DEFAULT_REGION: us-east-1
+  # Add AWS Account ID as an environment variable for easier use in permissions
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }} # Ensure this secret is set in your GitHub repo settings
 
 jobs:
   deploy:
@@ -55,25 +57,35 @@ jobs:
             ORPHANED_CLUSTERS=$(aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, '$STACK_NAME') && (Status=='creating' || Status=='failed' || Status=='stopped')].DBClusterIdentifier" --output text)
             ORPHANED_INSTANCES=$(aws rds describe-db-instances --query "DBInstances[?contains(DBInstanceIdentifier, '$STACK_NAME') && (DBInstanceStatus=='creating' || DBInstanceStatus=='failed')].DBInstanceIdentifier" --output text)
             if [ -n "$ORPHANED_CLUSTERS" ]; then
-              for c in $ORPHANED_CLUSTERS; do aws rds delete-db-cluster --db-cluster-identifier "$c" --skip-final-snapshot --delete-automated-backups || true; done
+              echo "Cleaning up orphaned RDS clusters: $ORPHANED_CLUSTERS"
+              for c in $ORPHANED_CLUSTERS; do aws rds delete-db-cluster --db-cluster-identifier "$c" --skip-final-snapshot --delete-automated-backups || echo "Warning: Failed to delete cluster $c, continuing..."; done
             fi
             if [ -n "$ORPHANED_INSTANCES" ]; then
-              for i in $ORPHANED_INSTANCES; do aws rds delete-db-instance --db-instance-identifier "$i" --skip-final-snapshot --delete-automated-backups || true; done
+              echo "Cleaning up orphaned RDS instances: $ORPHANED_INSTANCES"
+              for i in $ORPHANED_INSTANCES; do aws rds delete-db-instance --db-instance-identifier "$i" --skip-final-snapshot --delete-automated-backups || echo "Warning: Failed to delete instance $i, continuing..."; done
             fi
           }
 
           STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NOT_FOUND)
+          echo "Current stack status: $STATUS"
           if [ "${{ github.event.inputs.force_cleanup }}" = "true" ]; then
+            echo "Force cleanup requested."
             cleanup_orphaned_rds
             if [ "$STATUS" != "NOT_FOUND" ]; then
+              echo "Deleting stack $STACK_NAME..."
               aws cloudformation delete-stack --stack-name "$STACK_NAME"
               aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+              echo "Stack $STACK_NAME deleted."
             fi
           elif [[ "$STATUS" =~ ^(ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|CREATE_FAILED)$ ]]; then
+            echo "Stack is in a failed state ($STATUS), attempting cleanup..."
             cleanup_orphaned_rds
+            echo "Deleting stack $STACK_NAME..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+            echo "Stack $STACK_NAME deleted."
           fi
+          echo "Cleanup check complete."
 
       - name: Setup Python environment
         uses: actions/setup-python@v5
@@ -83,36 +95,51 @@ jobs:
 
       - name: Build and package backend components
         run: |
+          echo "Building backend components..."
           cd backend
           pip install --no-cache-dir -r requirements.txt -t .
           # Ensure migration_processor exists before copying
           if [ -d "migration_processor" ]; then
-            cp legacy_db.py migration_processor/ || true
+            cp legacy_db.py migration_processor/ || true # Allow failure if file doesn't exist? Check necessity.
           else
             echo "Warning: migration_processor directory not found in backend, skipping copy of legacy_db.py"
           fi
-          zip -r ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*" "*.pytest_cache/*"
+          echo "Creating backend.zip..."
+          zip -qr ../backend.zip . -x "*.pyc" "__pycache__/*" "*.git*" "migration_processor/*" "*.pytest_cache/*"
+
           # Only proceed with processor packaging if the directory exists
           if [ -d "migration_processor" ]; then
+            echo "Building migration processor component..."
             cd migration_processor
-            pip install --no-cache-dir -r requirements.txt -t .
-            zip -r ../../processor.zip . -x "*.pyc" "__pycache__/*" "*.pytest_cache/*"
+            # Check if requirements.txt exists before running pip install
+            if [ -f "requirements.txt" ]; then
+                pip install --no-cache-dir -r requirements.txt -t .
+            else
+                echo "Warning: requirements.txt not found in migration_processor, skipping pip install."
+            fi
+            echo "Creating processor.zip..."
+            zip -qr ../../processor.zip . -x "*.pyc" "__pycache__/*" "*.pytest_cache/*"
             cd .. # Go back to backend dir before cd ../..
           else
              echo "Warning: migration_processor directory not found, skipping processor packaging."
-             # Create an empty zip file if it's expected later but optional
+             # Create an empty zip file to avoid later 'cp' errors if processor.zip is expected
+             echo "Creating empty processor.zip placeholder."
              touch ../../processor.zip
           fi
           cd ../..
+          echo "Backend packaging complete."
+
 
       - name: Deploy CloudFormation stack with monitoring
         id: deploy_stack
         run: |
+          echo "Deploying CloudFormation stack: $STACK_NAME..."
           DEV_MODE="${{ github.event.inputs.development_mode }}"
           if [ -z "$DEV_MODE" ]; then DEV_MODE="false"; fi
           EXISTING_VPC_ID="${{ github.event.inputs.existing_vpc_id }}"
           EXISTING_VPC_ID_LOWER=$(echo "$EXISTING_VPC_ID" | tr '[:upper:]' '[:lower:]')
           if [ -z "$EXISTING_VPC_ID" ] || [ "$EXISTING_VPC_ID_LOWER" = "new" ]; then EXISTING_VPC_ID=""; fi
+          echo "Using DevelopmentMode: $DEV_MODE, ExistingVPCId: '$EXISTING_VPC_ID'"
           cd aws
           aws cloudformation deploy \
             --template-file cloudformation.yaml \
@@ -124,29 +151,36 @@ jobs:
               DevelopmentMode="$DEV_MODE" \
               ExistingVPCId="$EXISTING_VPC_ID" \
             --no-fail-on-empty-changeset
+          echo "✅ CloudFormation deployment initiated."
+
 
       - name: Extract CloudFormation outputs
         id: cfn_outputs
         run: |
+          echo "Extracting CloudFormation outputs..."
           get_output() {
-            # Added retry logic for fetching outputs as CFN might take time
+            local output_key="$1"
             local output_value=""
             local attempt=1
-            local max_attempts=5
-            local wait_time=5
+            local max_attempts=6 # Increased attempts
+            local wait_time=10 # Increased initial wait
+
             while [ $attempt -le $max_attempts ]; do
-              output_value=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text 2>/dev/null)
-              if [ -n "$output_value" ]; then
+              # Query outputs, redirect stderr to null, handle potential empty output gracefully
+              output_value=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='$output_key'].OutputValue" --output text 2>/dev/null || echo "")
+              if [ -n "$output_value" ] && [ "$output_value" != "None" ]; then
                 echo "$output_value"
                 return 0
               fi
-              echo "Waiting for output '$1' (attempt $attempt/$max_attempts)..."
+              echo "⏳ Waiting for CloudFormation output '$output_key' (attempt $attempt/$max_attempts)..."
               sleep $wait_time
               attempt=$((attempt + 1))
             done
-            echo "::error::Failed to get CloudFormation output '$1' after $max_attempts attempts."
+            echo "::error::Failed to get CloudFormation output '$output_key' after $max_attempts attempts."
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" || echo "Failed to describe stack $STACK_NAME"
             exit 1
           }
+          # Use extracted outputs immediately to set GITHUB_OUTPUT
           echo "function_name=$(get_output BackendLambdaName)" >> $GITHUB_OUTPUT
           echo "subscriber_table=$(get_output SubscriberTableName)" >> $GITHUB_OUTPUT
           echo "audit_table=$(get_output AuditLogTableName)" >> $GITHUB_OUTPUT
@@ -157,55 +191,71 @@ jobs:
           echo "mig_processor_name=$(get_output MigrationProcessorFunctionName)" >> $GITHUB_OUTPUT
           echo "legacy_db_secret_arn=$(get_output LegacyDBSecretArn)" >> $GITHUB_OUTPUT
           echo "legacy_db_host=$(get_output LegacyDBEndpoint)" >> $GITHUB_OUTPUT
+          echo "✅ CloudFormation outputs extracted."
 
       - name: Set Frontend API URL
         run: |
+          echo "Setting frontend API URL..."
           echo "REACT_APP_API_URL=https://${{ steps.cfn_outputs.outputs.api_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod" > frontend/.env
+          echo "✅ Frontend API URL set in frontend/.env"
 
       - name: Build and deploy frontend
         run: |
+          echo "Building and deploying frontend..."
           cd frontend
+          echo "Running npm ci..."
           npm ci
+          echo "Running npm run build..."
           npm run build
           # Robustly extract bucket name from HTTP or HTTPS URL
           BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|https*://\([^.]*\)\.s3-website.*|\1|p')
           if [ -z "$BUCKET_NAME" ]; then echo "::error::Could not extract bucket name from FrontendURL: ${{ steps.cfn_outputs.outputs.frontend_url }}"; exit 1; fi
-          echo "Deploying frontend to bucket: $BUCKET_NAME"
+          echo "Deploying frontend build to bucket: s3://$BUCKET_NAME"
+          # Sync immutable assets first with long cache
           aws s3 sync build/ "s3://$BUCKET_NAME" --delete --cache-control "public, max-age=31536000, immutable" --exclude "*.html" --exclude "service-worker.js" --exclude "asset-manifest.json" --exclude "robots.txt"
+          # Sync mutable assets with no-cache/revalidate
           aws s3 sync build/ "s3://$BUCKET_NAME" --cache-control "public, max-age=0, must-revalidate" --include "*.html" --include "service-worker.js" --include "asset-manifest.json" --include "robots.txt"
-
+          echo "✅ Frontend deployed."
 
       - name: Deploy backend Lambda with retries
+        id: deploy_backend_lambda # Give step an ID
         run: |
+          echo "Deploying backend Lambda code..."
           for i in {1..3}; do
-            if aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --zip-file fileb://backend.zip; then break; fi
+            if aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.function_name }}" --zip-file fileb://backend.zip; then
+              echo "✅ Backend Lambda code deployment successful on attempt $i."
+              exit 0 # Exit successfully
+            fi
             echo "⚠️ Attempt $i failed to update backend Lambda code, retrying in 5s..."
             if [ $i -eq 3 ]; then
               echo "::error::Failed to deploy backend Lambda code after 3 attempts."
-              exit 1
+              exit 1 # Exit with error
             fi
             sleep 5
           done
-          echo "✅ Backend Lambda code deployed."
 
       - name: Wait for Backend Lambda code update to complete
+        # Only run if the previous step was successful
+        if: steps.deploy_backend_lambda.outcome == 'success'
         run: |
-          set -e # Ensure script exits on error
+          set -e
           echo "⏳ Waiting for Backend Lambda function code update to stabilize..."
           aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.function_name }}"
-          echo "✅ Backend Lambda function code update is complete"
+          echo "✅ Backend Lambda function code update is complete."
 
       - name: Configure backend Lambda environment with retry
+        # Only run if the previous steps were successful
+        if: steps.deploy_backend_lambda.outcome == 'success'
         run: |
           configure_lambda_env() {
             local func_name="${{ steps.cfn_outputs.outputs.function_name }}"
             local max_attempts=5
             local attempt=1
-            local wait_time=5
+            local wait_time=5 # Start with 5 seconds
 
             echo "⚙️ Configuring backend Lambda environment for $func_name..."
-            ENV_JSON=$(cat <<EOF
-            {
+            # Use direct JSON string assignment (ensure quotes are correct)
+            ENV_JSON='{
               "Variables": {
                 "FRONTEND_DOMAIN_URL": "${{ steps.cfn_outputs.outputs.frontend_url }}",
                 "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
@@ -215,12 +265,11 @@ jobs:
                 "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
                 "STACK_NAME": "${{ env.STACK_NAME }}"
               }
-            }
-            EOF
-            )
+            }'
 
             while [ $attempt -le $max_attempts ]; do
               echo "🔄 Attempt $attempt/$max_attempts: Updating environment for $func_name..."
+              # Try updating, capture exit code, redirect stderr to /dev/null
               aws lambda update-function-configuration \
                 --function-name "$func_name" \
                 --environment "$ENV_JSON" 2>/dev/null
@@ -229,62 +278,75 @@ jobs:
               if [ $EXIT_CODE -eq 0 ]; then
                 echo "✅ Environment configuration successful for $func_name"
                 echo "⏳ Waiting for environment update to stabilize for $func_name..."
+                # Wait for the configuration update to complete before returning success
                 aws lambda wait function-updated --function-name "$func_name"
                 echo "✅ Environment update complete for $func_name."
-                return 0
-              elif [ $EXIT_CODE -eq 254 ]; then
+                return 0 # Success
+              elif [ $EXIT_CODE -eq 254 ]; then # Specific exit code for ResourceConflictException
                 echo "⚠️ ResourceConflictException detected for $func_name, waiting ${wait_time}s before retry..."
                 sleep $wait_time
-                wait_time=$((wait_time * 2))
+                wait_time=$((wait_time * 2)) # Exponential backoff
+                # Cap max wait time to avoid excessively long waits
+                if [ $wait_time -gt 60 ]; then wait_time=60; fi
                 attempt=$((attempt + 1))
               else
+                 # If it's a different error, fail immediately
                  echo "❌ An unexpected error occurred during configuration update for $func_name (Exit Code: $EXIT_CODE)."
-                 # Optionally, get last update status for more info
-                 aws lambda get-function-configuration --function-name "$func_name" --query 'LastUpdateStatus'
-                 return 1
+                 # Try to get more info about the last update status
+                 aws lambda get-function-configuration --function-name "$func_name" --query 'LastUpdateStatus' || echo "Could not get last update status."
+                 return 1 # Failure
               fi
             done
 
             echo "❌ Failed to configure environment for $func_name after $max_attempts attempts"
-            return 1
+            return 1 # Failure after max attempts
           }
 
+          # Execute the function; the script will exit if the function returns non-zero
           configure_lambda_env
 
       - name: Deploy migration processor Lambda
+        id: deploy_migration_processor # Give step an ID
         run: |
           # Check if processor.zip exists and is not empty
           if [ ! -s processor.zip ]; then
             echo "⏩ Skipping migration processor deployment: processor.zip not found or is empty."
-            exit 0 # Exit step successfully
+            # Set an output to indicate skipping
+            echo "skipped=true" >> $GITHUB_OUTPUT
+            exit 0 # Exit step successfully, allowing workflow to continue
           fi
+          echo "skipped=false" >> $GITHUB_OUTPUT # Indicate that the step is running
+          echo "Deploying migration processor Lambda code..."
           BUCKET_NAME=$(echo "${{ steps.cfn_outputs.outputs.frontend_url }}" | sed -n 's|https*://\([^.]*\)\.s3-website.*|\1|p')
-          if [ -z "$BUCKET_NAME" ]; then echo "::error::Could not extract bucket name for processor upload."; exit 1; fi
-          echo "Uploading processor.zip to s3://$BUCKET_NAME/processor.zip"
+          if [ -z "$BUCKET_NAME" ]; then echo "::error::Could not extract bucket name for processor upload from URL: ${{ steps.cfn_outputs.outputs.frontend_url }}"; exit 1; fi
+          echo "   Uploading processor.zip to s3://$BUCKET_NAME/processor.zip"
           aws s3 cp processor.zip "s3://$BUCKET_NAME/processor.zip"
-          echo "Updating migration processor Lambda code..."
+          echo "   Updating migration processor Lambda code..."
           for i in {1..3}; do
-            if aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"; then break; fi
+            if aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"; then
+               echo "✅ Migration processor Lambda code deployed successfully on attempt $i."
+               exit 0 # Success
+            fi
             echo "⚠️ Attempt $i failed to update migration processor Lambda code, retrying in 5s..."
             if [ $i -eq 3 ]; then
               echo "::error::Failed to deploy migration processor Lambda code after 3 attempts."
-              exit 1
+              exit 1 # Failure
             fi
             sleep 5
           done
-          echo "✅ Migration processor Lambda code deployed."
-
 
       - name: Wait for Migration Processor Lambda code update to complete
-        if: steps.deploy_migration_processor.outcome == 'success' # Only run if the previous step didn't skip
+        # Only run if the deployment step ran and succeeded
+        if: steps.deploy_migration_processor.outputs.skipped == 'false' && steps.deploy_migration_processor.outcome == 'success'
         run: |
           set -e
           echo "⏳ Waiting for Migration Processor Lambda function code update to stabilize..."
           aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}"
-          echo "✅ Migration Processor Lambda function code update is complete"
+          echo "✅ Migration Processor Lambda function code update is complete."
 
       - name: Configure migration processor environment with retry
-        if: steps.deploy_migration_processor.outcome == 'success' # Only run if the processor was deployed
+        # Only run if the deployment step ran and succeeded
+        if: steps.deploy_migration_processor.outputs.skipped == 'false' && steps.deploy_migration_processor.outcome == 'success'
         run: |
           configure_processor_env() {
             local func_name="${{ steps.cfn_outputs.outputs.mig_processor_name }}"
@@ -293,8 +355,8 @@ jobs:
             local wait_time=5
 
             echo "⚙️ Configuring migration processor environment for $func_name..."
-            ENV_JSON=$(cat <<EOF
-            {
+            # Use direct JSON string assignment
+            ENV_JSON='{
               "Variables": {
                 "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
                 "AUDIT_LOG_TABLE_NAME": "${{ steps.cfn_outputs.outputs.audit_table }}",
@@ -303,9 +365,7 @@ jobs:
                 "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
                 "STACK_NAME": "${{ env.STACK_NAME }}"
               }
-            }
-            EOF
-            )
+            }'
 
             while [ $attempt -le $max_attempts ]; do
               echo "🔄 Attempt $attempt/$max_attempts: Updating environment for $func_name..."
@@ -324,10 +384,11 @@ jobs:
                   echo "⚠️ ResourceConflictException detected for $func_name, waiting ${wait_time}s before retry..."
                   sleep $wait_time
                   wait_time=$((wait_time * 2))
+                  if [ $wait_time -gt 60 ]; then wait_time=60; fi
                   attempt=$((attempt + 1))
               else
                   echo "❌ An unexpected error occurred during configuration update for $func_name (Exit Code: $EXIT_CODE)."
-                  aws lambda get-function-configuration --function-name "$func_name" --query 'LastUpdateStatus'
+                  aws lambda get-function-configuration --function-name "$func_name" --query 'LastUpdateStatus' || echo "Could not get last update status."
                   return 1
               fi
             done
@@ -339,26 +400,46 @@ jobs:
           configure_processor_env
 
       - name: Configure S3 bucket notifications
-        if: steps.deploy_migration_processor.outcome == 'success' # Only configure if processor was deployed
+        # Only configure if the processor deployment step ran and succeeded
+        if: steps.deploy_migration_processor.outputs.skipped == 'false' && steps.deploy_migration_processor.outcome == 'success'
         run: |
+          echo "Configuring S3 bucket notifications..."
           PROCESSOR_ARN=$(aws lambda get-function --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --query 'Configuration.FunctionArn' --output text)
+          if [ -z "$PROCESSOR_ARN" ]; then echo "::error::Could not get ARN for migration processor Lambda."; exit 1; fi
+          echo "   Processor ARN: $PROCESSOR_ARN"
+
           max_attempts=3
           attempt=1
-          wait_time=10
+          wait_time=10 # Increased wait time as permissions might take longer
+
+          # Ensure AWS_ACCOUNT_ID is available
+          if [ -z "$AWS_ACCOUNT_ID" ]; then
+            echo "::error::AWS_ACCOUNT_ID secret is not set in the environment. Cannot add Lambda permission."
+            exit 1
+          fi
+          echo "   Using AWS Account ID: $AWS_ACCOUNT_ID" # For verification
+
           while [ $attempt -le $max_attempts ]; do
-            echo "🔄 Attempt $attempt/$max_attempts: Configuring S3 bucket notifications..."
             # Add permission for S3 to invoke Lambda first
-            echo "   Adding Lambda permission for S3..."
+            echo "   🔄 Attempt $attempt/$max_attempts: Adding Lambda permission for S3..."
+            # Generate a unique statement ID using timestamp and a short random string
+            STATEMENT_ID="s3-invoke-$(date +%s)-$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 4)"
+            echo "      Using Statement ID: $STATEMENT_ID"
             aws lambda add-permission \
-              --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
-              --statement-id s3-invoke-permission-$(date +%s) \
+              --function-name "$PROCESSOR_ARN" \
+              --statement-id "$STATEMENT_ID" \
               --action "lambda:InvokeFunction" \
               --principal s3.amazonaws.com \
               --source-arn "arn:aws:s3:::${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" \
-              --source-account "${{ secrets.AWS_ACCOUNT_ID }}" || echo "Permission might already exist, continuing..." # Use your AWS Account ID secret
+              --source-account "$AWS_ACCOUNT_ID" \
+              --no-cli-pager || echo "   ⚠️ Permission might already exist or failed to add (continuing to notification config)..."
+
+            # Wait a few seconds after trying to add permission for propagation
+            echo "   Waiting 5s for permission propagation..."
+            sleep 5
 
             # Now try to put notification config
-             echo "   Attempting to set bucket notification..."
+            echo "   🔄 Attempt $attempt/$max_attempts: Setting bucket notification..."
             if aws s3api put-bucket-notification-configuration --bucket "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}" --notification-configuration '{
               "LambdaFunctionConfigurations": [{
                 "Id": "csv-upload-processor",
@@ -373,15 +454,18 @@ jobs:
                   }
                 }
               }]
-            }' --no-cli-pager; then # Added --no-cli-pager for cleaner logs
+            }' --no-cli-pager; then
               echo "✅ S3 bucket notifications configured successfully"
-              break
+              break # Exit loop on success
             else
               echo "⚠️ Failed to configure S3 notifications (attempt $attempt), waiting ${wait_time}s before retry..."
               sleep $wait_time
               attempt=$((attempt + 1))
               if [ $attempt -gt $max_attempts ]; then
                  echo "::error::Failed to configure S3 notifications after $max_attempts attempts. Please check Lambda permissions and S3 event configuration manually."
+                 # Attempt to remove the permission that might have been added
+                 echo "   Attempting to remove potentially added Lambda permission ($STATEMENT_ID)..."
+                 aws lambda remove-permission --function-name "$PROCESSOR_ARN" --statement-id "$STATEMENT_ID" --no-cli-pager || echo "   Could not remove potentially added Lambda permission."
                  exit 1
               fi
             fi
@@ -390,11 +474,30 @@ jobs:
       - name: Deploy API Gateway
         run: |
           echo "🚀 Deploying API Gateway stage 'prod'..."
-          DEPLOY_ID=$(aws apigateway create-deployment --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" --description "Deployment triggered by GitHub Actions $(date)" --query "id" --output text)
-          if [ -z "$DEPLOY_ID" ]; then echo "::error::Failed to create API Gateway deployment."; exit 1; fi
-          echo "   Created deployment ID: $DEPLOY_ID"
+          # Add retry logic for deployment creation as well
+          max_attempts_gw=3
+          attempt_gw=1
+          wait_time_gw=5
+          DEPLOY_ID=""
+          while [ $attempt_gw -le $max_attempts_gw ]; do
+            echo "   Attempt $attempt_gw/$max_attempts_gw: Creating deployment..."
+            # Use timestamp for unique description
+            DEPLOY_ID=$(aws apigateway create-deployment --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" --description "GitHub Actions $(date +%s)" --query "id" --output text 2>/dev/null || echo "")
+            if [ -n "$DEPLOY_ID" ]; then
+              echo "   Created deployment ID: $DEPLOY_ID"
+              break
+            fi
+            echo "   ⚠️ Failed to create deployment (attempt $attempt_gw), waiting ${wait_time_gw}s..."
+            sleep $wait_time_gw
+            wait_time_gw=$((wait_time_gw + 5)) # Linear backoff for GW
+            attempt_gw=$((attempt_gw + 1))
+          done
+
+          if [ -z "$DEPLOY_ID" ]; then echo "::error::Failed to create API Gateway deployment after multiple attempts."; exit 1; fi
+
+          echo "   Updating stage 'prod' to deployment $DEPLOY_ID..."
           aws apigateway update-stage --rest-api-id "${{ steps.cfn_outputs.outputs.api_id }}" --stage-name prod --patch-operations op=replace,path=/deploymentId,value=$DEPLOY_ID
-          echo "✅ API Gateway stage 'prod' updated to deployment $DEPLOY_ID."
+          echo "✅ API Gateway stage 'prod' updated."
 
       - name: Run health checks
         run: |
@@ -406,12 +509,26 @@ jobs:
 
           # Check API health
           echo "   Checking API endpoint: $API_URL/health"
-          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 $API_URL/health)
-          echo "   API Health Status: $API_STATUS"
+          # Retry curl few times for API health check
+          max_attempts_hc=3
+          attempt_hc=1
+          wait_time_hc=5
+          API_STATUS=""
+          while [ $attempt_hc -le $max_attempts_hc ]; do
+            API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 $API_URL/health)
+            echo "   API Health Check Attempt $attempt_hc: Status $API_STATUS"
+            # Break if we get an expected status
+            if [[ "$API_STATUS" == "200" || "$API_STATUS" == "401" || "$API_STATUS" == "403" ]]; then
+              break
+            fi
+            sleep $wait_time_hc
+            attempt_hc=$((attempt_hc + 1))
+          done
+
           if [[ "$API_STATUS" == "200" || "$API_STATUS" == "401" || "$API_STATUS" == "403" ]]; then
             echo "✅ API health check passed (Status: $API_STATUS)"
           else
-            echo "❌ API health check failed (Status: $API_STATUS)"
+            echo "❌ API health check failed after multiple attempts (Last Status: $API_STATUS)"
             echo "--- API Response ---"
             curl -v --max-time 10 $API_URL/health || echo "Curl failed"
             exit 1
@@ -430,6 +547,7 @@ jobs:
             exit 1
           fi
 
+
       - name: Deployment complete summary
         if: success()
         run: |
@@ -445,5 +563,13 @@ jobs:
           aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --max-items 20 --output table || echo "Failed to get stack events."
           echo "--- CloudFormation Stack Resources ---"
           aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --output table || echo "Failed to get stack resources."
-          # Add Lambda logs if possible/relevant (might need specific log group names)
-          echo "Check CloudWatch logs for Lambda functions: ${{ steps.cfn_outputs.outputs.function_name }} and ${{ steps.cfn_outputs.outputs.mig_processor_name }}"
+          # Add Lambda logs if possible/relevant
+          echo "Check CloudWatch logs for Lambda functions and API Gateway execution logs."
+          # Check if function names were extracted before trying to display them
+          if [ -n "${{ steps.cfn_outputs.outputs.function_name }}" ]; then
+            echo "Backend Lambda: ${{ steps.cfn_outputs.outputs.function_name }}"
+          fi
+          # Only mention processor logs if it was deployed and name exists
+          if [ "${{ steps.deploy_migration_processor.outputs.skipped }}" == 'false' ] && [ -n "${{ steps.cfn_outputs.outputs.mig_processor_name }}" ]; then
+            echo "Migration Processor Lambda: ${{ steps.cfn_outputs.outputs.mig_processor_name }}"
+          fi
