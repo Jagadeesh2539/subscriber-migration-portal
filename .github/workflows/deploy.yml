@@ -92,6 +92,19 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
+          
+      - name: Ensure pip cache dir exists
+        run: |
+          python - <<'PY'
+          import pathlib
+          try:
+              from pip._internal.locations import USER_CACHE_DIR
+          except Exception:
+              import os
+              USER_CACHE_DIR = os.path.expanduser("~/.cache/pip")
+          pathlib.Path(USER_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+          print("Pip cache dir:", USER_CACHE_DIR)
+          PY
 
       - name: Build and package backend components
         run: |
