@@ -153,11 +153,24 @@ jobs:
       - name: Configure backend Lambda environment
         run: |
           echo "⚙️ Configuring backend Lambda environment..."
-          # Use single quotes around the Variables=... string
-          # Remove outer curly braces {}
+          # Format environment variables as a JSON string
+          ENV_JSON=$(cat <<EOF
+          {
+            "Variables": {
+              "FRONTEND_DOMAIN_URL": "${{ steps.cfn_outputs.outputs.frontend_url }}",
+              "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
+              "AUDIT_LOG_TABLE_NAME": "${{ steps.cfn_outputs.outputs.audit_table }}",
+              "MIGRATION_UPLOAD_BUCKET_NAME": "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}",
+              "LEGACY_DB_SECRET_ARN": "${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}",
+              "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
+              "STACK_NAME": "${{ env.STACK_NAME }}"
+            }
+          }
+          EOF
+          )
           aws lambda update-function-configuration \
             --function-name "${{ steps.cfn_outputs.outputs.function_name }}" \
-            --environment 'Variables=FRONTEND_DOMAIN_URL=${{ steps.cfn_outputs.outputs.frontend_url }},SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},MIGRATION_UPLOAD_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=${{ env.STACK_NAME }}'
+            --environment "$ENV_JSON" # Pass the JSON string
           echo "✅ Backend Lambda environment configured"
           
       - name: Deploy migration processor Lambda
@@ -169,11 +182,23 @@ jobs:
       - name: Configure migration processor environment
         run: |
           echo "⚙️ Configuring migration processor environment..."
-          # Use single quotes around the Variables=... string
-          # Remove outer curly braces {}
+          # Format environment variables as a JSON string
+          ENV_JSON=$(cat <<EOF
+          {
+            "Variables": {
+              "SUBSCRIBER_TABLE_NAME": "${{ steps.cfn_outputs.outputs.subscriber_table }}",
+              "AUDIT_LOG_TABLE_NAME": "${{ steps.cfn_outputs.outputs.audit_table }}",
+              "REPORT_BUCKET_NAME": "${{ steps.cfn_outputs.outputs.mig_upload_bucket }}",
+              "LEGACY_DB_SECRET_ARN": "${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }}",
+              "LEGACY_DB_HOST": "${{ steps.cfn_outputs.outputs.legacy_db_host }}",
+              "STACK_NAME": "${{ env.STACK_NAME }}"
+            }
+          }
+          EOF
+          )
           aws lambda update-function-configuration \
             --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" \
-            --environment 'Variables=SUBSCRIBER_TABLE_NAME=${{ steps.cfn_outputs.outputs.subscriber_table }},AUDIT_LOG_TABLE_NAME=${{ steps.cfn_outputs.outputs.audit_table }},REPORT_BUCKET_NAME=${{ steps.cfn_outputs.outputs.mig_upload_bucket }},LEGACY_DB_SECRET_ARN=${{ steps.cfn_outputs.outputs.legacy_db_secret_arn }},LEGACY_DB_HOST=${{ steps.cfn_outputs.outputs.legacy_db_host }},STACK_NAME=${{ env.STACK_NAME }}'
+            --environment "$ENV_JSON" # Pass the JSON string
           echo "✅ Migration processor environment configured"
           
       - name: Wait for Lambda functions ready
