@@ -179,6 +179,29 @@ jobs:
           aws s3 cp processor.zip "s3://$BUCKET_NAME/processor.zip"
           aws lambda update-function-code --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" --s3-bucket "$BUCKET_NAME" --s3-key "processor.zip"
 
+      - name: Wait for Lambda functions code updates to complete
+        run: |
+          # Add strict error checking
+          set -e
+          set -o pipefail
+
+          echo "⏳ Waiting for Lambda function code updates (in parallel)..."
+          # Start the first wait command in the background
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.function_name }}" &
+          PID1=$! # Store PID
+
+          # Start the second wait command in the background
+          aws lambda wait function-updated --function-name "${{ steps.cfn_outputs.outputs.mig_processor_name }}" &
+          PID2=$! # Store PID
+
+          # Wait for both background commands to finish
+          # Thanks to "set -e", the script will exit immediately if either 'wait' command fails
+          wait $PID1
+          wait $PID2
+
+          echo "✅ Both Lambda functions code updates are complete"
+
+
       - name: Configure migration processor environment
         run: |
           echo "⚙️ Configuring migration processor environment..."
