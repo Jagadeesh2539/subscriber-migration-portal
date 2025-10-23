@@ -5,7 +5,6 @@ import os
 import boto3
 import uuid
 from datetime import datetime
-# ADD: Import for DynamoDB conditions
 from boto3.dynamodb.conditions import Attr
 
 mig_bp = Blueprint('migration', __name__)
@@ -18,8 +17,6 @@ if not MIGRATION_JOBS_TABLE_NAME or not MIGRATION_UPLOAD_BUCKET_NAME:
     raise ValueError("MIGRATION_JOBS_TABLE_NAME or MIGRATION_UPLOAD_BUCKET_NAME environment variables are not set")
 
 dynamodb = boto3.resource('dynamodb')
-										
-																						  
 
 try:
     jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
@@ -82,10 +79,12 @@ def get_migration_status(migration_id):
         if not status:
             return jsonify(msg='Job not found'), 404
         
-        # ADD: Ensure JobId is in response for frontend
+        # Ensure JobId is in response for frontend
         status['JobId'] = migration_id
         
         return jsonify(status)
+    except Exception as e:  # ← FIXED: Added missing except block
+        return jsonify(msg=f'Error getting job status: {str(e)}'), 500
 
 @mig_bp.route('/report/<migration_id>', methods=['GET'])
 @login_required()
@@ -105,7 +104,7 @@ def get_migration_report(migration_id):
         download_url = s3_client.generate_presigned_url(
             'get_object',
             Params={
-                'Bucket': MIGRATION_UPLOAD_BUCKET_NAME, # Report is in the same bucket
+                'Bucket': MIGRATION_UPLOAD_BUCKET_NAME,
                 'Key': report_key,
                 'ResponseContentDisposition': f'attachment; filename="report-{migration_id}.csv"'
             },
@@ -116,10 +115,7 @@ def get_migration_report(migration_id):
 
     except Exception as e:
         return jsonify(msg=f'Error generating report URL: {str(e)}'), 500
-        
 
-
-# ADD: New endpoint at the end of the file
 @mig_bp.route('/jobs', methods=['GET'])
 @login_required()
 def get_migration_jobs():
@@ -146,4 +142,3 @@ def get_migration_jobs():
         
     except Exception as e:
         return jsonify(msg=f'Error getting migration jobs: {str(e)}'), 500
-
