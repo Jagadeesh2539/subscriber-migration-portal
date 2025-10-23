@@ -46,7 +46,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
         throw new Error(`S3 Upload Failed: Server responded with status ${uploadResponse.status}`);
       }
 
-      // FIXED: Add job with all expected fields and proper initialization
+      // Add job with all expected fields and proper initialization
       const newJob = {
         JobId: migrationId,
         migrationId: migrationId, // Backward compatibility
@@ -68,7 +68,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       setJobs(prevJobs => [newJob, ...(prevJobs || [])]);
       setMessage({ type: 'success', text: `Upload successful! Job ${migrationId.substring(0,8)}... processing will start shortly.` });
       
-      // FIXED: Don't clear file immediately to prevent UI flash
+      // Don't clear file immediately to prevent UI flash
       setTimeout(() => setFile(null), 1000);
 
     } catch (err) {
@@ -84,8 +84,8 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       case 'COMPLETED': return 'success';
       case 'FAILED': return 'error';
       case 'IN_PROGRESS': return 'info';
-      case 'PENDING_UPLOAD': return 'warning'; // FIXED: Add proper color
-      default: return 'default'; // FIXED: Changed from 'primary' to 'default'
+      case 'PENDING_UPLOAD': return 'warning';
+      default: return 'default';
     }
   };
   
@@ -100,7 +100,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
     return 0;
   };
 
-  // ADDED: Copy to clipboard functionality
+  // Copy to clipboard functionality
   const copyToClipboard = (jobId) => {
     navigator.clipboard.writeText(jobId).then(() => {
       setCopySuccess(`Copied Job ID: ${jobId.substring(0, 8)}...`);
@@ -115,7 +115,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
     setCopySuccess('');
   };
 
-  // ADDED: Download report handler
+  // Download report handler
   const handleDownloadReport = async (jobId) => {
     if (!jobId) return;
     
@@ -151,7 +151,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
             onChange={e => setFile(e.target.files[0])} 
             style={{ display: 'none' }} 
             id="file-upload"
-            key={file ? file.name : 'empty'} // FIXED: Force re-render when file changes
+            key={file ? file.name : 'empty'}
           />
           <label htmlFor="file-upload">
             <Button variant="outlined" component="span" startIcon={<FileDownload />}>
@@ -162,7 +162,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
           <Typography variant="body2" sx={{ 
             flexGrow: 1, 
             color: file ? 'text.primary' : 'text.secondary',
-            fontStyle: file ? 'normal' : 'italic' // FIXED: Add italic for placeholder text
+            fontStyle: file ? 'normal' : 'italic'
           }}>
             {file ? file.name : 'Select a CSV file (must contain uid, imsi, or msisdn header)'}
           </Typography>
@@ -198,18 +198,18 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
               <TableCell>Migrated</TableCell>
               <TableCell>Skipped</TableCell>
               <TableCell>Failed</TableCell>
-              <TableCell>Actions</TableCell> {/* ADDED: Actions column */}
+              <TableCell>Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {!jobs || jobs.length === 0 ? ( {/* FIXED: Handle null/undefined jobs */}
+            {!jobs || jobs.length === 0 ? (
               <TableRow><TableCell colSpan={9} align="center">No migration jobs found.</TableCell></TableRow>
             ) : (
               jobs.map(job => {
                 const jobId = job.JobId || job.migrationId;
                 return (
                   <TableRow key={jobId} hover>
-                    {/* FIXED: Job ID with copy button */}
+														  
                     <TableCell>
                       <Box display="flex" alignItems="center">
                         <Tooltip title={jobId}>
@@ -259,7 +259,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
                     }}>
                       {job.failed ?? '-'}
                     </TableCell>
-                    {/* ADDED: Actions column with download button */}
+																	  
                     <TableCell>
                       {(job.status === 'COMPLETED' || job.status === 'FAILED') && job.reportS3Key && (
                         <Tooltip title="Download Report">
@@ -280,7 +280,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
         </Table>
       </TableContainer>
 
-      {/* ADDED: Snackbar for copy feedback */}
+											   
       <Snackbar
         open={!!copySuccess}
         autoHideDuration={3000}
@@ -293,11 +293,11 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 };
 
 // --- Sub-Component for Migration Reports Tab ---
-const MigrationReports = ({ setMessage, jobs }) => { // ADDED: jobs prop
+const MigrationReports = ({ setMessage, jobs }) => {
   const [loadingReports] = useState(false);
   const [jobIdInput, setJobIdInput] = useState('');
 
-  // FIXED: Show completed jobs from current session
+  // Show completed jobs from current session
   const completedJobs = jobs ? jobs.filter(job => job.status === 'COMPLETED').slice(0, 10) : [];
 
   const handleDownloadReport = async (migrationId) => {
@@ -308,7 +308,7 @@ const MigrationReports = ({ setMessage, jobs }) => { // ADDED: jobs prop
     setMessage({ type: 'info', text: `Requesting download URL for report ${migrationId.substring(0,8)}...` });
     try {
       const { data } = await API.get(`/migration/report/${migrationId.trim()}`);
-      window.open(data.downloadUrl, '_blank'); // FIXED: Use window.open
+      window.open(data.downloadUrl, '_blank');
       setTimeout(() => setMessage({ type: '', text: '' }), 2000);
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data?.msg || `Could not get report for Job ${migrationId.substring(0,8)}.` });
@@ -343,7 +343,7 @@ const MigrationReports = ({ setMessage, jobs }) => { // ADDED: jobs prop
         </Box>
       </Card>
       
-      {/* FIXED: Show actual completed jobs */}
+											   
       <Typography variant="h6" sx={{ mt: 4, mb: 1 }}>Recent Completed Jobs (from this session)</Typography>
       <TableContainer component={Paper}>
         <Table size="small">
@@ -409,7 +409,7 @@ export default function BulkMigration() {
   const [message, setMessage] = useState({ type: '', text: '' });
   const [uploading, setUploading] = useState(false);
   
-  // FIXED: Initialize jobs from localStorage with error handling
+  // Initialize jobs from localStorage with error handling
   const [jobs, setJobs] = useState(() => {
     try {
       const storedJobs = localStorage.getItem('migrationJobs');
@@ -426,7 +426,7 @@ export default function BulkMigration() {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const userRole = user.role || 'guest';
   
-  // ADDED: Fetch recent jobs from backend API
+  // Fetch recent jobs from backend API
   const fetchRecentJobs = useCallback(async () => {
     try {
       console.log('Fetching recent jobs from API...');
@@ -454,7 +454,7 @@ export default function BulkMigration() {
     fetchRecentJobs();
   }, [fetchRecentJobs]);
 
-  // FIXED: Persist jobs to localStorage whenever jobs change
+  // Persist jobs to localStorage whenever jobs change
   useEffect(() => {
     try {
       console.log('Saving jobs to localStorage:', jobs.length, 'jobs');
@@ -464,7 +464,7 @@ export default function BulkMigration() {
     }
   }, [jobs]);
 
-  // FIXED: Improved polling logic with better error handling
+  // Improved polling logic with better error handling
   useEffect(() => {
     const activeJobs = jobs.filter(job => job.status === 'IN_PROGRESS' || job.status === 'PENDING_UPLOAD');
     if (activeJobs.length === 0) return;
@@ -534,7 +534,7 @@ export default function BulkMigration() {
         </Tabs>
       </Box>
 
-      {/* FIXED: Pass jobs to both components */}
+												 
       {activeTab === 0 && <BulkUploadTool 
           jobs={jobs} 
           setJobs={setJobs} 
