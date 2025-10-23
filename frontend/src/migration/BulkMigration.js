@@ -48,7 +48,16 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       }
 
       // 3. Add the new job to the UI list to start status polling
-      setJobs(prevJobs => [{ migrationId, status: 'IN_PROGRESS', isSimulateMode, started_by: userRole }, ...prevJobs]);
+     // 3. Add the new job to the UI list to start status polling
+setJobs(prevJobs => [{ 
+  JobId: migrationId,  // ← Use JobId consistently
+  migrationId: migrationId, // Keep for backward compatibility
+  status: 'PENDING_UPLOAD', // ← Start with PENDING_UPLOAD, not IN_PROGRESS
+  isSimulateMode, 
+  startedBy: userRole,
+  startedAt: new Date().toISOString()
+}, ...prevJobs]);
+
       setMessage({ type: 'success', text: `Upload successful! Job ${migrationId.substring(0,8)}... is now processing.` });
       setFile(null); // Clear the file input after successful upload
 
@@ -149,8 +158,10 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
               <TableRow><TableCell colSpan={8} align="center">No migration jobs initiated yet.</TableCell></TableRow>
             ) : (
               jobs.map(job => (
-                <TableRow key={job.migrationId}>
-                  <TableCell title={job.migrationId}>{job.migrationId.substring(0, 8)}...</TableCell>
+  <TableRow key={job.JobId || job.migrationId}>
+    <TableCell title={job.JobId || job.migrationId}>
+      {(job.JobId || job.migrationId).substring(0, 8)}...
+    </TableCell>
                   <TableCell><Chip label={job.status} color={getStatusColor(job.status)} size="small" /></TableCell>
                   <TableCell>
                     {(job.status === 'IN_PROGRESS' || job.status === 'COMPLETED') ? (

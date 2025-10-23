@@ -56,7 +56,7 @@ def lambda_handler(event, context):
         migration_id = metadata.get('jobid')
         is_simulate_mode = metadata.get('issimulatemode', 'false').lower() == 'true'
         if not migration_id:
-            raise Exception("JobId not found in S3 metadata.")
+            raise Exception("Migration ID not found in S3 metadata.")
     except Exception as e:
         print(f"Error getting metadata: {e}")
         if 'migration_id' in locals() and migration_id:
@@ -124,7 +124,7 @@ def lambda_handler(event, context):
         
         jobs_table.update_item(
             Key={'JobId': migration_id},
-            UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound=:nf, failed=:f, reportS3Key=:rk",
+            UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, not_found_in_legacy=:nf, failed=:f, reportS3Key=:rk",
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={':s': 'COMPLETED', ':m': counts['migrated'], ':ap': counts['already_present'], ':nf': counts['not_found_in_legacy'], ':f': counts['failed'], ':rk': report_key}
         )
