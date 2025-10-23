@@ -7,6 +7,11 @@ import uuid
 from datetime import datetime
 from boto3.dynamodb.conditions import Attr, Key
 import json
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 mig_bp = Blueprint('migration', __name__)
 
@@ -24,7 +29,7 @@ try:
     jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
     subscriber_table = dynamodb.Table(SUBSCRIBER_TABLE_NAME) if SUBSCRIBER_TABLE_NAME else None
 except Exception as e:
-    print(f"Error creating DynamoDB table reference: {e}")
+    logger.error(f"Error creating DynamoDB table reference: {e}")
     jobs_table = None
     subscriber_table = None
 
@@ -178,21 +183,119 @@ def start_audit_sync():
         log_audit(user['sub'], 'START_AUDIT_SYNC', {}, f'FAILED: {str(e)}')
         return jsonify(msg=f'Error initiating audit sync: {str(e)}'), 500
 
+# ENHANCED STATUS ENDPOINT - THIS IS THE MAIN FIX
 @mig_bp.route('/status/<job_id>', methods=['GET'])
 @login_required()
 def get_job_status(job_id):
+    """Enhanced job status endpoint with comprehensive error handling and logging"""
     try:
+        logger.info(f"[Status Request] Job ID: {job_id} from user: {request.environ['user']['sub']}")
+        
+        if not jobs_table:
+            logger.error("[Status Error] Jobs table not initialized")
+            return jsonify({
+                'error': 'Database not available',
+                'JobId': job_id,
+                'status': 'ERROR'
+            }), 500
+        
+        # Query DynamoDB for job
         response = jobs_table.get_item(Key={'JobId': job_id})
-        status = response.get('Item')
-        if not status:
-            return jsonify(msg='Job not found'), 404
+									 
+					  
+													
         
-        # Ensure JobId is in response for frontend
-        status['JobId'] = job_id
+        if 'Item' not in response:
+            logger.warning(f"[Status Error] Job {job_id} not found in database")
+            return jsonify({
+                'error': 'Job not found',
+                'msg': f'Migration job {job_id} was not found. It may have been deleted or expired.',
+                'JobId': job_id,
+                'status': 'NOT_FOUND'
+            }), 404
         
-        return jsonify(status)
+        job_data = response['Item']
+        
+        # Check if user has access to this job
+        job_owner = job_data.get('startedBy')
+        current_user = request.environ['user']['sub']
+        if job_owner != current_user:
+            logger.warning(f"[Status Error] User {current_user} tried to access job {job_id} owned by {job_owner}")
+            return jsonify({
+                'error': 'Access denied',
+                'msg': 'You do not have permission to view this job.',
+                'JobId': job_id,
+                'status': 'ACCESS_DENIED'
+            }), 403
+        
+        # Build standardized response
+        status_response = {
+            'JobId': job_data.get('JobId', job_id),
+            'status': job_data.get('status', 'UNKNOWN'),
+            'statusMessage': job_data.get('statusMessage', ''),
+            'jobType': job_data.get('jobType', 'MIGRATION'),
+            'startedBy': job_data.get('startedBy'),
+            'startedAt': job_data.get('startedAt'),
+            'lastUpdated': job_data.get('lastUpdated'),
+            'isSimulateMode': job_data.get('isSimulateMode', False),
+            
+            # Progress data
+            'totalRecords': job_data.get('totalRecords'),
+            'migrated': job_data.get('migrated'),
+            'failed': job_data.get('failed'), 
+            'alreadyPresent': job_data.get('alreadyPresent'),
+            'deleted': job_data.get('deleted'),  # For deletion jobs
+            'not_found_in_legacy': job_data.get('not_found_in_legacy'),
+            'not_found_in_cloud': job_data.get('not_found_in_cloud'),
+            
+            # Report and error data
+            'reportS3Key': job_data.get('reportS3Key'),
+            'failureReason': job_data.get('failureReason') or (
+                job_data.get('statusMessage') if job_data.get('status') == 'FAILED' else None
+            ),
+            
+            # Additional metadata
+            'syncDirection': job_data.get('syncDirection'),  # For audit jobs
+            'targetSystem': job_data.get('targetSystem'),    # For deletion jobs
+            'copiedFrom': job_data.get('copiedFrom')         # If copied from another job
+        }
+        
+        # Add computed progress percentage
+        total = status_response.get('totalRecords', 0)
+        if total and total > 0:
+            processed = sum(filter(None, [
+                status_response.get('migrated', 0),
+                status_response.get('failed', 0),
+                status_response.get('alreadyPresent', 0),
+                status_response.get('deleted', 0),
+                status_response.get('not_found_in_legacy', 0),
+                status_response.get('not_found_in_cloud', 0)
+            ]))
+            status_response['progressPercent'] = min(100, int((processed / total) * 100))
+        else:
+            # Default progress based on status
+            if status_response['status'] in ['COMPLETED', 'FAILED', 'CANCELLED']:
+                status_response['progressPercent'] = 100
+            elif status_response['status'] == 'IN_PROGRESS':
+                status_response['progressPercent'] = 50  # Assume 50% if no detailed data
+            else:
+                status_response['progressPercent'] = 0
+        
+        logger.info(f"[Status Success] Job {job_id} status: {status_response['status']} "
+                   f"({status_response.get('progressPercent', 0)}% complete)")
+        
+        return jsonify(status_response), 200
+        
     except Exception as e:
-        return jsonify(msg=f'Error getting job status: {str(e)}'), 500
+        error_msg = str(e)
+        logger.error(f"[Status Error] Exception for job {job_id}: {error_msg}")
+        
+        return jsonify({
+            'error': 'Internal server error',
+            'msg': f'Error retrieving job status: {error_msg}',
+            'JobId': job_id,
+            'status': 'ERROR'
+        }), 500
 
 @mig_bp.route('/report/<job_id>', methods=['GET'])
 @login_required()

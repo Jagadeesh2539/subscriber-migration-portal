@@ -209,7 +209,6 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
                 const jobId = job.JobId || job.migrationId;
                 return (
                   <TableRow key={jobId} hover>
-														  
                     <TableCell>
                       <Box display="flex" alignItems="center">
                         <Tooltip title={jobId}>
@@ -259,7 +258,6 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
                     }}>
                       {job.failed ?? '-'}
                     </TableCell>
-																	  
                     <TableCell>
                       {(job.status === 'COMPLETED' || job.status === 'FAILED') && job.reportS3Key && (
                         <Tooltip title="Download Report">
@@ -280,7 +278,6 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
         </Table>
       </TableContainer>
 
-											   
       <Snackbar
         open={!!copySuccess}
         autoHideDuration={3000}
@@ -343,7 +340,6 @@ const MigrationReports = ({ setMessage, jobs }) => {
         </Box>
       </Card>
       
-											   
       <Typography variant="h6" sx={{ mt: 4, mb: 1 }}>Recent Completed Jobs (from this session)</Typography>
       <TableContainer component={Paper}>
         <Table size="small">
@@ -414,10 +410,10 @@ export default function BulkMigration() {
     try {
       const storedJobs = localStorage.getItem('migrationJobs');
       const parsed = storedJobs ? JSON.parse(storedJobs) : [];
-      console.log('Loaded jobs from localStorage:', parsed.length, 'jobs');
+      console.log('[Init] Loaded jobs from localStorage:', parsed.length, 'jobs');
       return parsed;
     } catch (e) {
-      console.error("Failed to parse stored jobs, initializing empty:", e);
+      console.error("[Init] Failed to parse stored jobs, initializing empty:", e);
       localStorage.removeItem('migrationJobs');
       return [];
     }
@@ -429,10 +425,10 @@ export default function BulkMigration() {
   // Fetch recent jobs from backend API
   const fetchRecentJobs = useCallback(async () => {
     try {
-      console.log('Fetching recent jobs from API...');
+      console.log('[API] Fetching recent jobs from backend...');
       const { data } = await API.get('/migration/jobs?limit=20');
       if (data && data.jobs) {
-        console.log('Received jobs from API:', data.jobs.length);
+        console.log('[API] Received jobs from backend:', data.jobs.length);
         setJobs(prevJobs => {
           const fetchedJobMap = new Map(data.jobs.map(job => [job.JobId, job]));
           const updatedJobs = prevJobs.map(job => {
@@ -446,7 +442,7 @@ export default function BulkMigration() {
         });
       }
     } catch (err) {
-      console.warn("Failed to fetch recent jobs:", err.response?.data?.msg || err.message);
+      console.warn("[API] Failed to fetch recent jobs:", err.response?.data?.msg || err.message);
     }
   }, []);
 
@@ -457,54 +453,150 @@ export default function BulkMigration() {
   // Persist jobs to localStorage whenever jobs change
   useEffect(() => {
     try {
-      console.log('Saving jobs to localStorage:', jobs.length, 'jobs');
+      console.log('[Storage] Saving jobs to localStorage:', jobs.length, 'jobs');
       localStorage.setItem('migrationJobs', JSON.stringify(jobs));
     } catch (e) {
-      console.error("Failed to save jobs to localStorage:", e);
+      console.error("[Storage] Failed to save jobs to localStorage:", e);
     }
   }, [jobs]);
 
-  // Improved polling logic with better error handling
+  // ENHANCED POLLING LOGIC - SINGLE VERSION
   useEffect(() => {
-    const activeJobs = jobs.filter(job => job.status === 'IN_PROGRESS' || job.status === 'PENDING_UPLOAD');
-    if (activeJobs.length === 0) return;
+    const activeJobs = jobs.filter(job => 
+      job.status === 'IN_PROGRESS' || job.status === 'PENDING_UPLOAD'
+    );
+    
+    if (activeJobs.length === 0) {
+      console.log('[Polling] No active jobs to poll');
+      return;
+    }
 
-    console.log(`Polling ${activeJobs.length} active jobs...`);
+    console.log(`[Polling] Starting enhanced polling for ${activeJobs.length} active jobs:`, 
+      activeJobs.map(j => `${(j.JobId || j.migrationId).substring(0,8)} (${j.status})`));
+    
+    let pollCount = 0;
+    const maxPollAttempts = 240; // 240 * 5s = 20 minutes
+    let consecutiveErrors = 0;
+    const maxConsecutiveErrors = 3;
 
-    const intervalId = setInterval(async () => {
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      
+      if (pollCount > maxPollAttempts) {
+        console.warn('[Polling] Maximum polling time reached (20 minutes), stopping');
+        setMessage({ 
+          type: 'warning', 
+          text: '⏰ Stopped automatic polling after 20 minutes. Refresh page to check latest status.' 
+        });
+        clearInterval(pollInterval);
+        return;
+      }
+
+      console.log(`[Polling] Poll #${pollCount}/${maxPollAttempts} - checking ${activeJobs.length} jobs`);
+
+      // Poll each active job
       for (const job of activeJobs) {
         try {
           const jobId = job.JobId || job.migrationId;
-          console.log(`Polling job ${jobId.substring(0,8)}...`);
           
-          const { data } = await API.get(`/migration/status/${jobId}`);
+          const response = await API.get(`/migration/status/${jobId}`);
+          const serverData = response.data;
+          
+          // Reset error counter on successful request
+          consecutiveErrors = 0;
           
           setJobs(currentJobs => {
             return currentJobs.map(j => {
               const currentJobId = j.JobId || j.migrationId;
               if (currentJobId === jobId) {
-                console.log(`Updated job ${jobId.substring(0,8)} status:`, data.status);
+                const statusChanged = j.status !== serverData.status;
+                
+                if (statusChanged) {
+                  console.log(`[Polling] Job ${jobId.substring(0,8)} status changed: ${j.status} → ${serverData.status}`);
+                  
+                  // Show user notifications for important status changes
+                  if (serverData.status === 'COMPLETED') {
+                    setMessage({ 
+                      type: 'success', 
+                      text: `✅ Migration ${jobId.substring(0,8)} completed successfully!` 
+                    });
+                  } else if (serverData.status === 'FAILED') {
+                    setMessage({ 
+                      type: 'error', 
+                      text: `❌ Migration ${jobId.substring(0,8)} failed: ${serverData.failureReason || 'Unknown error'}` 
+                    });
+                  } else if (serverData.status === 'IN_PROGRESS' && j.status === 'PENDING_UPLOAD') {
+                    setMessage({ 
+                      type: 'info', 
+                      text: `🔄 Migration ${jobId.substring(0,8)} processing started` 
+                    });
+                  }
+                }
+                
                 return {
-                  ...j,        // Keep existing job data
-                  ...data,     // Override with server data
-                  JobId: jobId, // Ensure JobId is preserved
-                  migrationId: jobId // Keep backward compatibility
+                  ...j,           // Keep existing job data
+                  ...serverData,  // Override with server data
+                  JobId: jobId,   // Ensure JobId is preserved
+                  migrationId: jobId // Backward compatibility
                 };
               }
               return j;
             });
           });
-        } catch (err) {
-          console.warn(`Polling failed for job ${job.JobId?.substring(0,8)}:`, err.response?.data?.msg || err.message);
+          
+        } catch (pollError) {
+          const jobId = job.JobId || job.migrationId;
+          consecutiveErrors++;
+          
+          if (pollError.response?.status === 401) {
+            console.error(`[Polling] Authentication failed - stopping all polling`);
+            setMessage({ 
+              type: 'error', 
+              text: '🔐 Authentication expired. Please refresh the page and login again.' 
+            });
+            clearInterval(pollInterval);
+            return;
+            
+          } else if (pollError.response?.status === 404) {
+            console.warn(`[Polling] Job ${jobId.substring(0,8)} not found on server`);
+            // Mark job as potentially failed
+            setJobs(currentJobs => {
+              return currentJobs.map(j => {
+                const currentJobId = j.JobId || j.migrationId;
+                if (currentJobId === jobId && j.status === 'PENDING_UPLOAD') {
+                  return { 
+                    ...j, 
+                    status: 'FAILED', 
+                    failureReason: 'Job not found on server - may have been deleted or expired' 
+                  };
+                }
+                return j;
+              });
+            });
+            
+          } else {
+            console.warn(`[Polling] Error for job ${jobId.substring(0,8)}:`, pollError.message);
+          }
+          
+          // Stop polling if too many consecutive errors
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            console.error('[Polling] Too many consecutive errors, stopping polling');
+            setMessage({ 
+              type: 'error', 
+              text: '❌ Multiple polling errors occurred. Please refresh the page or check your connection.' 
+            });
+            clearInterval(pollInterval);
+            return;
+          }
         }
       }
     }, 5000); // Poll every 5 seconds
 
     return () => {
-      console.log('Stopping polling for', activeJobs.length, 'jobs');
-      clearInterval(intervalId);
+      console.log(`[Polling] Cleanup - stopped polling for ${activeJobs.length} jobs`);
+      clearInterval(pollInterval);
     };
-  }, [jobs]);
+  }, [jobs, setMessage]);
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -534,7 +626,6 @@ export default function BulkMigration() {
         </Tabs>
       </Box>
 
-												 
       {activeTab === 0 && <BulkUploadTool 
           jobs={jobs} 
           setJobs={setJobs} 
