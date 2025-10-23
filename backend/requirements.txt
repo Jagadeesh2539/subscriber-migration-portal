@@ -9,4 +9,4 @@ xmltodict==0.13.0
 PyMySQL==1.1.0
 python-dotenv==1.0.0
 werkzeug==2.2.3
-serverless-wsgi
+serverless-wsgi==3.1.0

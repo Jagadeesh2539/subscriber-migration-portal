@@ -164,7 +164,7 @@ def lambda_handler(event, context):
                 
                 # FIXED: Query cloud database with correct key
                 print(f"Querying cloud DB for SubscriberId={identifier_val}...")
-                cloud_response = subscribers_table.get_item(Key={'subscriberId': identifier_val})
+                cloud_response = subscribers_table.get_item(Key={'SubscriberId': identifier_val})
                 cloud_data = cloud_response.get('Item')
                 print(f"Cloud data found: {cloud_data is not None}")
 
@@ -173,7 +173,7 @@ def lambda_handler(event, context):
                     status_detail = "Migrated successfully."
                     if not is_simulate_mode:
                         # FIXED: Use correct key name for DynamoDB
-                        legacy_data['subscriberId'] = legacy_data['uid']
+                        legacy_data['SubscriberId'] = legacy_data['uid']
                         subscribers_table.put_item(Item=legacy_data)
                         print(f"Successfully migrated {identifier_val}")
                     else:
