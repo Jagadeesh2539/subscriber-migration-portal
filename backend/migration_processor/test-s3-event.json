@@ -1,0 +1,9 @@
+{
+  "Records": [{
+    "eventName": "ObjectCreated:Put",
+    "s3": {
+      "bucket": {"name": "subscriber-migration-stack-prod-migration-uploads"},
+      "object": {"key": "uploads/test-job-12345.csv"}
+    }
+  }]
+}
