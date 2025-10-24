@@ -7,7 +7,7 @@ from contextlib import contextmanager
 
 # --- Global connection details, used as defaults or can be overridden ---
 DB_HOST = os.environ.get('LEGACY_DB_HOST', 'host.docker.internal')
-DB_PORT = int(os.environ.get('LEGACY_DB_PORT', 3307))
+DB_PORT = int(os.environ.get('LEGACY_DB_PORT', 3306))
 DB_USER = os.environ.get('LEGACY_DB_USER', 'root')
 DB_PASSWORD = os.environ.get('LEGACY_DB_PASSWORD', 'Admin@123')
 DB_NAME = os.environ.get('LEGACY_DB_NAME', 'legacydb')
