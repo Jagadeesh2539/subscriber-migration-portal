@@ -4,15 +4,15 @@ import csv
 import io
 import json
 from datetime import datetime
-import legacy_db # Use the real DB connector
-import urllib.parse # Needed to decode S3 key names with special characters
+import legacy_db  # Legacy DB connection
+import urllib.parse
 
-# Get env variables set by CloudFormation/deploy script
-SUBSCRIBERS_TABLE_NAME = os.environ.get('SUBSCRIBER_TABLE_NAME')
+# Get env variables
+SUBSCRIBERS_TABLE_NAME = os.environ.get('SUBSCRIBERS_TABLE_NAME')
 MIGRATION_JOBS_TABLE_NAME = os.environ.get('MIGRATION_JOBS_TABLE_NAME')
 REPORT_BUCKET_NAME = os.environ.get('REPORT_BUCKET_NAME')
 LEGACY_DB_SECRET_ARN = os.environ.get('LEGACY_DB_SECRET_ARN')
-LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST') # The RDS endpoint
+LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST')
 
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
@@ -20,191 +20,234 @@ jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE_NAME)
 subscribers_table = dynamodb.Table(SUBSCRIBERS_TABLE_NAME)
 
 def get_db_credentials():
-    """Fetches database credentials securely from AWS Secrets Manager."""
+    """Fetches database credentials from Secrets Manager"""
     secrets_client = boto3.client('secretsmanager')
     try:
         response = secrets_client.get_secret_value(SecretId=LEGACY_DB_SECRET_ARN)
         secret = json.loads(response['SecretString'])
         return {
             'host': LEGACY_DB_HOST,
-            'port': 3306, # Standard RDS MySQL port
-            'user': secret['username'],
-            'password': secret['password'],
-            'database': 'legacydb'
+            'user': secret.get('username'),
+            'password': secret.get('password'),
+            'database': secret.get('database', 'legacy_subscribers')
         }
     except Exception as e:
-        print(f"FATAL: Could not retrieve DB credentials from Secrets Manager: {e}")
+        print(f"Error fetching DB credentials: {e}")
         raise
 
-def find_identifier_key(headers):
-    """Detects the main identifier from a list of CSV headers."""
-    if not headers: return None
-    for header in headers:
-        h_lower = header.lower()
-        if h_lower in ['uid', 'imsi', 'msisdn', 'subscriberid']:
-            return header
-    return None
-
 def lambda_handler(event, context):
-    print(f"Lambda invoked with event: {json.dumps(event)}") # Log the full event
-
-    # --- FIX: Parse event correctly for S3 NotificationConfiguration ---
-    # The actual S3 event information is nested within the 'Records' list.
-    if not event.get('Records'):
-        print("Error: Event payload does not contain 'Records'. Exiting.")
-        return {'status': 'error', 'message': 'Invalid S3 event format'}
-
-    record = event['Records'][0]
+    """Main Lambda handler"""
+    print(f"Event received: {json.dumps(event)}")
     
-    # Check if the event is an S3 event
-    if 's3' not in record:
-        print(f"Error: Record does not contain 's3' key. Record: {record}")
-        return {'status': 'error', 'message': 'Record is not an S3 event'}
-        
-    # Extract bucket name and object key
-    try:
-        bucket = record['s3']['bucket']['name']
-        # S3 keys might have URL-encoded characters (like spaces becoming '+')
-        key = urllib.parse.unquote_plus(record['s3']['object']['key'], encoding='utf-8') 
-    except KeyError as e:
-        print(f"Error extracting bucket/key from S3 event: {e}. Event structure: {record.get('s3')}")
-        return {'status': 'error', 'message': f'Missing key in S3 event structure: {e}'}
-    # --- END FIX ---
+    bucket = None
+    key = None
     
-    print(f"Processing s3://{bucket}/{key}")
-    
-    # Check if this is a valid trigger event (optional, but good practice)
-    # The filter in CloudFormation should handle this, but double-checking adds robustness.
-    if not key.startswith("uploads/") or not key.endswith(".csv"):
-         print(f"Skipping file {key} as it does not match the required prefix/suffix.")
-         return {'status': 'skipped', 'message': 'File path/type mismatch'}
-
-    migration_id = None # Initialize migration_id
     try:
-        head_object = s3_client.head_object(Bucket=bucket, Key=key)
-        metadata = head_object.get('Metadata', {})
-        migration_id = metadata.get('migrationid') # Use lowercase key consistent with API
-        is_simulate_mode = metadata.get('issimulatemode', 'false').lower() == 'true'
-        if not migration_id:
-            raise Exception("migrationid not found in S3 metadata.")
-    except Exception as e:
-        print(f"Error getting metadata for {key}: {e}")
-        # Try to extract migration_id from key if metadata fails (less reliable)
-        if not migration_id and key.startswith("uploads/"):
-             try:
-                 filename = key.split('/')[-1]
-                 migration_id = filename.replace(".csv", "")
-                 print(f"Recovered migration_id from filename: {migration_id}")
-             except Exception:
-                 print("Could not recover migration_id from filename.")
-
-        if migration_id: # Update job status if we have an ID
-             jobs_table.update_item(Key={'JobId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
-        return {'status': 'error', 'message': str(e)}
-
-    counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
-    report_data = [['Identifier', 'Status', 'Details']]
-
-    try:
-        db_creds = get_db_credentials()
-        legacy_db.init_connection_details(**db_creds)
-        print(f"Job {migration_id}: Successfully configured legacy DB connector.")
-    except Exception as e:
-        print(f"Job {migration_id}: DB Connection setup failed: {e}")
-        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
-        return {'status': 'error'}
-
-    try:
-        csv_object = s3_client.get_object(Bucket=bucket, Key=key)
-        csv_content = csv_object['Body'].read().decode('utf-8-sig') # Handle potential BOM
-        reader = csv.DictReader(io.StringIO(csv_content))
-        
-        identifier_key = find_identifier_key(reader.fieldnames)
-        if not identifier_key:
-            raise Exception("Could not find a valid identifier (uid, imsi, or msisdn) in CSV header.")
-
-        all_rows = list(reader)
-        counts['total'] = len(all_rows)
-        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
-        print(f"Job {migration_id}: Starting processing for {counts['total']} records.")
-
-        processed_count = 0
-        for row in all_rows:
-            processed_count += 1
-            identifier_val = row.get(identifier_key)
-            if not identifier_val:
-                counts['failed'] += 1
-                report_data.append([row.get(identifier_key, 'N/A'), 'FAILED', 'Identifier value was blank in CSV row.'])
-                continue
-
-            try:
-                legacy_data = legacy_db.get_subscriber_by_any_id(identifier_val) or {}
-                cloud_data = subscribers_table.get_item(Key={'subscriberId': identifier_val}).get('Item')
-
-                if legacy_data and not cloud_data:
-                    status_detail = "Migrated successfully."
-                    if not is_simulate_mode:
-                        legacy_data['subscriberId'] = legacy_data.get('uid', identifier_val)
-                        subscribers_table.put_item(Item=legacy_data)
-                    else:
-                        status_detail = "SIMULATED: Would have been migrated."
-                    counts['migrated'] += 1
-                    report_data.append([identifier_val, 'MIGRATED', status_detail])
-                
-                elif cloud_data:
-                    counts['already_present'] += 1
-                    report_data.append([identifier_val, 'SKIPPED', 'Already present in cloud.'])
-                
-                elif not legacy_data: # Check if legacy_data is empty dict
-                    counts['not_found_in_legacy'] += 1
-                    report_data.append([identifier_val, 'SKIPPED', 'Not found in legacy DB.'])
-                    
-            except Exception as row_error:
-                print(f"Job {migration_id}: Error processing row for identifier {identifier_val}: {row_error}")
-                counts['failed'] += 1
-                report_data.append([identifier_val, 'FAILED', str(row_error)])
+        # Parse S3 event
+        for record in event['Records']:
+            bucket = record['s3']['bucket']['name']
+            key = urllib.parse.unquote_plus(record['s3']['object']['key'])
             
-            # Optional: Update progress periodically for very large files
-            # if processed_count % 100 == 0:
-            #     print(f"Job {migration_id}: Processed {processed_count}/{counts['total']}...")
-            #     # Consider updating DynamoDB progress here if needed
-
-        print(f"Job {migration_id}: Processing complete. Migrated: {counts['migrated']}, Skipped: {counts['already_present'] + counts['not_found_in_legacy']}, Failed: {counts['failed']}")
-
-        # Generate and upload report
-        report_key = f"reports/{migration_id}.csv"
-        report_buffer = io.StringIO()
-        csv.writer(report_buffer).writerows(report_data)
-        s3_client.put_object(Bucket=REPORT_BUCKET_NAME, Key=report_key, Body=report_buffer.getvalue())
-        print(f"Job {migration_id}: Report uploaded to s3://{REPORT_BUCKET_NAME}/{report_key}")
-        
-        # Finalize job status
-        jobs_table.update_item(
-            Key={'JobId': migration_id},
-            UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound_in_legacy=:nf, failed=:f, reportS3Key=:rk", # Corrected attribute name
-            ExpressionAttributeNames={'#s': 'status'},
-            ExpressionAttributeValues={
-                ':s': 'COMPLETED', 
-                ':m': counts['migrated'], 
-                ':ap': counts['already_present'], 
-                ':nf': counts['not_found_in_legacy'], # Corrected attribute name
-                ':f': counts['failed'], 
-                ':rk': report_key
-            }
-        )
-        print(f"Job {migration_id}: Status updated to COMPLETED.")
-
-    except Exception as e:
-        print(f"Job {migration_id}: FATAL ERROR during processing: {e}")
-        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
+            print(f"Processing file: s3://{bucket}/{key}")
+            
+            migration_id = None
+            is_simulate_mode = False
+            
+            # Extract migration_id from S3 metadata
+            try:
+                metadata_response = s3_client.head_object(Bucket=bucket, Key=key)
+                metadata = metadata_response.get('Metadata', {})
+                migration_id = metadata.get('migrationid')
+                is_simulate_mode = metadata.get('simulate', 'false').lower() == 'true'
+                
+                if not migration_id:
+                    raise KeyError("migrationid not found in S3 metadata")
+                    
+                print(f"Migration ID from metadata: {migration_id}, Simulate Mode: {is_simulate_mode}")
+                
+            except Exception as metadata_error:
+                print(f"Error getting metadata for {key}: {metadata_error}")
+                
+                # Fallback: extract migration_id from filename
+                try:
+                    # Assuming filename format: uploads/{migration_id}.csv
+                    migration_id = key.split('/')[-1].replace('.csv', '')
+                    print(f"Recovered migration_id from filename: {migration_id}")
+                    
+                    if not migration_id:
+                        raise ValueError("Could not extract migration_id from filename")
+                    
+                    # Log warning but continue processing
+                    print(f"Continuing processing with recovered migration_id: {migration_id}")
+                    
+                except Exception as fallback_error:
+                    print(f"Fallback failed: {fallback_error}")
+                    # If we can't get migration_id at all, fail the job
+                    return {
+                        'statusCode': 500,
+                        'body': json.dumps({
+                            'status': 'error',
+                            'message': f'Could not determine migration_id: {str(metadata_error)}'
+                        })
+                    }
+            
+            # Ensure we have a migration_id before proceeding
+            if not migration_id:
+                print("ERROR: migration_id is still None after all attempts")
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps({
+                        'status': 'error',
+                        'message': 'Failed to extract migration_id from metadata or filename'
+                    })
+                }
+            
+            # Update job status to PROCESSING
+            try:
+                jobs_table.update_item(
+                    Key={'JobId': migration_id},
+                    UpdateExpression="SET jobStatus = :status",
+                    ExpressionAttributeValues={':status': 'PROCESSING'}
+                )
+                print(f"Updated job {migration_id} status to PROCESSING")
+            except Exception as update_error:
+                print(f"Error updating job status to PROCESSING: {update_error}")
+            
+            # Download and process CSV
+            try:
+                csv_object = s3_client.get_object(Bucket=bucket, Key=key)
+                csv_content = csv_object['Body'].read().decode('utf-8')
+                reader = csv.DictReader(io.StringIO(csv_content))
+                
+                # Validate CSV headers
+                identifiers = ['uid', 'imsi', 'msisdn', 'subscriberid']
+                headers_lower = [h.lower() for h in reader.fieldnames] if reader.fieldnames else []
+                
+                if not any(identifier in headers_lower for identifier in identifiers):
+                    raise Exception(f"CSV must contain at least one identifier column: {', '.join(identifiers)}")
+                
+                print(f"CSV headers validated: {headers_lower}")
+                
+                # Count rows
+                all_rows = list(reader)
+                counts = {'total': len(all_rows), 'migrated': 0, 'skipped': 0, 'failed': 0}
+                
+                print(f"Job {migration_id}: Processing {counts['total']} subscribers (Simulate: {is_simulate_mode})")
+                
+                # Process each row
+                processed_count = 0
+                for row in all_rows:
+                    processed_count += 1
+                    
+                    # Get identifier value from any available column
+                    identifier_value = (
+                        row.get('uid') or row.get('UID') or
+                        row.get('imsi') or row.get('IMSI') or
+                        row.get('msisdn') or row.get('MSISDN') or
+                        row.get('subscriberid') or row.get('subscriberId') or row.get('SUBSCRIBERID')
+                    )
+                    
+                    if not identifier_value:
+                        counts['skipped'] += 1
+                        print(f"Row {processed_count}: No identifier found, skipping")
+                        continue
+                    
+                    try:
+                        # Fetch data from legacy DB
+                        db_creds = get_db_credentials()
+                        subscriber_data = legacy_db.fetch_subscriber(identifier_value, db_creds)
+                        
+                        if not subscriber_data:
+                            counts['skipped'] += 1
+                            print(f"Subscriber {identifier_value} not found in legacy DB")
+                            continue
+                        
+                        # Check if subscriber already exists in DynamoDB
+                        try:
+                            existing = subscribers_table.get_item(Key={'subscriberId': identifier_value})
+                            
+                            if 'Item' in existing:
+                                counts['skipped'] += 1
+                                print(f"Subscriber {identifier_value} already exists in DynamoDB")
+                                continue
+                        except Exception as check_error:
+                            print(f"Error checking existing subscriber {identifier_value}: {check_error}")
+                            # Continue to attempt migration anyway
+                        
+                        # Insert into DynamoDB (only if not simulate mode)
+                        if not is_simulate_mode:
+                            subscribers_table.put_item(Item={
+                                'subscriberId': identifier_value,
+                                'uid': subscriber_data.get('uid'),
+                                'imsi': subscriber_data.get('imsi'),
+                                'msisdn': subscriber_data.get('msisdn'),
+                                'migrationId': migration_id,
+                                'migratedAt': datetime.now().isoformat()
+                            })
+                            print(f"Successfully migrated subscriber: {identifier_value}")
+                        else:
+                            print(f"SIMULATE MODE: Would migrate subscriber: {identifier_value}")
+                        
+                        counts['migrated'] += 1
+                        
+                    except Exception as row_error:
+                        counts['failed'] += 1
+                        print(f"Error processing subscriber {identifier_value}: {row_error}")
+                
+                # Update job status to COMPLETED
+                final_status = 'COMPLETED' if not is_simulate_mode else 'SIMULATED'
+                try:
+                    jobs_table.update_item(
+                        Key={'JobId': migration_id},
+                        UpdateExpression="SET jobStatus = :status, migratedCount = :migrated, skippedCount = :skipped, failedCount = :failed, totalCount = :total",
+                        ExpressionAttributeValues={
+                            ':status': final_status,
+                            ':migrated': counts['migrated'],
+                            ':skipped': counts['skipped'],
+                            ':failed': counts['failed'],
+                            ':total': counts['total']
+                        }
+                    )
+                    print(f"Job {migration_id} completed with status {final_status}: {counts}")
+                except Exception as final_update_error:
+                    print(f"Error updating final job status: {final_update_error}")
+                
+            except Exception as processing_error:
+                print(f"Job {migration_id} failed during processing: {processing_error}")
+                try:
+                    jobs_table.update_item(
+                        Key={'JobId': migration_id},
+                        UpdateExpression="SET jobStatus = :status, errorMessage = :error",
+                        ExpressionAttributeValues={
+                            ':status': 'FAILED',
+                            ':error': str(processing_error)
+                        }
+                    )
+                except Exception as error_update_error:
+                    print(f"Error updating job status to FAILED: {error_update_error}")
+                
+                raise processing_error
+                
+    except Exception as handler_error:
+        print(f"Handler error: {handler_error}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'status': 'error',
+                'message': str(handler_error)
+            })
+        }
+    
     finally:
-        # Clean up the original uploaded file
-        try:
-             s3_client.delete_object(Bucket=bucket, Key=key)
-             print(f"Job {migration_id}: Deleted original upload file: s3://{bucket}/{key}")
-        except Exception as delete_error:
-             print(f"Job {migration_id}: Warning - Failed to delete original upload file s3://{bucket}/{key}. Error: {delete_error}")
-
-
-    return {'status': 'success'}
-
+        # Clean up - delete processed file
+        if bucket and key:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=key)
+                print(f"Deleted processed file: s3://{bucket}/{key}")
+            except Exception as cleanup_error:
+                print(f"Cleanup error (non-critical): {cleanup_error}")
+    
+    return {
+        'statusCode': 200,
+        'body': json.dumps({'status': 'success'})
+    }
