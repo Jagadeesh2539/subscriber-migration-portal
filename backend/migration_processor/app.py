@@ -99,7 +99,7 @@ def lambda_handler(event, context):
                  print("Could not recover migration_id from filename.")
 
         if migration_id: # Update job status if we have an ID
-             jobs_table.update_item(Key={'migrationId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
+             jobs_table.update_item(Key={'JobId': migration_id},UpdateExpression="SET #s=:s, failureReason=:fr",ExpressionAttributeNames={'#s': 'status'},ExpressionAttributeValues={':s': 'FAILED', ':fr': f'Metadata Read Error: {e}'})
         return {'status': 'error', 'message': str(e)}
 
     counts = { 'total': 0, 'migrated': 0, 'already_present': 0, 'not_found_in_legacy': 0, 'failed': 0 }
@@ -111,7 +111,7 @@ def lambda_handler(event, context):
         print(f"Job {migration_id}: Successfully configured legacy DB connector.")
     except Exception as e:
         print(f"Job {migration_id}: DB Connection setup failed: {e}")
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': f'DB Connection Error: {e}'})
         return {'status': 'error'}
 
     try:
@@ -125,7 +125,7 @@ def lambda_handler(event, context):
 
         all_rows = list(reader)
         counts['total'] = len(all_rows)
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, totalRecords = :t", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'IN_PROGRESS', ':t': counts['total']})
         print(f"Job {migration_id}: Starting processing for {counts['total']} records.")
 
         processed_count = 0
@@ -180,7 +180,7 @@ def lambda_handler(event, context):
         
         # Finalize job status
         jobs_table.update_item(
-            Key={'migrationId': migration_id},
+            Key={'JobId': migration_id},
             UpdateExpression="SET #s=:s, migrated=:m, alreadyPresent=:ap, notFound_in_legacy=:nf, failed=:f, reportS3Key=:rk", # Corrected attribute name
             ExpressionAttributeNames={'#s': 'status'},
             ExpressionAttributeValues={
@@ -196,7 +196,7 @@ def lambda_handler(event, context):
 
     except Exception as e:
         print(f"Job {migration_id}: FATAL ERROR during processing: {e}")
-        jobs_table.update_item(Key={'migrationId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
+        jobs_table.update_item(Key={'JobId': migration_id}, UpdateExpression="SET #s = :s, failureReason = :fr", ExpressionAttributeNames={'#s': 'status'}, ExpressionAttributeValues={':s': 'FAILED', ':fr': str(e)})
     finally:
         # Clean up the original uploaded file
         try:
