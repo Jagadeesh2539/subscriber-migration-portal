@@ -18,6 +18,9 @@ env:
   FRONTEND_BUCKET: subscriber-migration-stack-prod-frontend
   BACKEND_LAMBDA: subscriber-migration-stack-prod-BackendLambda-pw0yiCxXyN3J
   API_GATEWAY_ID: hsebznxeu6
+  # Force npm to never use ci behavior globally
+  npm_config_package_lock: false
+  npm_config_ci: false
 
 jobs:
   deploy:
@@ -31,6 +34,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
+          # Don't cache anything to avoid npm ci triggers
+          # cache: 'npm'
 
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
@@ -48,22 +53,34 @@ jobs:
         if: github.event.inputs.deploy_type != 'backend-only'
         run: |
           cd frontend
-          echo "📦 Installing frontend dependencies (npm install ONLY)..."
+          echo "📦 FORCING npm install (never npm ci)..."
           
-          # Ensure no package-lock.json exists
-          rm -f package-lock.json
+          # Remove ALL lockfiles to prevent any npm ci attempts
+          rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
           
-          # Clear all npm cache
+          # Clear ALL npm data
           npm cache clean --force 2>/dev/null || true
+          rm -rf node_modules 2>/dev/null || true
           
-          # Force npm to NOT use ci behavior
+          # Set npm config to NEVER use ci behavior
           npm config set package-lock false
           npm config set prefer-offline false
+          npm config set fund false
+          npm config set audit false
+          npm config set optional false
           
-          # Install with maximum compatibility flags
-          npm install --no-audit --no-fund --legacy-peer-deps --force
+          # Set environment to prevent npm ci
+          export npm_config_package_lock=false
+          export npm_config_ci=false
+          export CI=false
           
-          echo "✅ Dependencies installed with npm install (not npm ci)"
+          # Force npm install with all compatibility flags
+          echo "Running: npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force"
+          npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
+          
+          # Verify installation worked
+          echo "✅ Dependencies installed with npm install successfully"
+          npm list --depth=0 || true
           
           # Set production environment
           cat > .env.production << EOF
