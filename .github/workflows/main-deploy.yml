@@ -108,15 +108,15 @@ jobs:
           # Install Python dependencies
           pip install --no-cache-dir --target . -r requirements.txt
           
-          # Create lambda_function.py (avoid copy conflicts)
-          echo "🔧 Creating Lambda handler..."
-          cat app_production_ready.py > lambda_function.py
+          # Use the consolidated app.py as entry point
+          echo "🔧 Using consolidated app.py as Lambda handler..."
+          cp app.py lambda_function.py
           
           echo "📦 Creating deployment package..."
           zip -q -r ../backend-deploy.zip . \
             -x "*.pyc" "__pycache__/*" "*.git*" \
-               "app.py" "app_enhanced.py" "*.md" "Dockerfile" \
-               "setup_legacy_schema.py" "*.log"
+               "app_*.py" "*.md" "Dockerfile" \
+               "setup_legacy_schema.py" "*.log" "migration_processor/*"
           
           cd ..
           echo "📊 Package size: $(du -sh backend-deploy.zip | cut -f1)"
@@ -161,7 +161,7 @@ jobs:
           
           DEPLOYMENT_ID=$(aws apigateway create-deployment \
             --rest-api-id ${{ env.API_GATEWAY_ID }} \
-            --description "Enhanced Portal $(date +%Y%m%d-%H%M%S)" \
+            --description "Consolidated Portal $(date +%Y%m%d-%H%M%S)" \
             --query 'id' --output text)
           
           aws apigateway update-stage \
@@ -176,7 +176,7 @@ jobs:
           API_URL="https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
           FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
-          echo "🧪 Testing deployment..."
+          echo "🧪 Testing consolidated deployment..."
           echo "⏳ Waiting 60s for propagation..."
           sleep 60
           
@@ -213,7 +213,7 @@ jobs:
           [ "$STATS_RESPONSE" = "200" ] && echo "   $(cat /tmp/stats.json | jq -r '.totalSubscribers' 2>/dev/null || echo 'Stats OK')" || echo "   Stats endpoint issue"
           
           echo ""
-          echo "📋 DEPLOYMENT SUMMARY:"
+          echo "📋 CONSOLIDATED DEPLOYMENT SUMMARY:"
           echo "   🔗 API:        $([ "$API_HEALTH" = "200" ] && echo "✅ Working" || echo "❌ Failed ($API_HEALTH)")"
           echo "   🌐 Frontend:   $([ "$FRONTEND_STATUS" = "200" ] && echo "✅ Live" || echo "❌ Failed ($FRONTEND_STATUS)")"
           echo "   🔐 Auth:       $([ "$AUTH_RESPONSE" = "200" ] && echo "✅ Working" || echo "❌ Failed ($AUTH_RESPONSE)")"
@@ -222,10 +222,11 @@ jobs:
           
           if [ "$API_HEALTH" = "200" ] && [ "$FRONTEND_STATUS" = "200" ] && [ "$AUTH_RESPONSE" = "200" ]; then
             echo ""
-            echo "🎉 DEPLOYMENT SUCCESSFUL!"
+            echo "🎉 CONSOLIDATED DEPLOYMENT SUCCESSFUL!"
             echo "🌐 Portal: $FRONTEND_URL"
             echo "🔐 Login: admin/Admin@123"
             echo "✨ Features: Dashboard, Provisioning, Migration, Analytics"
+            echo "🎯 Architecture: Single API + Single Frontend (Clean & Maintainable)"
             
             if [ "$LEGACY_RESPONSE" != "200" ]; then
               echo ""
