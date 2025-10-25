@@ -1,0 +1,257 @@
+name: Deploy Enhanced Subscriber Migration Portal
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy all components'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  # Your existing AWS resources
+  FRONTEND_BUCKET: subscriber-migration-stack-prod-frontend
+  BACKEND_LAMBDA: subscriber-migration-stack-prod-BackendLambda-pw0yiCxXyN3J
+  API_GATEWAY_ID: hsebznxeu6
+  MIGRATION_PROCESSOR: subscriber-migration-stac-MigrationProcessorFuncti-oteIVmgXQXfK
+  MIGRATION_UPLOAD_BUCKET: subscriber-migration-stack-prod-migration-uploads
+
+jobs:
+  deploy-enhanced-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+          # Add missing dependencies for enhanced features
+          npm install recharts @emotion/react @emotion/styled
+
+      - name: Build enhanced frontend
+        run: |
+          cd frontend
+          # Set API URL for production
+          echo "REACT_APP_API_BASE_URL=https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod" > .env.production
+          echo "REACT_APP_MIGRATION_UPLOAD_BUCKET=${{ env.MIGRATION_UPLOAD_BUCKET }}" >> .env.production
+          echo "REACT_APP_VERSION=2.0.0-enhanced" >> .env.production
+          
+          # Build with enhanced components
+          npm run build
+          
+          echo "✅ Frontend build completed with enhanced features"
+
+      - name: Deploy frontend to S3
+        run: |
+          cd frontend
+          echo "🚀 Deploying enhanced frontend to S3..."
+          
+          # Sync build files to S3 with proper cache headers
+          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000" \
+            --exclude "*.html" \
+            --exclude "service-worker.js" \
+            --exclude "manifest.json"
+          
+          # Sync HTML and other files with no-cache
+          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ \
+            --cache-control "public, max-age=0, must-revalidate" \
+            --include "*.html" \
+            --include "service-worker.js" \
+            --include "manifest.json"
+          
+          echo "✅ Enhanced frontend deployed to S3"
+
+  deploy-enhanced-backend:
+    runs-on: ubuntu-latest
+    needs: deploy-enhanced-frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Package enhanced backend
+        run: |
+          cd backend
+          echo "📦 Packaging enhanced backend..."
+          
+          # Install dependencies
+          pip install --no-cache-dir -r requirements.txt -t .
+          
+          # Copy enhanced app as main handler
+          cp app_enhanced.py lambda_function.py
+          
+          # Modify lambda_function.py for AWS Lambda compatibility
+          cat >> lambda_function.py << 'EOF'
+          
+          # AWS Lambda handler
+          def lambda_handler(event, context):
+              import serverless_wsgi
+              return serverless_wsgi.handle_request(app, event, context)
+          EOF
+          
+          # Create deployment package
+          zip -r ../enhanced-backend.zip . \
+            -x "*.pyc" "__pycache__/*" "*.git*" \
+               "app.py" "app_enterprise.py" "migration.py" \
+               "*.md" "Dockerfile" ".gitignore"
+          
+          cd ..
+          echo "✅ Enhanced backend packaged ($(du -sh enhanced-backend.zip))"
+
+      - name: Deploy enhanced backend to Lambda
+        run: |
+          echo "🚀 Deploying enhanced backend to Lambda..."
+          
+          # Update Lambda function code
+          aws lambda update-function-code \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --zip-file fileb://enhanced-backend.zip
+          
+          echo "⏳ Waiting for Lambda update to complete..."
+          aws lambda wait function-updated --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          # Update environment variables for enhanced features
+          aws lambda update-function-configuration \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --environment '{
+              "Variables": {
+                "SUBSCRIBER_TABLE_NAME": "subscriber-table",
+                "AUDIT_LOG_TABLE_NAME": "audit-log-table",
+                "MIGRATION_JOBS_TABLE_NAME": "migration-jobs-table",
+                "MIGRATION_UPLOAD_BUCKET_NAME": "${{ env.MIGRATION_UPLOAD_BUCKET }}",
+                "LEGACY_DB_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:144395889420:secret:subscriber-legacy-db-secret-qWXjZz",
+                "LEGACY_DB_HOST": "subscriber-migration-legacydb.cwd6wssgy4kr.us-east-1.rds.amazonaws.com",
+                "FLASK_ENV": "production",
+                "VERSION": "2.0.0-enhanced"
+              }
+            }'
+          
+          echo "⏳ Waiting for configuration update..."
+          aws lambda wait function-updated --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          echo "✅ Enhanced backend deployed to Lambda"
+
+      - name: Update API Gateway deployment
+        run: |
+          echo "🔄 Updating API Gateway deployment..."
+          
+          # Create new deployment
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --description "Enhanced Portal $(date +%Y%m%d-%H%M%S)" \
+            --query 'id' --output text)
+          
+          echo "Created deployment: $DEPLOYMENT_ID"
+          
+          # Update prod stage
+          aws apigateway update-stage \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --stage-name prod \
+            --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
+          
+          echo "✅ API Gateway updated with enhanced backend"
+
+  health-check:
+    runs-on: ubuntu-latest
+    needs: [deploy-enhanced-frontend, deploy-enhanced-backend]
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Run comprehensive health checks
+        run: |
+          API_URL="https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
+          FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          
+          echo "🔍 Testing enhanced portal deployment..."
+          
+          # Wait for propagation
+          echo "⏳ Waiting 30s for deployment propagation..."
+          sleep 30
+          
+          # Test API health endpoint
+          echo "🔍 Testing API health: $API_URL/api/health"
+          API_RESPONSE=$(curl -s -w "\n%{http_code}" $API_URL/api/health || echo "000")
+          API_STATUS=$(echo "$API_RESPONSE" | tail -n1)
+          API_BODY=$(echo "$API_RESPONSE" | head -n-1)
+          
+          echo "API Status: $API_STATUS"
+          echo "API Response: $API_BODY"
+          
+          if [ "$API_STATUS" = "200" ]; then
+            echo "✅ API health check passed"
+          else
+            echo "❌ API health check failed"
+            exit 1
+          fi
+          
+          # Test Frontend
+          echo "🔍 Testing Frontend: $FRONTEND_URL"
+          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL)
+          
+          if [ "$FRONTEND_STATUS" = "200" ]; then
+            echo "✅ Frontend health check passed"
+          else
+            echo "❌ Frontend health check failed (Status: $FRONTEND_STATUS)"
+            exit 1
+          fi
+          
+          echo "🎉 All health checks passed! Enhanced portal is live."
+          echo "🌐 Frontend URL: $FRONTEND_URL"
+          echo "🔗 API URL: $API_URL"
+          echo "📊 Enhanced Features: Provisioning Modes, Bulk Operations, Monitoring, Analytics"
+
+  notify-completion:
+    runs-on: ubuntu-latest
+    needs: [deploy-enhanced-frontend, deploy-enhanced-backend, health-check]
+    if: always()
+    steps:
+      - name: Deployment notification
+        run: |
+          if [ "${{ needs.health-check.result }}" = "success" ]; then
+            echo "🎉 Enhanced Subscriber Migration Portal deployed successfully!"
+            echo "📱 Features: Provisioning (Legacy/Cloud/Dual), Migration Management, Bulk Operations"
+            echo "📊 Analytics: Real-time monitoring, comprehensive reports, system health"
+            echo "🔐 Authentication: Role-based access (Admin/Operator/Guest)"
+            echo "🌐 Live URL: http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          else
+            echo "❌ Deployment failed. Check the logs above for details."
+            exit 1
+          fi
