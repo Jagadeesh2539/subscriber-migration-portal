@@ -1,8 +1,6 @@
 name: 🚀 Deploy Enhanced Portal
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       deploy_type:
@@ -50,16 +48,22 @@ jobs:
         if: github.event.inputs.deploy_type != 'backend-only'
         run: |
           cd frontend
-          echo "📦 Installing frontend dependencies..."
+          echo "📦 Installing frontend dependencies (npm install ONLY)..."
           
-          # Remove lock file to avoid sync issues
+          # Ensure no package-lock.json exists
           rm -f package-lock.json
           
-          # Clear cache
+          # Clear all npm cache
           npm cache clean --force 2>/dev/null || true
           
-          # Install dependencies
-          npm install --no-audit --no-fund --legacy-peer-deps
+          # Force npm to NOT use ci behavior
+          npm config set package-lock false
+          npm config set prefer-offline false
+          
+          # Install with maximum compatibility flags
+          npm install --no-audit --no-fund --legacy-peer-deps --force
+          
+          echo "✅ Dependencies installed with npm install (not npm ci)"
           
           # Set production environment
           cat > .env.production << EOF
@@ -69,10 +73,12 @@ jobs:
           EOF
           
           echo "🔨 Building enhanced frontend..."
-          NODE_OPTIONS="--max-old-space-size=4096" npm run build
+          NODE_OPTIONS="--max-old-space-size=8192" npm run build
           
           echo "☁️ Deploying to S3..."
-          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ --delete
+          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ \
+            --delete \
+            --cache-control "public, max-age=0, must-revalidate"
           
           echo "✅ Frontend deployed successfully"
 
@@ -154,13 +160,14 @@ jobs:
           FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
           echo "🧪 Testing deployment..."
-          echo "⏳ Waiting 45s for propagation..."
-          sleep 45
+          echo "⏳ Waiting 60s for propagation..."
+          sleep 60
           
           # Test API
           echo "1️⃣ API Health:"
-          API_HEALTH=$(curl -s -w "%{http_code}" -o /dev/null "$API_URL/api/health")
+          API_HEALTH=$(curl -s -w "%{http_code}" -o /tmp/health.json "$API_URL/api/health")
           echo "   Status: $API_HEALTH"
+          [ "$API_HEALTH" = "200" ] && cat /tmp/health.json || echo "   Error response"
           
           # Test Frontend
           echo "2️⃣ Frontend:"
@@ -172,20 +179,29 @@ jobs:
           AUTH_RESPONSE=$(curl -s -X POST "$API_URL/api/auth/login" \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"Admin@123"}' \
-            -w "%{http_code}" -o /dev/null)
+            -w "%{http_code}" -o /tmp/auth.json)
           echo "   Status: $AUTH_RESPONSE"
+          [ "$AUTH_RESPONSE" = "200" ] && echo "   $(cat /tmp/auth.json | jq -r '.user.role' 2>/dev/null || echo 'Login OK')" || echo "   Auth failed"
           
           # Test Legacy (soft check)
           echo "4️⃣ Legacy DB:"
-          LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" -w "%{http_code}" -o /dev/null)
-          echo "   Status: $LEGACY_RESPONSE (VPC config dependent)"
+          LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" -w "%{http_code}" -o /tmp/legacy.json)
+          echo "   Status: $LEGACY_RESPONSE"
+          [ "$LEGACY_RESPONSE" = "200" ] && echo "   $(cat /tmp/legacy.json | jq -r '.status' 2>/dev/null || echo 'Connected')" || echo "   VPC/Security Group setup needed"
+          
+          # Test Stats
+          echo "5️⃣ Dashboard Stats:"
+          STATS_RESPONSE=$(curl -s "$API_URL/api/dashboard/stats" -w "%{http_code}" -o /tmp/stats.json)
+          echo "   Status: $STATS_RESPONSE"
+          [ "$STATS_RESPONSE" = "200" ] && echo "   $(cat /tmp/stats.json | jq -r '.totalSubscribers' 2>/dev/null || echo 'Stats OK')" || echo "   Stats endpoint issue"
           
           echo ""
           echo "📋 DEPLOYMENT SUMMARY:"
-          echo "   API:        $([ "$API_HEALTH" = "200" ] && echo "✅" || echo "❌") $API_HEALTH"
-          echo "   Frontend:   $([ "$FRONTEND_STATUS" = "200" ] && echo "✅" || echo "❌") $FRONTEND_STATUS"
-          echo "   Auth:       $([ "$AUTH_RESPONSE" = "200" ] && echo "✅" || echo "❌") $AUTH_RESPONSE"
-          echo "   Legacy DB:  $([ "$LEGACY_RESPONSE" = "200" ] && echo "✅" || echo "⚠️") $LEGACY_RESPONSE"
+          echo "   🔗 API:        $([ "$API_HEALTH" = "200" ] && echo "✅ Working" || echo "❌ Failed ($API_HEALTH)")"
+          echo "   🌐 Frontend:   $([ "$FRONTEND_STATUS" = "200" ] && echo "✅ Live" || echo "❌ Failed ($FRONTEND_STATUS)")"
+          echo "   🔐 Auth:       $([ "$AUTH_RESPONSE" = "200" ] && echo "✅ Working" || echo "❌ Failed ($AUTH_RESPONSE)")"
+          echo "   🗄️ Legacy DB:  $([ "$LEGACY_RESPONSE" = "200" ] && echo "✅ Connected" || echo "⚠️ VPC Config Needed")"
+          echo "   📊 Stats:      $([ "$STATS_RESPONSE" = "200" ] && echo "✅ Working" || echo "⚠️ Partial")"
           
           if [ "$API_HEALTH" = "200" ] && [ "$FRONTEND_STATUS" = "200" ] && [ "$AUTH_RESPONSE" = "200" ]; then
             echo ""
@@ -193,11 +209,19 @@ jobs:
             echo "🌐 Portal: $FRONTEND_URL"
             echo "🔐 Login: admin/Admin@123"
             echo "✨ Features: Dashboard, Provisioning, Migration, Analytics"
+            
+            if [ "$LEGACY_RESPONSE" != "200" ]; then
+              echo ""
+              echo "💡 Next: Configure Lambda VPC for full legacy integration"
+              echo "   All cloud features are fully functional"
+            else
+              echo "🚀 All systems operational - ready for production!"
+            fi
           else
             echo ""
-            echo "❌ Deployment failed - check components above"
+            echo "❌ Core deployment failed - check logs above"
             exit 1
           fi
           
           # Cleanup
-          rm -f backend-deploy.zip
+          rm -f backend-deploy.zip /tmp/*.json
