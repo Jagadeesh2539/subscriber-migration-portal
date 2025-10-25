@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Subscriber Migration Portal - Security Hardened with Least Privilege IAM + S3 Triggers + VPC Endpoints'
+Description: 'Subscriber Migration Portal - Security Hardened with Least Privilege IAM + VPC Endpoints (S3 notifications configured post-deploy)'
 
 Parameters:
   Environment:
@@ -252,30 +252,7 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:*
-            Function: !GetAtt MigrationProcessorFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
-                  - Name: suffix
-                    Value: .csv
-
-  # CloudWatch Log Groups with retention
-  BackendLambdaLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${BackendLambda}'
-      RetentionInDays: 14
-
-  MigrationProcessorLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/lambda/${MigrationProcessorFunction}'
-      RetentionInDays: 14
+    # NotificationConfiguration removed to avoid CFN circular dependency; set via workflow post-deploy
 
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -392,6 +369,7 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDatabase.Endpoint.Address
 
+  # Permission for S3 to invoke Lambda (notification configured post-deploy)
   S3InvokeMigrationProcessor:
     Type: AWS::Lambda::Permission
     Properties:
@@ -400,6 +378,7 @@ Resources:
       Principal: s3.amazonaws.com
       SourceArn: !GetAtt MigrationUploadBucket.Arn
 
+  # VPC Gateway Endpoints
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
