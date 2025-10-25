@@ -1,0 +1,203 @@
+name: 🚀 Deploy Enhanced Portal
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_type:
+        description: 'Deployment type'
+        required: false
+        default: 'full'
+        type: choice
+        options:
+          - 'full'
+          - 'frontend-only'
+          - 'backend-only'
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  FRONTEND_BUCKET: subscriber-migration-stack-prod-frontend
+  BACKEND_LAMBDA: subscriber-migration-stack-prod-BackendLambda-pw0yiCxXyN3J
+  API_GATEWAY_ID: hsebznxeu6
+
+jobs:
+  deploy:
+    name: 🎯 Deploy Portal
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: 🎨 Build and deploy frontend
+        if: github.event.inputs.deploy_type != 'backend-only'
+        run: |
+          cd frontend
+          echo "📦 Installing frontend dependencies..."
+          
+          # Remove lock file to avoid sync issues
+          rm -f package-lock.json
+          
+          # Clear cache
+          npm cache clean --force 2>/dev/null || true
+          
+          # Install dependencies
+          npm install --no-audit --no-fund --legacy-peer-deps
+          
+          # Set production environment
+          cat > .env.production << EOF
+          REACT_APP_API_BASE_URL=https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
+          REACT_APP_VERSION=2.0.0-production
+          REACT_APP_LEGACY_ENABLED=true
+          EOF
+          
+          echo "🔨 Building enhanced frontend..."
+          NODE_OPTIONS="--max-old-space-size=4096" npm run build
+          
+          echo "☁️ Deploying to S3..."
+          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ --delete
+          
+          echo "✅ Frontend deployed successfully"
+
+      - name: 🔧 Build and deploy backend
+        if: github.event.inputs.deploy_type != 'frontend-only'
+        run: |
+          cd backend
+          echo "📦 Installing backend dependencies..."
+          
+          # Install Python dependencies
+          pip install --no-cache-dir --target . -r requirements.txt
+          
+          # Create lambda_function.py (avoid copy conflicts)
+          echo "🔧 Creating Lambda handler..."
+          cat app_production_ready.py > lambda_function.py
+          
+          echo "📦 Creating deployment package..."
+          zip -q -r ../backend-deploy.zip . \
+            -x "*.pyc" "__pycache__/*" "*.git*" \
+               "app.py" "app_enhanced.py" "*.md" "Dockerfile" \
+               "setup_legacy_schema.py" "*.log"
+          
+          cd ..
+          echo "📊 Package size: $(du -sh backend-deploy.zip | cut -f1)"
+          
+          echo "🚀 Deploying to Lambda..."
+          aws lambda update-function-code \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --zip-file fileb://backend-deploy.zip
+          
+          echo "⏳ Waiting for Lambda update..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          echo "⚙️ Setting environment variables..."
+          aws lambda update-function-configuration \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --environment '{
+              "Variables": {
+                "SUBSCRIBER_TABLE_NAME": "subscriber-table",
+                "AUDIT_LOG_TABLE_NAME": "audit-log-table",
+                "MIGRATION_JOBS_TABLE_NAME": "migration-jobs-table",
+                "MIGRATION_UPLOAD_BUCKET_NAME": "subscriber-migration-stack-prod-migration-uploads",
+                "LEGACY_DB_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:144395889420:secret:subscriber-legacy-db-secret-qWXjZz",
+                "LEGACY_DB_HOST": "subscriber-migration-legacydb.cwd6wssgy4kr.us-east-1.rds.amazonaws.com",
+                "LEGACY_DB_PORT": "3306",
+                "LEGACY_DB_NAME": "legacydb",
+                "FLASK_ENV": "production",
+                "VERSION": "2.0.0-production",
+                "PROVISIONING_MODES": "legacy,cloud,dual_prov"
+              }
+            }'
+          
+          aws lambda wait function-updated \
+            --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          echo "✅ Backend deployed successfully"
+
+      - name: 🔄 Update API Gateway
+        if: github.event.inputs.deploy_type != 'frontend-only'
+        run: |
+          echo "🔄 Creating new API deployment..."
+          
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --description "Enhanced Portal $(date +%Y%m%d-%H%M%S)" \
+            --query 'id' --output text)
+          
+          aws apigateway update-stage \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --stage-name prod \
+            --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
+          
+          echo "✅ API Gateway updated"
+
+      - name: 🧪 Test deployment
+        run: |
+          API_URL="https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
+          FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          
+          echo "🧪 Testing deployment..."
+          echo "⏳ Waiting 45s for propagation..."
+          sleep 45
+          
+          # Test API
+          echo "1️⃣ API Health:"
+          API_HEALTH=$(curl -s -w "%{http_code}" -o /dev/null "$API_URL/api/health")
+          echo "   Status: $API_HEALTH"
+          
+          # Test Frontend
+          echo "2️⃣ Frontend:"
+          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL")
+          echo "   Status: $FRONTEND_STATUS"
+          
+          # Test Auth
+          echo "3️⃣ Authentication:"
+          AUTH_RESPONSE=$(curl -s -X POST "$API_URL/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"admin","password":"Admin@123"}' \
+            -w "%{http_code}" -o /dev/null)
+          echo "   Status: $AUTH_RESPONSE"
+          
+          # Test Legacy (soft check)
+          echo "4️⃣ Legacy DB:"
+          LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" -w "%{http_code}" -o /dev/null)
+          echo "   Status: $LEGACY_RESPONSE (VPC config dependent)"
+          
+          echo ""
+          echo "📋 DEPLOYMENT SUMMARY:"
+          echo "   API:        $([ "$API_HEALTH" = "200" ] && echo "✅" || echo "❌") $API_HEALTH"
+          echo "   Frontend:   $([ "$FRONTEND_STATUS" = "200" ] && echo "✅" || echo "❌") $FRONTEND_STATUS"
+          echo "   Auth:       $([ "$AUTH_RESPONSE" = "200" ] && echo "✅" || echo "❌") $AUTH_RESPONSE"
+          echo "   Legacy DB:  $([ "$LEGACY_RESPONSE" = "200" ] && echo "✅" || echo "⚠️") $LEGACY_RESPONSE"
+          
+          if [ "$API_HEALTH" = "200" ] && [ "$FRONTEND_STATUS" = "200" ] && [ "$AUTH_RESPONSE" = "200" ]; then
+            echo ""
+            echo "🎉 DEPLOYMENT SUCCESSFUL!"
+            echo "🌐 Portal: $FRONTEND_URL"
+            echo "🔐 Login: admin/Admin@123"
+            echo "✨ Features: Dashboard, Provisioning, Migration, Analytics"
+          else
+            echo ""
+            echo "❌ Deployment failed - check components above"
+            exit 1
+          fi
+          
+          # Cleanup
+          rm -f backend-deploy.zip
