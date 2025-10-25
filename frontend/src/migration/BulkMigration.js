@@ -66,7 +66,10 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
       };
 
       setJobs(prevJobs => [newJob, ...(prevJobs || [])]);
-      setMessage({ type: 'success', text: `Upload successful! Job ${migrationId.substring(0,8)}... processing will start shortly.` });
+      
+      // FIX LINE 69: Add null check for migrationId
+      const displayId = migrationId ? migrationId.substring(0,8) : 'unknown';
+      setMessage({ type: 'success', text: `Upload successful! Job ${displayId}... processing will start shortly.` });
       
       // Don't clear file immediately to prevent UI flash
       setTimeout(() => setFile(null), 1000);
@@ -102,6 +105,12 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 
   // Copy to clipboard functionality
   const copyToClipboard = (jobId) => {
+    // FIX: Add null check for jobId
+    if (!jobId) {
+      setMessage({type: 'error', text: 'Invalid Job ID'});
+      return;
+    }
+    
     navigator.clipboard.writeText(jobId).then(() => {
       setCopySuccess(`Copied Job ID: ${jobId.substring(0, 8)}...`);
     }, (err) => {
@@ -117,9 +126,14 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
 
   // Download report handler
   const handleDownloadReport = async (jobId) => {
-    if (!jobId) return;
+    // FIX: Add null check for jobId
+    if (!jobId) {
+      setMessage({ type: 'error', text: 'Invalid Job ID for report download' });
+      return;
+    }
     
-    setMessage({ type: 'info', text: `Requesting download URL for report ${jobId.substring(0,8)}...` });
+    const displayId = jobId.substring(0,8);
+    setMessage({ type: 'info', text: `Requesting download URL for report ${displayId}...` });
     try {
       const { data } = await API.get(`/migration/report/${jobId}`);
       window.open(data.downloadUrl, '_blank');
@@ -127,7 +141,7 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
     } catch (err) {
       setMessage({ 
         type: 'error', 
-        text: err.response?.data?.msg || `Could not get report for Job ${jobId.substring(0,8)}.` 
+        text: err.response?.data?.msg || `Could not get report for Job ${displayId}.` 
       });
     }
   };
@@ -206,19 +220,23 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
               <TableRow><TableCell colSpan={9} align="center">No migration jobs found.</TableCell></TableRow>
             ) : (
               jobs.map(job => {
-                const jobId = job.JobId || job.migrationId;
+                // FIX LINE 215: Add null checks for jobId
+                const jobId = job.JobId || job.migrationId || `job-${Math.random().toString(36).substr(2, 9)}`;
+                const displayId = jobId ? jobId.substring(0, 8) : 'unknown';
+                
                 return (
                   <TableRow key={jobId} hover>
                     <TableCell>
                       <Box display="flex" alignItems="center">
-                        <Tooltip title={jobId}>
-                          <span>{jobId.substring(0, 8)}...</span>
+                        <Tooltip title={jobId || 'Unknown Job ID'}>
+                          <span>{displayId}...</span>
                         </Tooltip>
                         <Tooltip title="Copy full Job ID">
                           <IconButton 
                             size="small" 
                             onClick={() => copyToClipboard(jobId)} 
                             sx={{ ml: 0.5 }}
+                            disabled={!jobId}
                           >
                             <ContentCopy fontSize="inherit" />
                           </IconButton>
@@ -302,13 +320,17 @@ const MigrationReports = ({ setMessage, jobs }) => {
         setMessage({ type: 'warning', text: 'Please enter a valid Job ID.' });
         return;
     }
-    setMessage({ type: 'info', text: `Requesting download URL for report ${migrationId.substring(0,8)}...` });
+    
+    // FIX: Add null check for migrationId before substring
+    const displayId = migrationId ? migrationId.substring(0,8) : 'unknown';
+    setMessage({ type: 'info', text: `Requesting download URL for report ${displayId}...` });
+    
     try {
       const { data } = await API.get(`/migration/report/${migrationId.trim()}`);
       window.open(data.downloadUrl, '_blank');
       setTimeout(() => setMessage({ type: '', text: '' }), 2000);
     } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.msg || `Could not get report for Job ${migrationId.substring(0,8)}.` });
+      setMessage({ type: 'error', text: err.response?.data?.msg || `Could not get report for Job ${displayId}.` });
     }
   };
   
@@ -361,12 +383,15 @@ const MigrationReports = ({ setMessage, jobs }) => {
               <TableRow><TableCell colSpan={7} align="center">No completed jobs found in this session.</TableCell></TableRow>
             ) : (
               completedJobs.map((job) => {
-                const jobId = job.JobId || job.migrationId;
+                // FIX: Add null checks for jobId
+                const jobId = job.JobId || job.migrationId || `job-${Math.random().toString(36).substr(2, 9)}`;
+                const displayId = jobId ? jobId.substring(0, 8) : 'unknown';
+                
                 return (
                   <TableRow key={jobId} hover>
                     <TableCell>
-                      <Tooltip title={jobId}>
-                        <span>{jobId.substring(0, 8)}...</span>
+                      <Tooltip title={jobId || 'Unknown Job ID'}>
+                        <span>{displayId}...</span>
                       </Tooltip>
                     </TableCell>
                     <TableCell><Chip label={job.status} color="success" size="small" /></TableCell>
@@ -472,7 +497,11 @@ export default function BulkMigration() {
     }
 
     console.log(`[Polling] Starting enhanced polling for ${activeJobs.length} active jobs:`, 
-      activeJobs.map(j => `${(j.JobId || j.migrationId).substring(0,8)} (${j.status})`));
+      activeJobs.map(j => {
+        const jobId = j.JobId || j.migrationId || 'unknown';
+        const displayId = jobId ? jobId.substring(0,8) : 'unknown';
+        return `${displayId} (${j.status})`;
+      }));
     
     let pollCount = 0;
     const maxPollAttempts = 240; // 240 * 5s = 20 minutes
@@ -498,6 +527,7 @@ export default function BulkMigration() {
       for (const job of activeJobs) {
         try {
           const jobId = job.JobId || job.migrationId;
+          if (!jobId) continue; // Skip jobs with no ID
           
           const response = await API.get(`/migration/status/${jobId}`);
           const serverData = response.data;
@@ -512,23 +542,24 @@ export default function BulkMigration() {
                 const statusChanged = j.status !== serverData.status;
                 
                 if (statusChanged) {
-                  console.log(`[Polling] Job ${jobId.substring(0,8)} status changed: ${j.status} → ${serverData.status}`);
+                  const displayId = jobId ? jobId.substring(0,8) : 'unknown';
+                  console.log(`[Polling] Job ${displayId} status changed: ${j.status} → ${serverData.status}`);
                   
                   // Show user notifications for important status changes
                   if (serverData.status === 'COMPLETED') {
                     setMessage({ 
                       type: 'success', 
-                      text: `✅ Migration ${jobId.substring(0,8)} completed successfully!` 
+                      text: `✅ Migration ${displayId} completed successfully!` 
                     });
                   } else if (serverData.status === 'FAILED') {
                     setMessage({ 
                       type: 'error', 
-                      text: `❌ Migration ${jobId.substring(0,8)} failed: ${serverData.failureReason || 'Unknown error'}` 
+                      text: `❌ Migration ${displayId} failed: ${serverData.failureReason || 'Unknown error'}` 
                     });
                   } else if (serverData.status === 'IN_PROGRESS' && j.status === 'PENDING_UPLOAD') {
                     setMessage({ 
                       type: 'info', 
-                      text: `🔄 Migration ${jobId.substring(0,8)} processing started` 
+                      text: `🔄 Migration ${displayId} processing started` 
                     });
                   }
                 }
@@ -558,7 +589,8 @@ export default function BulkMigration() {
             return;
             
           } else if (pollError.response?.status === 404) {
-            console.warn(`[Polling] Job ${jobId.substring(0,8)} not found on server`);
+            const displayId = jobId ? jobId.substring(0,8) : 'unknown';
+            console.warn(`[Polling] Job ${displayId} not found on server`);
             // Mark job as potentially failed
             setJobs(currentJobs => {
               return currentJobs.map(j => {
@@ -575,7 +607,8 @@ export default function BulkMigration() {
             });
             
           } else {
-            console.warn(`[Polling] Error for job ${jobId.substring(0,8)}:`, pollError.message);
+            const displayId = jobId ? jobId.substring(0,8) : 'unknown';
+            console.warn(`[Polling] Error for job ${displayId}:`, pollError.message);
           }
           
           // Stop polling if too many consecutive errors
