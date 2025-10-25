@@ -99,12 +99,20 @@ jobs:
           cd frontend
           echo "📦 Installing frontend dependencies..."
           if [ "${{ github.event.inputs.use_npm_ci }}" = "true" ]; then
+            if [ ! -f package-lock.json ]; then
+              echo "❌ package-lock.json not found. npm ci requires a lockfile. Set use_npm_ci=false to fallback." >&2
+              exit 1
+            fi
+            echo "🔒 Using npm ci for reproducible build..."
             npm ci --legacy-peer-deps
+            echo "🔎 Dependency tree (top-level):" && npm ls --depth=0 || true
           else
+            echo "📦 Using npm install fallback..."
             npm cache clean --force 2>/dev/null || true
             rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
             rm -rf node_modules 2>/dev/null || true
             npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
+            echo "🔎 Dependency tree (top-level):" && npm ls --depth=0 || true
           fi
           
           echo "🔧 Configure env"
