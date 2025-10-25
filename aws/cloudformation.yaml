@@ -482,7 +482,6 @@ Resources:
             Status: Enabled
             Prefix: 'processed/'
             ExpirationInDays: 30
-      NotificationConfiguration:
         # Will be configured by workflow post-deploy to avoid circular dependency
       Tags:
         - Key: Environment
