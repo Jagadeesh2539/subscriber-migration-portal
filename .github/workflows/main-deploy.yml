@@ -66,6 +66,36 @@ jobs:
             --query 'Stacks[0].Outputs' --output json > /tmp/outputs.json
           cat /tmp/outputs.json
 
+      - name: 🔗 Configure S3 → Lambda notifications
+        run: |
+          set -e
+          BUCKET=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
+          LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+            --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorArn'].OutputValue" --output text)
+
+          if [ -z "$BUCKET" ] || [ -z "$LAMBDA_ARN" ]; then
+            echo "Failed to resolve bucket or lambda ARN from stack outputs" >&2
+            exit 1
+          fi
+
+          aws s3api put-bucket-notification-configuration \
+            --bucket "$BUCKET" \
+            --notification-configuration "{\
+              \"LambdaFunctionConfigurations\": [\
+                {\
+                  \"LambdaFunctionArn\": \"$LAMBDA_ARN\",\
+                  \"Events\": [\"s3:ObjectCreated:*\"],\
+                  \"Filter\": {\
+                    \"Key\": { \"FilterRules\": [\
+                      { \"Name\": \"prefix\", \"Value\": \"uploads/\" },\
+                      { \"Name\": \"suffix\", \"Value\": \".csv\" }\
+                    ]}\
+                  }\
+                }\
+              ]\
+            }"
+
   deploy:
     name: 🎯 App Deploy
     needs: [infra]
