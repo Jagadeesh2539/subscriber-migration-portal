@@ -103,11 +103,29 @@ const BulkUploadTool = ({ jobs, setJobs, userRole, uploading, setUploading, setM
     return 0;
   };
 
-  // Copy to clipboard functionality
+  // Copy to clipboard functionality - FIX LINE 114
   const copyToClipboard = (jobId) => {
     // FIX: Add null check for jobId
     if (!jobId) {
       setMessage({type: 'error', text: 'Invalid Job ID'});
+      return;
+    }
+    
+    // FIX LINE 114: Add null check for navigator.clipboard
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      // Fallback for browsers without clipboard API
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = jobId;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        setCopySuccess(`Copied Job ID: ${jobId.substring(0, 8)}...`);
+      } catch (fallbackError) {
+        setMessage({type: 'error', text: 'Clipboard not supported in this browser'});
+        console.error('Clipboard fallback failed:', fallbackError);
+      }
       return;
     }
     
