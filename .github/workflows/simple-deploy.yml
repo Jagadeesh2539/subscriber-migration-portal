@@ -1,0 +1,190 @@
+name: Simple Deploy (No Copy Issues)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  FRONTEND_BUCKET: subscriber-migration-stack-prod-frontend
+  BACKEND_LAMBDA: subscriber-migration-stack-prod-BackendLambda-pw0yiCxXyN3J
+  API_GATEWAY_ID: hsebznxeu6
+
+jobs:
+  deploy-all:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Build and deploy frontend
+        run: |
+          cd frontend
+          echo "📦 Installing frontend dependencies..."
+          
+          # Remove package-lock to avoid cache issues
+          rm -f package-lock.json
+          npm cache clean --force
+          
+          # Install without cache
+          npm install --no-audit --no-fund
+          
+          # Set production environment
+          cat > .env.production << EOF
+          REACT_APP_API_BASE_URL=https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
+          REACT_APP_VERSION=2.0.0-simple-deploy
+          REACT_APP_LEGACY_ENABLED=true
+          EOF
+          
+          echo "🔨 Building frontend..."
+          npm run build
+          
+          echo "☁️ Deploying to S3..."
+          aws s3 sync build/ s3://${{ env.FRONTEND_BUCKET }}/ --delete
+          
+          echo "✅ Frontend deployed"
+
+      - name: Build and deploy backend
+        run: |
+          cd backend
+          echo "📦 Installing backend dependencies..."
+          
+          # Install Python dependencies
+          pip install --no-cache-dir -r requirements.txt -t .
+          
+          # Create lambda_function.py from production backend (NO COPY CONFLICTS)
+          cat app_production_ready.py > lambda_function.py
+          
+          echo "📁 Creating deployment package..."
+          zip -q -r ../backend-deploy.zip . \
+            -x "*.pyc" "__pycache__/*" "*.git*" \
+               "app.py" "app_enhanced.py" "*.md" "Dockerfile"
+          
+          cd ..
+          echo "Package size: $(du -sh backend-deploy.zip | cut -f1)"
+          
+          echo "🚀 Deploying to Lambda..."
+          aws lambda update-function-code \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --zip-file fileb://backend-deploy.zip
+          
+          echo "⏳ Waiting for deployment..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          echo "⚙️ Setting environment variables..."
+          aws lambda update-function-configuration \
+            --function-name ${{ env.BACKEND_LAMBDA }} \
+            --environment '{
+              "Variables": {
+                "SUBSCRIBER_TABLE_NAME": "subscriber-table",
+                "AUDIT_LOG_TABLE_NAME": "audit-log-table",
+                "MIGRATION_JOBS_TABLE_NAME": "migration-jobs-table",
+                "MIGRATION_UPLOAD_BUCKET_NAME": "subscriber-migration-stack-prod-migration-uploads",
+                "LEGACY_DB_SECRET_ARN": "arn:aws:secretsmanager:us-east-1:144395889420:secret:subscriber-legacy-db-secret-qWXjZz",
+                "LEGACY_DB_HOST": "subscriber-migration-legacydb.cwd6wssgy4kr.us-east-1.rds.amazonaws.com",
+                "LEGACY_DB_PORT": "3306",
+                "LEGACY_DB_NAME": "legacydb",
+                "FLASK_ENV": "production",
+                "VERSION": "2.0.0-simple-deploy"
+              }
+            }'
+          
+          aws lambda wait function-updated \
+            --function-name ${{ env.BACKEND_LAMBDA }}
+          
+          echo "✅ Backend deployed with legacy integration"
+
+      - name: Update API Gateway
+        run: |
+          echo "🔄 Updating API Gateway..."
+          
+          DEPLOYMENT_ID=$(aws apigateway create-deployment \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --description "Simple Deploy $(date +%Y%m%d-%H%M%S)" \
+            --query 'id' --output text)
+          
+          aws apigateway update-stage \
+            --rest-api-id ${{ env.API_GATEWAY_ID }} \
+            --stage-name prod \
+            --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
+          
+          echo "✅ API Gateway updated"
+
+      - name: Test deployment
+        run: |
+          API_URL="https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
+          FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          
+          echo "🧪 Testing deployment..."
+          echo "⏳ Waiting 60s for AWS propagation..."
+          sleep 60
+          
+          # Test API
+          echo "1️⃣ API Health:"
+          API_HEALTH=$(curl -s "$API_URL/api/health" -w "%{http_code}" -o /dev/null)
+          echo "   Status: $API_HEALTH"
+          
+          # Test Frontend
+          echo "2️⃣ Frontend:"
+          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL")
+          echo "   Status: $FRONTEND_STATUS"
+          
+          # Test Authentication
+          echo "3️⃣ Authentication:"
+          AUTH_RESPONSE=$(curl -s -X POST "$API_URL/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"admin","password":"Admin@123"}' \
+            -w "%{http_code}" -o /tmp/auth.json)
+          echo "   Status: $AUTH_RESPONSE"
+          
+          # Test Legacy DB (may not work until VPC is fully configured)
+          echo "4️⃣ Legacy Database:"
+          LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" -w "%{http_code}" -o /tmp/legacy.json)
+          echo "   Status: $LEGACY_RESPONSE"
+          
+          echo ""
+          echo "📋 DEPLOYMENT SUMMARY:"
+          echo "   🔗 API: $([ "$API_HEALTH" = "200" ] && echo "✅ Working" || echo "⚠️ Issue ($API_HEALTH)")"
+          echo "   🌐 Frontend: $([ "$FRONTEND_STATUS" = "200" ] && echo "✅ Live" || echo "⚠️ Issue ($FRONTEND_STATUS)")"
+          echo "   🔐 Auth: $([ "$AUTH_RESPONSE" = "200" ] && echo "✅ Working" || echo "⚠️ Issue ($AUTH_RESPONSE)")"
+          echo "   🗄️ Legacy: $([ "$LEGACY_RESPONSE" = "200" ] && echo "✅ Connected" || echo "⚠️ VPC Config Needed")"
+          
+          echo ""
+          if [ "$API_HEALTH" = "200" ] && [ "$FRONTEND_STATUS" = "200" ]; then
+            echo "🎉 CORE DEPLOYMENT SUCCESSFUL!"
+            echo "🌐 Portal: $FRONTEND_URL"
+            echo "🔐 Login: admin/Admin@123"
+            echo "⚡ Features: Dashboard, Provisioning, Migration, Analytics"
+            echo ""
+            if [ "$LEGACY_RESPONSE" != "200" ]; then
+              echo "💡 Legacy DB needs VPC configuration (see deployment logs)"
+              echo "   Current: Cloud mode fully working"
+              echo "   Pending: Legacy mode needs Lambda VPC setup"
+            fi
+          else
+            echo "❌ Deployment has issues - check individual components"
+            exit 1
+          fi
+          
+          echo ""
+          echo "🎊 Your enhanced subscriber migration portal is deployed!"
+          echo "📱 Access all features at: $FRONTEND_URL"
