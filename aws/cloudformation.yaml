@@ -6,7 +6,7 @@ Parameters:
     Type: String
     Default: 'prod'
     AllowedValues: ['dev', 'staging', 'prod']
-  
+
   FrontendDomain:
     Type: String
     Default: ''
@@ -15,7 +15,7 @@ Parameters:
     Type: String
     Default: 'admin'
     NoEcho: true
-  
+
   LegacyDbPassword:
     Type: String
     NoEcho: true
@@ -245,6 +245,11 @@ Resources:
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
     Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
       NotificationConfiguration:
@@ -259,6 +264,19 @@ Resources:
                   - Name: suffix
                     Value: .csv
 
+  # CloudWatch Log Groups with retention
+  BackendLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${BackendLambda}'
+      RetentionInDays: 14
+
+  MigrationProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${MigrationProcessorFunction}'
+      RetentionInDays: 14
+
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -271,6 +289,7 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: DynamoDBAccess
           PolicyDocument:
@@ -286,13 +305,15 @@ Resources:
               - Effect: Allow
                 Action: [secretsmanager:GetSecretValue]
                 Resource: !Ref LegacyDbSecret
-        - PolicyName: S3Access
+        - PolicyName: S3AccessRestricted
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: [s3:PutObject,s3:GetObject]
-                Resource: ['*']
+                Action: [s3:GetObject,s3:PutObject]
+                Resource:
+                  - !Sub 'arn:aws:s3:::${MigrationUploadBucket}'
+                  - !Sub 'arn:aws:s3:::${MigrationUploadBucket}/*'
 
   BackendLambda:
     Type: AWS::Lambda::Function
@@ -318,7 +339,6 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDatabase.Endpoint.Address
 
-  # Migration Processor Lambda - points to code package you deploy via CI
   MigrationProcessorRole:
     Type: AWS::IAM::Role
     Properties:
@@ -333,7 +353,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
-        - PolicyName: MigrationDynamoS3
+        - PolicyName: MigrationDynamoS3Restricted
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -342,7 +362,9 @@ Resources:
                 Resource: [!GetAtt SubscriberTable.Arn, !GetAtt MigrationJobsTable.Arn]
               - Effect: Allow
                 Action: [s3:GetObject,s3:PutObject]
-                Resource: ['*']
+                Resource:
+                  - !Sub 'arn:aws:s3:::${MigrationUploadBucket}'
+                  - !Sub 'arn:aws:s3:::${MigrationUploadBucket}/*'
               - Effect: Allow
                 Action: [secretsmanager:GetSecretValue]
                 Resource: !Ref LegacyDbSecret
@@ -370,7 +392,6 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDatabase.Endpoint.Address
 
-  # S3 permission to invoke processor
   S3InvokeMigrationProcessor:
     Type: AWS::Lambda::Permission
     Properties:
@@ -379,7 +400,6 @@ Resources:
       Principal: s3.amazonaws.com
       SourceArn: !GetAtt MigrationUploadBucket.Arn
 
-  # VPC Gateway Endpoints
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
