@@ -30,6 +30,12 @@ jobs:
   infra:
     name: 🏗️ Infra (CloudFormation)
     runs-on: ubuntu-latest
+    outputs:
+      frontend_bucket: ${{ steps.cfn_outputs.outputs.frontend_bucket }}
+      backend_lambda: ${{ steps.cfn_outputs.outputs.backend_lambda }}
+      api_gateway_id: ${{ steps.cfn_outputs.outputs.api_gateway_id }}
+      upload_bucket: ${{ steps.cfn_outputs.outputs.upload_bucket }}
+      processor_lambda_arn: ${{ steps.cfn_outputs.outputs.processor_lambda_arn }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -59,20 +65,24 @@ jobs:
               LegacyDbPassword=${{ secrets.LEGACY_DB_PASSWORD }} \
             --no-fail-on-empty-changeset
 
-      - name: 📤 Stack outputs
-        id: outputs
+      - name: 📝 Extract CloudFormation outputs
+        id: cfn_outputs
         run: |
-          aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
-            --query 'Stacks[0].Outputs' --output json > /tmp/outputs.json
-          cat /tmp/outputs.json
+          get_output() {
+            aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          echo "frontend_bucket=$(get_output FrontendBucketName)" >> $GITHUB_OUTPUT
+          echo "backend_lambda=$(get_output BackendLambdaName)" >> $GITHUB_OUTPUT
+          echo "api_gateway_id=$(get_output BackendApiId)" >> $GITHUB_OUTPUT
+          echo "upload_bucket=$(get_output MigrationUploadBucketName)" >> $GITHUB_OUTPUT
+          echo "processor_lambda_arn=$(get_output MigrationProcessorArn)" >> $GITHUB_OUTPUT
 
       - name: 🔗 Configure S3 → Lambda notifications
         run: |
           set -e
-          BUCKET=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
-            --query "Stacks[0].Outputs[?OutputKey=='MigrationUploadBucketName'].OutputValue" --output text)
-          LAMBDA_ARN=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
-            --query "Stacks[0].Outputs[?OutputKey=='MigrationProcessorArn'].OutputValue" --output text)
+          BUCKET="${{ steps.cfn_outputs.outputs.upload_bucket }}"
+          LAMBDA_ARN="${{ steps.cfn_outputs.outputs.processor_lambda_arn }}"
 
           if [ -z "$BUCKET" ] || [ -z "$LAMBDA_ARN" ]; then
             echo "Failed to resolve bucket or lambda ARN from stack outputs" >&2
@@ -81,19 +91,19 @@ jobs:
 
           aws s3api put-bucket-notification-configuration \
             --bucket "$BUCKET" \
-            --notification-configuration "{\
-              \"LambdaFunctionConfigurations\": [\
-                {\
-                  \"LambdaFunctionArn\": \"$LAMBDA_ARN\",\
-                  \"Events\": [\"s3:ObjectCreated:*\"],\
-                  \"Filter\": {\
-                    \"Key\": { \"FilterRules\": [\
-                      { \"Name\": \"prefix\", \"Value\": \"uploads/\" },\
-                      { \"Name\": \"suffix\", \"Value\": \".csv\" }\
-                    ]}\
-                  }\
-                }\
-              ]\
+            --notification-configuration "{
+              \"LambdaFunctionConfigurations\": [{
+                \"LambdaFunctionArn\": \"$LAMBDA_ARN\",
+                \"Events\": [\"s3:ObjectCreated:*\"],
+                \"Filter\": {
+                  \"Key\": {
+                    \"FilterRules\": [
+                      {\"Name\": \"prefix\", \"Value\": \"uploads/\"},
+                      {\"Name\": \"suffix\", \"Value\": \".csv\"}
+                    ]
+                  }
+                }
+              }]
             }"
 
   deploy:
@@ -135,19 +145,19 @@ jobs:
             fi
             echo "🔒 Using npm ci for reproducible build..."
             npm ci --legacy-peer-deps
-            echo "🔎 Dependency tree (top-level):" && npm ls --depth=0 || true
+            echo "🔍 Dependency tree (top-level):" && npm ls --depth=0 || true
           else
             echo "📦 Using npm install fallback..."
             npm cache clean --force 2>/dev/null || true
             rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
             rm -rf node_modules 2>/dev/null || true
             npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
-            echo "🔎 Dependency tree (top-level):" && npm ls --depth=0 || true
+            echo "🔍 Dependency tree (top-level):" && npm ls --depth=0 || true
           fi
           
           echo "🔧 Configure env"
           cat > .env.production << EOF
-          REACT_APP_API_BASE_URL=https://${{ secrets.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
+          REACT_APP_API_BASE_URL=https://${{ needs.infra.outputs.api_gateway_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
           REACT_APP_VERSION=2.0.0-production
           REACT_APP_LEGACY_ENABLED=true
           REACT_APP_CLOUD_ENABLED=true
@@ -159,7 +169,7 @@ jobs:
           NODE_OPTIONS="--max-old-space-size=8192" npm run build
           
           echo "☁️ Deploy to S3"
-          aws s3 sync build/ s3://${{ secrets.FRONTEND_BUCKET }}/ --delete --cache-control "public, max-age=0, must-revalidate"
+          aws s3 sync build/ s3://${{ needs.infra.outputs.frontend_bucket }}/ --delete --cache-control "public, max-age=0, must-revalidate"
 
       - name: 🔧 Build and deploy backend
         if: github.event.inputs.deploy_type != 'frontend-only'
@@ -170,20 +180,42 @@ jobs:
           zip -q -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.git*" "app_*.py" "*.md" "Dockerfile" "setup_legacy_schema.py" "*.log" "migration_processor/*" "*backup*" "monitoring.py" "reporting.py"
           cd ..
           echo "🚀 Update Lambda"
-          aws lambda update-function-code --function-name ${{ secrets.BACKEND_LAMBDA }} --zip-file fileb://backend-deploy.zip
-          aws lambda wait function-updated --function-name ${{ secrets.BACKEND_LAMBDA }}
+          aws lambda update-function-code --function-name ${{ needs.infra.outputs.backend_lambda }} --zip-file fileb://backend-deploy.zip
+          aws lambda wait function-updated --function-name ${{ needs.infra.outputs.backend_lambda }}
+
+          echo "⚙️ Set environment variables"
+          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
+          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text)
+          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
+          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
+          JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
+
+          aws lambda update-function-configuration \
+            --function-name "${{ needs.infra.outputs.backend_lambda }}" \
+            --environment "{
+              \"Variables\": {
+                \"SUBSCRIBER_TABLE_NAME\": \"$SUBSCRIBER_TABLE\",
+                \"AUDIT_LOG_TABLE_NAME\": \"$AUDIT_TABLE\",
+                \"MIGRATION_JOBS_TABLE_NAME\": \"$JOBS_TABLE\",
+                \"MIGRATION_UPLOAD_BUCKET_NAME\": \"${{ needs.infra.outputs.upload_bucket }}\",
+                \"LEGACY_DB_SECRET_ARN\": \"$LEGACY_DB_SECRET_ARN\",
+                \"LEGACY_DB_HOST\": \"$LEGACY_DB_HOST\",
+                \"FLASK_ENV\": \"production\",
+                \"PROV_MODE\": \"dual_prov\"
+              }
+            }"
 
       - name: 🔄 Update API Gateway
         if: github.event.inputs.deploy_type != 'frontend-only'
         run: |
-          DEPLOYMENT_ID=$(aws apigateway create-deployment --rest-api-id ${{ secrets.API_GATEWAY_ID }} --description "Portal $(date +%Y%m%d-%H%M%S)" --query 'id' --output text)
-          aws apigateway update-stage --rest-api-id ${{ secrets.API_GATEWAY_ID }} --stage-name prod --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
+          DEPLOYMENT_ID=$(aws apigateway create-deployment --rest-api-id ${{ needs.infra.outputs.api_gateway_id }} --description "Portal $(date +%Y%m%d-%H%M%S)" --query 'id' --output text)
+          aws apigateway update-stage --rest-api-id ${{ needs.infra.outputs.api_gateway_id }} --stage-name prod --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
 
       - name: 🧪 Post-deploy health checks
         run: |
-          API_URL="https://${{ secrets.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
-          FRONTEND_URL="http://${{ secrets.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          API_URL="https://${{ needs.infra.outputs.api_gateway_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
+          FRONTEND_URL="http://${{ needs.infra.outputs.frontend_bucket }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           echo "⏳ Wait 45s"
           sleep 45
-          echo "1) API Health" && curl -s -w " % {http_code}\n" "$API_URL/api/health" -o /dev/null || true
+          echo "1) API Health" && curl -s -w " %{http_code}\n" "$API_URL/api/health" -o /dev/null || true
           echo "2) Frontend" && curl -s -o /dev/null -w "%{http_code}\n" "$FRONTEND_URL" || true
