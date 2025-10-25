@@ -1,4 +1,4 @@
-name: 🚀 Deploy Enhanced Portal
+name: 🚀 Deploy Consolidated Portal
 
 on:
   workflow_dispatch:
@@ -12,19 +12,24 @@ on:
           - 'full'
           - 'frontend-only'
           - 'backend-only'
+      use_npm_ci:
+        description: 'Use npm ci for reproducible builds (recommended)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   AWS_DEFAULT_REGION: us-east-1
   FRONTEND_BUCKET: subscriber-migration-stack-prod-frontend
   BACKEND_LAMBDA: subscriber-migration-stack-prod-BackendLambda-pw0yiCxXyN3J
   API_GATEWAY_ID: hsebznxeu6
-  # Force npm to never use ci behavior globally
-  npm_config_package_lock: false
-  npm_config_ci: false
 
 jobs:
   deploy:
-    name: 🎯 Deploy Portal
+    name: 🎯 Deploy Consolidated Portal
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Checkout code
@@ -34,8 +39,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          # Don't cache anything to avoid npm ci triggers
-          # cache: 'npm'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
 
       - name: 🐍 Setup Python
         uses: actions/setup-python@v4
@@ -53,33 +58,22 @@ jobs:
         if: github.event.inputs.deploy_type != 'backend-only'
         run: |
           cd frontend
-          echo "📦 FORCING npm install (never npm ci)..."
+          echo "📦 Installing frontend dependencies..."
           
-          # Remove ALL lockfiles to prevent any npm ci attempts
-          rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
+          if [ "${{ github.event.inputs.use_npm_ci }}" = "true" ]; then
+            echo "🔒 Using npm ci for reproducible build..."
+            npm ci --legacy-peer-deps
+          else
+            echo "📦 Using npm install for compatibility..."
+            # Clear cache and remove lockfile for install mode
+            npm cache clean --force 2>/dev/null || true
+            rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
+            rm -rf node_modules 2>/dev/null || true
+            
+            npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
+          fi
           
-          # Clear ALL npm data
-          npm cache clean --force 2>/dev/null || true
-          rm -rf node_modules 2>/dev/null || true
-          
-          # Set npm config to NEVER use ci behavior
-          npm config set package-lock false
-          npm config set prefer-offline false
-          npm config set fund false
-          npm config set audit false
-          npm config set optional false
-          
-          # Set environment to prevent npm ci
-          export npm_config_package_lock=false
-          export npm_config_ci=false
-          export CI=false
-          
-          # Force npm install with all compatibility flags
-          echo "Running: npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force"
-          npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
-          
-          # Verify installation worked
-          echo "✅ Dependencies installed with npm install successfully"
+          echo "✅ Dependencies installed successfully"
           npm list --depth=0 || true
           
           # Set production environment
@@ -87,9 +81,12 @@ jobs:
           REACT_APP_API_BASE_URL=https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
           REACT_APP_VERSION=2.0.0-production
           REACT_APP_LEGACY_ENABLED=true
+          REACT_APP_CLOUD_ENABLED=true
+          REACT_APP_DUAL_PROV_ENABLED=true
+          REACT_APP_PROVISIONING_MODES=legacy,cloud,dual_prov
           EOF
           
-          echo "🔨 Building enhanced frontend..."
+          echo "🔨 Building production frontend..."
           NODE_OPTIONS="--max-old-space-size=8192" npm run build
           
           echo "☁️ Deploying to S3..."
@@ -105,7 +102,7 @@ jobs:
           cd backend
           echo "📦 Installing backend dependencies..."
           
-          # Install Python dependencies
+          # Install Python dependencies with caching
           pip install --no-cache-dir --target . -r requirements.txt
           
           # Use the consolidated app.py as entry point
@@ -116,7 +113,10 @@ jobs:
           zip -q -r ../backend-deploy.zip . \
             -x "*.pyc" "__pycache__/*" "*.git*" \
                "app_*.py" "*.md" "Dockerfile" \
-               "setup_legacy_schema.py" "*.log" "migration_processor/*"
+               "setup_legacy_schema.py" "*.log" \
+               "migration_processor/*" "*backup*" \
+               "lambda_handler_enhanced.py" "subscriber_enhanced.py" \
+               "migration -backup.py" "monitoring.py" "reporting.py"
           
           cd ..
           echo "📊 Package size: $(du -sh backend-deploy.zip | cut -f1)"
@@ -130,7 +130,7 @@ jobs:
           aws lambda wait function-updated \
             --function-name ${{ env.BACKEND_LAMBDA }}
           
-          echo "⚙️ Setting environment variables..."
+          echo "⚙️ Setting environment variables for consolidated app..."
           aws lambda update-function-configuration \
             --function-name ${{ env.BACKEND_LAMBDA }} \
             --environment '{
@@ -145,14 +145,15 @@ jobs:
                 "LEGACY_DB_NAME": "legacydb",
                 "FLASK_ENV": "production",
                 "VERSION": "2.0.0-production",
-                "PROVISIONING_MODES": "legacy,cloud,dual_prov"
+                "PROVISIONING_MODES": "legacy,cloud,dual_prov",
+                "JWT_SECRET": "subscriber-portal-jwt-secret-2025-production"
               }
             }'
           
           aws lambda wait function-updated \
             --function-name ${{ env.BACKEND_LAMBDA }}
           
-          echo "✅ Backend deployed successfully"
+          echo "✅ Backend deployed successfully with consolidated app.py"
 
       - name: 🔄 Update API Gateway
         if: github.event.inputs.deploy_type != 'frontend-only'
@@ -171,7 +172,7 @@ jobs:
           
           echo "✅ API Gateway updated"
 
-      - name: 🧪 Test deployment
+      - name: 🧪 Test consolidated deployment
         run: |
           API_URL="https://${{ env.API_GATEWAY_ID }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
           FRONTEND_URL="http://${{ env.FRONTEND_BUCKET }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
@@ -180,60 +181,99 @@ jobs:
           echo "⏳ Waiting 60s for propagation..."
           sleep 60
           
-          # Test API
-          echo "1️⃣ API Health:"
+          # Test API Health
+          echo "1️⃣ API Health Check:"
           API_HEALTH=$(curl -s -w "%{http_code}" -o /tmp/health.json "$API_URL/api/health")
           echo "   Status: $API_HEALTH"
-          [ "$API_HEALTH" = "200" ] && cat /tmp/health.json || echo "   Error response"
+          if [ "$API_HEALTH" = "200" ]; then
+            echo "   Version: $(cat /tmp/health.json | jq -r '.version' 2>/dev/null || echo 'N/A')"
+            echo "   Services: $(cat /tmp/health.json | jq -r '.data.services | keys | join(", ")' 2>/dev/null || echo 'N/A')"
+          else
+            echo "   Error response: $(cat /tmp/health.json 2>/dev/null || echo 'No response')"
+          fi
           
           # Test Frontend
-          echo "2️⃣ Frontend:"
+          echo "2️⃣ Frontend Status:"
           FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$FRONTEND_URL")
           echo "   Status: $FRONTEND_STATUS"
           
-          # Test Auth
-          echo "3️⃣ Authentication:"
+          # Test JWT Authentication
+          echo "3️⃣ JWT Authentication:"
           AUTH_RESPONSE=$(curl -s -X POST "$API_URL/api/auth/login" \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"Admin@123"}' \
             -w "%{http_code}" -o /tmp/auth.json)
           echo "   Status: $AUTH_RESPONSE"
-          [ "$AUTH_RESPONSE" = "200" ] && echo "   $(cat /tmp/auth.json | jq -r '.user.role' 2>/dev/null || echo 'Login OK')" || echo "   Auth failed"
+          if [ "$AUTH_RESPONSE" = "200" ]; then
+            echo "   Role: $(cat /tmp/auth.json | jq -r '.data.user.role' 2>/dev/null || echo 'N/A')"
+            echo "   Token: $(cat /tmp/auth.json | jq -r '.data.token[:20]' 2>/dev/null || echo 'N/A')..."
+            
+            # Extract token for authenticated tests
+            TOKEN=$(cat /tmp/auth.json | jq -r '.data.token' 2>/dev/null)
+          else
+            echo "   Auth failed: $(cat /tmp/auth.json 2>/dev/null || echo 'No response')"
+            TOKEN=""
+          fi
           
-          # Test Legacy (soft check)
-          echo "4️⃣ Legacy DB:"
-          LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" -w "%{http_code}" -o /tmp/legacy.json)
-          echo "   Status: $LEGACY_RESPONSE"
-          [ "$LEGACY_RESPONSE" = "200" ] && echo "   $(cat /tmp/legacy.json | jq -r '.status' 2>/dev/null || echo 'Connected')" || echo "   VPC/Security Group setup needed"
+          # Test Protected Dashboard (with JWT)
+          echo "4️⃣ Dashboard Stats (Protected):"
+          if [ -n "$TOKEN" ]; then
+            STATS_RESPONSE=$(curl -s "$API_URL/api/dashboard/stats" \
+              -H "Authorization: Bearer $TOKEN" \
+              -w "%{http_code}" -o /tmp/stats.json)
+            echo "   Status: $STATS_RESPONSE"
+            if [ "$STATS_RESPONSE" = "200" ]; then
+              echo "   Total Subscribers: $(cat /tmp/stats.json | jq -r '.data.totalSubscribers' 2>/dev/null || echo 'N/A')"
+              echo "   System Health: $(cat /tmp/stats.json | jq -r '.data.systemHealth' 2>/dev/null || echo 'N/A')"
+            else
+              echo "   Stats error: $(cat /tmp/stats.json 2>/dev/null || echo 'No response')"
+            fi
+          else
+            echo "   Skipped (no auth token)"
+            STATS_RESPONSE="N/A"
+          fi
           
-          # Test Stats
-          echo "5️⃣ Dashboard Stats:"
-          STATS_RESPONSE=$(curl -s "$API_URL/api/dashboard/stats" -w "%{http_code}" -o /tmp/stats.json)
-          echo "   Status: $STATS_RESPONSE"
-          [ "$STATS_RESPONSE" = "200" ] && echo "   $(cat /tmp/stats.json | jq -r '.totalSubscribers' 2>/dev/null || echo 'Stats OK')" || echo "   Stats endpoint issue"
+          # Test Legacy DB (Protected)
+          echo "5️⃣ Legacy Database (Protected):"
+          if [ -n "$TOKEN" ]; then
+            LEGACY_RESPONSE=$(curl -s "$API_URL/api/legacy/test" \
+              -H "Authorization: Bearer $TOKEN" \
+              -w "%{http_code}" -o /tmp/legacy.json)
+            echo "   Status: $LEGACY_RESPONSE"
+            if [ "$LEGACY_RESPONSE" = "200" ]; then
+              echo "   Connection: $(cat /tmp/legacy.json | jq -r '.data.status' 2>/dev/null || echo 'Connected')"
+            else
+              echo "   Legacy DB: VPC/Security Group setup needed (expected)"
+            fi
+          else
+            echo "   Skipped (no auth token)"
+            LEGACY_RESPONSE="N/A"
+          fi
           
           echo ""
           echo "📋 CONSOLIDATED DEPLOYMENT SUMMARY:"
           echo "   🔗 API:        $([ "$API_HEALTH" = "200" ] && echo "✅ Working" || echo "❌ Failed ($API_HEALTH)")"
           echo "   🌐 Frontend:   $([ "$FRONTEND_STATUS" = "200" ] && echo "✅ Live" || echo "❌ Failed ($FRONTEND_STATUS)")"
-          echo "   🔐 Auth:       $([ "$AUTH_RESPONSE" = "200" ] && echo "✅ Working" || echo "❌ Failed ($AUTH_RESPONSE)")"
+          echo "   🔐 JWT Auth:   $([ "$AUTH_RESPONSE" = "200" ] && echo "✅ Working" || echo "❌ Failed ($AUTH_RESPONSE)")"
+          echo "   📊 Dashboard:  $([ "$STATS_RESPONSE" = "200" ] && echo "✅ Protected" || echo "⚠️ Auth Required")"
           echo "   🗄️ Legacy DB:  $([ "$LEGACY_RESPONSE" = "200" ] && echo "✅ Connected" || echo "⚠️ VPC Config Needed")"
-          echo "   📊 Stats:      $([ "$STATS_RESPONSE" = "200" ] && echo "✅ Working" || echo "⚠️ Partial")"
           
           if [ "$API_HEALTH" = "200" ] && [ "$FRONTEND_STATUS" = "200" ] && [ "$AUTH_RESPONSE" = "200" ]; then
             echo ""
             echo "🎉 CONSOLIDATED DEPLOYMENT SUCCESSFUL!"
             echo "🌐 Portal: $FRONTEND_URL"
-            echo "🔐 Login: admin/Admin@123"
+            echo "🔐 Login: admin/Admin@123 (JWT secured)"
             echo "✨ Features: Dashboard, Provisioning, Migration, Analytics"
-            echo "🎯 Architecture: Single API + Single Frontend (Clean & Maintainable)"
+            echo "🎯 Architecture: Single API + Single Frontend + JWT Security"
+            echo "🛡️ Security: JWT tokens, secure password hashing, audit logging"
+            echo "📦 Dependencies: $([ "${{ github.event.inputs.use_npm_ci }}" = "true" ] && echo "Reproducible (npm ci)" || echo "Compatible (npm install)")"
             
             if [ "$LEGACY_RESPONSE" != "200" ]; then
               echo ""
               echo "💡 Next: Configure Lambda VPC for full legacy integration"
               echo "   All cloud features are fully functional"
             else
-              echo "🚀 All systems operational - ready for production!"
+              echo "🚀 All systems operational - ready for enterprise use!"
             fi
           else
             echo ""
