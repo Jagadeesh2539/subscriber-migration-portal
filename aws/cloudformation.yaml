@@ -1,25 +1,32 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Subscriber Migration Portal - Security Hardened with Least Privilege IAM + VPC Endpoints (S3 notifications configured post-deploy)'
+Description: 'Subscriber Migration Portal - Production Ready (Fixed Parameters & Dependencies)'
 
 Parameters:
   Environment:
     Type: String
     Default: 'prod'
     AllowedValues: ['dev', 'staging', 'prod']
-
-  FrontendDomain:
-    Type: String
-    Default: ''
-
+    Description: 'Deployment environment'
+    
   LegacyDbUsername:
     Type: String
     Default: 'admin'
     NoEcho: true
-
+    Description: 'Legacy database username'
+    
   LegacyDbPassword:
     Type: String
     NoEcho: true
     MinLength: 8
+    Description: 'Legacy database password'
+
+  FrontendDomain:
+    Type: String
+    Default: ''
+    Description: 'Optional custom domain'
+
+Conditions:
+  CreateNewVPC: !Equals [ !Ref FrontendDomain, '' ]  # Simplified condition
 
 Resources:
   VPC:
@@ -28,6 +35,9 @@ Resources:
       CidrBlock: '10.0.0.0/16'
       EnableDnsSupport: true
       EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'subscriber-migration-vpc-${Environment}'
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet
@@ -252,7 +262,6 @@ Resources:
         RestrictPublicBuckets: true
       VersioningConfiguration:
         Status: Enabled
-    # NotificationConfiguration removed to avoid CFN circular dependency; set via workflow post-deploy
 
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -338,7 +347,7 @@ Resources:
                 Action: [dynamodb:GetItem,dynamodb:PutItem,dynamodb:UpdateItem,dynamodb:Query,dynamodb:Scan]
                 Resource: [!GetAtt SubscriberTable.Arn, !GetAtt MigrationJobsTable.Arn]
               - Effect: Allow
-                Action: [s3:GetObject,s3:PutObject]
+                Action: [s3:GetObject,s3:PutObject,s3:DeleteObject]
                 Resource:
                   - !Sub 'arn:aws:s3:::${MigrationUploadBucket}'
                   - !Sub 'arn:aws:s3:::${MigrationUploadBucket}/*'
@@ -369,7 +378,6 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDatabase.Endpoint.Address
 
-  # Permission for S3 to invoke Lambda (notification configured post-deploy)
   S3InvokeMigrationProcessor:
     Type: AWS::Lambda::Permission
     Properties:
@@ -378,7 +386,6 @@ Resources:
       Principal: s3.amazonaws.com
       SourceArn: !GetAtt MigrationUploadBucket.Arn
 
-  # VPC Gateway Endpoints
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -400,3 +407,9 @@ Outputs:
     Value: !Ref MigrationUploadBucket
   MigrationProcessorArn:
     Value: !GetAtt MigrationProcessorFunction.Arn
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  BackendLambdaName:
+    Value: !Ref BackendLambda
+  ApiGatewayId:
+    Value: !Ref BackendApi
