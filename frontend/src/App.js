@@ -6,8 +6,8 @@ import {
   Badge, Avatar, Menu, MenuItem, Tooltip, useTheme, useMediaQuery
 } from '@mui/material';
 import {
-  Home, People, CloudUpload, Analytics as AnalyticsIcon, Settings, Logout, Menu as MenuIcon, Dashboard as DashboardIcon,
-  Storage, Security, NotificationsActive, AccountBox, Help, Close
+  People, CloudUpload, Analytics as AnalyticsIcon, Settings, Logout, Menu as MenuIcon, Dashboard as DashboardIcon,
+  Storage, NotificationsActive, AccountBox, Help, Close
 } from '@mui/icons-material';
 
 // Components (existing and new routes)
@@ -129,12 +129,12 @@ function App() {
     setLoading(false);
   }, []);
 
-  // Auto-close drawer on mobile after navigation
+  // Auto-close drawer on mobile after navigation (Fixed: added missing dependency)
   useEffect(() => {
     if (isMobile && drawerOpen) {
       setDrawerOpen(false);
     }
-  }, [location.pathname, isMobile]);
+  }, [location.pathname, isMobile, drawerOpen]);
 
   const toggleDrawer = () => setDrawerOpen(!drawerOpen);
   const handleLogoutClick = () => {
