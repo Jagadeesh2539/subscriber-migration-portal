@@ -6,7 +6,7 @@ import {
   Badge, Avatar, Menu, MenuItem, Tooltip, useTheme, useMediaQuery
 } from '@mui/material';
 import {
-  Home, People, CloudUpload, Analytics, Settings, Logout, Menu as MenuIcon, Dashboard as DashboardIcon,
+  Home, People, CloudUpload, Analytics as AnalyticsIcon, Settings, Logout, Menu as MenuIcon, Dashboard as DashboardIcon,
   Storage, Security, NotificationsActive, AccountBox, Help, Close
 } from '@mui/icons-material';
 
@@ -78,7 +78,7 @@ const navigationConfig = [
   { path: '/provision', label: 'Provisioning', icon: <People />, roles: ['admin', 'operator'] },
   { path: '/migration', label: 'Migration', icon: <CloudUpload />, roles: ['admin', 'operator'] },
   { path: '/bulk-ops', label: 'Bulk Operations', icon: <Storage />, roles: ['admin'] },
-  { path: '/analytics', label: 'Analytics', icon: <Analytics />, roles: ['admin', 'operator'] },
+  { path: '/analytics', label: 'Analytics', icon: <AnalyticsIcon />, roles: ['admin', 'operator'] },
   { path: '/monitoring', label: 'Monitoring', icon: <NotificationsActive />, roles: ['admin'] },
   { path: '/users', label: 'User Management', icon: <AccountBox />, roles: ['admin'] },
   { path: '/settings', label: 'Settings', icon: <Settings />, roles: ['admin'] },
