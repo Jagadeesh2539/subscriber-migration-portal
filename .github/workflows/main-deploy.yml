@@ -120,6 +120,41 @@ jobs:
           aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null || false
         }
         
+        # Wait for Lambda function to be ready for next operation (optimized polling)
+        wait_for_lambda_ready() {
+          local function_name="$1"
+          local operation_type="$2"
+          local max_wait_time=300
+          local wait_interval=15
+          local elapsed_time=0
+          
+          echo "⏳ Waiting for Lambda function '$function_name' to be ready for $operation_type..."
+          
+          while [[ $elapsed_time -lt $max_wait_time ]]; do
+            # Get current function state
+            FUNCTION_STATE=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.State' --output text 2>/dev/null || echo "UNKNOWN")
+            LAST_UPDATE_STATUS=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.LastUpdateStatus' --output text 2>/dev/null || echo "UNKNOWN")
+            
+            echo "🔍 Function state: $FUNCTION_STATE, Last update status: $LAST_UPDATE_STATUS"
+            
+            # Check if function is ready
+            if [[ "$FUNCTION_STATE" == "Active" && "$LAST_UPDATE_STATUS" == "Successful" ]]; then
+              echo "✅ Lambda function '$function_name' is ready for $operation_type"
+              return 0
+            elif [[ "$LAST_UPDATE_STATUS" == "Failed" ]]; then
+              echo "❌ Lambda function '$function_name' update failed"
+              return 1
+            fi
+            
+            echo "⏳ Function not ready yet, waiting ${wait_interval}s..."
+            sleep $wait_interval
+            elapsed_time=$((elapsed_time + wait_interval))
+          done
+          
+          echo "⚠️  Timeout waiting for Lambda function '$function_name' to be ready"
+          return 1
+        }
+        
         # Enhanced stack status retrieval
         get_stack_status() {
           if aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null; then
@@ -249,41 +284,6 @@ jobs:
           done
           
           echo "❌ Failed to delete stack after $max_retries attempts: $stack_name"
-          return 1
-        }
-        
-        # Wait for Lambda function to be ready for next operation
-        wait_for_lambda_ready() {
-          local function_name="$1"
-          local operation_type="$2"
-          local max_wait_time=300
-          local wait_interval=10
-          local elapsed_time=0
-          
-          echo "⏳ Waiting for Lambda function '$function_name' to be ready for $operation_type..."
-          
-          while [[ $elapsed_time -lt $max_wait_time ]]; do
-            # Get current function state
-            FUNCTION_STATE=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.State' --output text 2>/dev/null || echo "UNKNOWN")
-            LAST_UPDATE_STATUS=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.LastUpdateStatus' --output text 2>/dev/null || echo "UNKNOWN")
-            
-            echo "🔍 Function state: $FUNCTION_STATE, Last update status: $LAST_UPDATE_STATUS"
-            
-            # Check if function is ready
-            if [[ "$FUNCTION_STATE" == "Active" && "$LAST_UPDATE_STATUS" == "Successful" ]]; then
-              echo "✅ Lambda function '$function_name' is ready for $operation_type"
-              return 0
-            elif [[ "$LAST_UPDATE_STATUS" == "Failed" ]]; then
-              echo "❌ Lambda function '$function_name' update failed"
-              return 1
-            fi
-            
-            echo "⏳ Function not ready yet, waiting ${wait_interval}s..."
-            sleep $wait_interval
-            elapsed_time=$((elapsed_time + wait_interval))
-          done
-          
-          echo "⚠️  Timeout waiting for Lambda function '$function_name' to be ready"
           return 1
         }
         FUNCTIONS_EOF
@@ -656,12 +656,16 @@ jobs:
             # Clean up for retry
             delete_failed_stack_robust "$STACK_NAME" "$AWS_REGION" || true
             
-            # Optional cleanup on retry (avoid deleting prod buckets!)
-            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-            echo "ℹ️ Skipping destructive S3 cleanup for prod buckets on retry."
-            # If you need cleanup in non-prod, uncomment and adjust names:
-            # delete_s3_bucket_enhanced "sub-mig-web-$ACCOUNT_ID-dev" || true
-            # delete_s3_bucket_enhanced "sub-mig-data-$ACCOUNT_ID-dev" || true
+            # Safe cleanup on retry (avoid deleting prod buckets!)
+            if [[ "${{ env.CLEANUP_ALL }}" == "true" ]]; then
+              echo "🧹 Destructive cleanup enabled for retry"
+              ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+              delete_s3_bucket_enhanced "sub-mig-logs-$ACCOUNT_ID" || true
+              delete_s3_bucket_enhanced "sub-mig-web-$ACCOUNT_ID-prod" || true
+              delete_s3_bucket_enhanced "sub-mig-data-$ACCOUNT_ID-prod" || true
+            else
+              echo "ℹ️ Skipping destructive cleanup on retry (CLEANUP_ALL!=true)"
+            fi
             
             # Always use create-stack for retries
             OPERATION="create-stack"
@@ -711,19 +715,20 @@ jobs:
         BACKEND_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="BackendLambdaName") | .OutputValue' /tmp/stack-outputs.json)
         MIGRATION_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorFunctionName") | .OutputValue' /tmp/stack-outputs.json)
         
-        # Debug: Show parsed values
-        echo "🔍 Parsed values:"
-        echo "SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE"
-        echo "UPLOAD_BUCKET=$UPLOAD_BUCKET"
-        echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
-        echo "MIGRATION_LAMBDA_NAME=$MIGRATION_LAMBDA_NAME"
-        echo "BACKEND_LAMBDA_NAME=$BACKEND_LAMBDA_NAME"
+        # Optional: Export additional handy outputs for future steps
+        BACKEND_API_ID=$(jq -r '.[] | select(.OutputKey=="BackendApiId") | .OutputValue' /tmp/stack-outputs.json)
+        BACKEND_LAMBDA_ARN=$(jq -r '.[] | select(.OutputKey=="BackendLambdaArn") | .OutputValue' /tmp/stack-outputs.json)
         
-        # Validate critical variables
-        if [[ -z "$UPLOAD_BUCKET" || "$UPLOAD_BUCKET" == "null" ]]; then
-          echo "❌ Critical error: Upload bucket not found"
-          exit 1
-        fi
+        # Validate critical variables and provide better error messaging
+        for VAR_NAME in UPLOAD_BUCKET FRONTEND_BUCKET FRONTEND_URL MIGRATION_ARN MIGRATION_LAMBDA_NAME BACKEND_API_URL BACKEND_LAMBDA_NAME; do
+          VAR_VALUE="${!VAR_NAME:-}"
+          if [[ -z "$VAR_VALUE" || "$VAR_VALUE" == "null" ]]; then
+            echo "❌ Critical output missing: $VAR_NAME"
+            echo "Available outputs:"
+            cat /tmp/stack-outputs.json | jq -r '.[] | "\(.OutputKey): \(.OutputValue)"'
+            exit 1
+          fi
+        done
         
         # Verify bucket exists
         if ! aws s3api head-bucket --bucket "$UPLOAD_BUCKET" 2>/dev/null; then
@@ -732,14 +737,6 @@ jobs:
         fi
         
         echo "✅ Upload bucket verified: $UPLOAD_BUCKET"
-        
-        # Additional validations for all critical outputs
-        for VAR in FRONTEND_BUCKET MIGRATION_ARN BACKEND_API_URL FRONTEND_URL BACKEND_LAMBDA_NAME MIGRATION_LAMBDA_NAME; do
-          if [[ -z "${!VAR:-}" || "${!VAR}" == "null" ]]; then
-            echo "❌ Critical output missing: $VAR"
-            exit 1
-          fi
-        done
         
         # Security: Mask sensitive values in GitHub Actions logs
         echo "::add-mask::$SUBSCRIBER_TABLE"
@@ -754,6 +751,8 @@ jobs:
         echo "::add-mask::$FRONTEND_URL"
         echo "::add-mask::$BACKEND_LAMBDA_NAME"
         echo "::add-mask::$MIGRATION_LAMBDA_NAME"
+        echo "::add-mask::$BACKEND_API_ID"
+        echo "::add-mask::$BACKEND_LAMBDA_ARN"
         
         # Export all to environment for subsequent steps
         echo "SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE" >> $GITHUB_ENV
@@ -768,6 +767,8 @@ jobs:
         echo "FRONTEND_URL=$FRONTEND_URL" >> $GITHUB_ENV
         echo "BACKEND_LAMBDA_NAME=$BACKEND_LAMBDA_NAME" >> $GITHUB_ENV
         echo "MIGRATION_LAMBDA_NAME=$MIGRATION_LAMBDA_NAME" >> $GITHUB_ENV
+        echo "BACKEND_API_ID=$BACKEND_API_ID" >> $GITHUB_ENV
+        echo "BACKEND_LAMBDA_ARN=$BACKEND_LAMBDA_ARN" >> $GITHUB_ENV
         
         echo "✅ Stack outputs cached and environment variables set"
 
@@ -873,9 +874,17 @@ jobs:
         echo "📡 Setting up S3 → Lambda notifications..."
         ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 
-        # Get parameterized S3 filters
+        # Get parameterized S3 filters and normalize them
         PREFIX="${{ github.event.inputs.s3_prefix || 'uploads/' }}"
         SUFFIX="${{ github.event.inputs.s3_suffix || '.csv' }}"
+
+        # Normalize: ensure trailing slash on non-empty prefix
+        if [[ -n "$PREFIX" && "${PREFIX: -1}" != "/" ]]; then PREFIX="${PREFIX}/"; fi
+
+        # Normalize suffix: if bare word (no dot), add dot; otherwise keep as-is
+        if [[ -n "$SUFFIX" && "$SUFFIX" != .* ]]; then SUFFIX=".$SUFFIX"; fi
+
+        echo "🔍 Using normalized filters: PREFIX='$PREFIX' SUFFIX='$SUFFIX'"
 
         # Ensure bucket & Lambda are in same region
         BUCKET_REGION=$(aws s3api get-bucket-location --bucket "$UPLOAD_BUCKET" --query 'LocationConstraint' --output text)
@@ -903,34 +912,83 @@ jobs:
           --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" \
           --source-account "$ACCOUNT_ID"
 
-        # Build notification config with prefix + suffix filter
-        cat > s3notif.json <<EOF
+        # Build FilterRules array conditionally
+        FILTER_RULES=()
+
+        if [[ -n "$PREFIX" ]]; then
+          FILTER_RULES+=("{\"Name\":\"prefix\",\"Value\":\"$PREFIX\"}")
+        fi
+
+        # Omit suffix rule entirely if empty
+        if [[ -n "$SUFFIX" ]]; then
+          FILTER_RULES+=("{\"Name\":\"suffix\",\"Value\":\"$SUFFIX\"}")
+        fi
+
+        # Join rules into JSON (either 1 or 2 entries, or empty)
+        if [[ ${#FILTER_RULES[@]} -gt 0 ]]; then
+          FILTER_JSON=$(printf ",\n                    %s" "${FILTER_RULES[@]}")
+          FILTER_JSON=${FILTER_JSON:2} # strip leading comma+newline
+          FILTER_BLOCK=",
+              \"Filter\": {
+                \"Key\": {
+                  \"FilterRules\": [
+                    $FILTER_JSON
+                  ]
+                }
+              }"
+        else
+          FILTER_BLOCK=""
+        fi
+
+        # Fetch existing config (may be {})
+        aws s3api get-bucket-notification-configuration --bucket "$UPLOAD_BUCKET" > current_notif.json 2>/dev/null || echo '{}' > current_notif.json
+
+        # Write new lambda config
+        cat > new_lambda.json <<EOF
         {
           "LambdaFunctionConfigurations": [
             {
               "Id": "MigrationProcessorTrigger",
               "LambdaFunctionArn": "$MIGRATION_ARN",
-              "Events": ["s3:ObjectCreated:*"],
-              "Filter": {
-                "Key": {
-                  "FilterRules": [
-                    { "Name": "prefix", "Value": "$PREFIX" },
-                    { "Name": "suffix", "Value": "$SUFFIX" }
-                  ]
-                }
-              }
+              "Events": ["s3:ObjectCreated:*"]$FILTER_BLOCK
             }
           ]
         }
         EOF
 
-        # Apply notification config
+        # Merge: drop any existing with the same Id, then append ours
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+
+        cur = json.loads(Path("current_notif.json").read_text() or "{}")
+        new = json.loads(Path("new_lambda.json").read_text())
+
+        cur.setdefault("LambdaFunctionConfigurations", [])
+        # Remove existing with same Id
+        cur["LambdaFunctionConfigurations"] = [
+            c for c in cur["LambdaFunctionConfigurations"]
+            if c.get("Id") != "MigrationProcessorTrigger"
+        ]
+        # Append ours
+        cur["LambdaFunctionConfigurations"].extend(new.get("LambdaFunctionConfigurations", []))
+
+        # Ensure empty arrays for other sections if missing
+        for k in ["TopicConfigurations","QueueConfigurations"]:
+            cur.setdefault(k, [])
+
+        Path("merged_notif.json").write_text(json.dumps(cur))
+        PY
+
+        # Apply merged notification config
         aws s3api put-bucket-notification-configuration \
           --bucket "$UPLOAD_BUCKET" \
-          --notification-configuration file://s3notif.json
+          --notification-configuration file://merged_notif.json
 
         # Show final config (useful for debugging)
         aws s3api get-bucket-notification-configuration --bucket "$UPLOAD_BUCKET"
+        
+        echo "✅ S3 notifications configured with PREFIX='$PREFIX' and SUFFIX='$SUFFIX'"
 
     - name: Deploy frontend automatically
       if: env.DEPLOYMENT_SUCCESS == 'true'  
@@ -947,8 +1005,8 @@ jobs:
             npm ci
             npm run build
             
-            # Upload to S3 (using cached environment variable)
-            aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete
+            # Upload to S3 (using cached environment variable with --no-progress for cleaner logs)
+            aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete --no-progress
             
             echo "✅ Frontend deployed"
             echo "🌐 Frontend URL: $FRONTEND_URL"
@@ -961,23 +1019,28 @@ jobs:
           echo "⚠️  Frontend directory not found, skipping"
         fi
 
-    - name: Initialize database schema (conditional)
+    - name: Initialize database schema conditionally
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
         set -euo pipefail
         echo "🗄️  Attempting database schema initialization..."
 
-        # Fetch password (may require VPC access to RDS)
+        # Get password from secrets manager
         SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$LEGACY_DB_SECRET" --query 'SecretString' --output text)
         DB_PASSWORD=$(echo "$SECRET_VALUE" | jq -r '.password')
+        
+        # Security: Mask the database password
         echo "::add-mask::$DB_PASSWORD"
-
-        # Quick TCP check (10s) — skip if not reachable
+        
+        # Quick TCP check (10s timeout) — skip if not reachable
         if timeout 10 bash -c "cat < /dev/null > /dev/tcp/$LEGACY_DB_ENDPOINT/3306" 2>/dev/null; then
           echo "✅ RDS endpoint reachable, running schema creation via mysql client"
+          
+          # Create SQL schema and execute using mysql client
           cat << 'EOF' > schema.sql
         CREATE DATABASE IF NOT EXISTS legacydb;
         USE legacydb;
+        
         CREATE TABLE IF NOT EXISTS subscribers (
           id VARCHAR(64) PRIMARY KEY,
           email VARCHAR(255) NOT NULL UNIQUE,
@@ -989,6 +1052,7 @@ jobs:
           INDEX idx_email (email),
           INDEX idx_status (status)
         );
+        
         CREATE TABLE IF NOT EXISTS migration_logs (
           id VARCHAR(64) PRIMARY KEY,
           job_id VARCHAR(64),
@@ -1004,6 +1068,7 @@ jobs:
           INDEX idx_status (status)
         );
         EOF
+        
           MYSQL_PWD="$DB_PASSWORD" mysql -h "$LEGACY_DB_ENDPOINT" -u admin < schema.sql
           echo "✅ Database schema initialized"
         else
@@ -1018,12 +1083,14 @@ jobs:
         
         echo "🧪 Running comprehensive smoke tests..."
         
-        # Test API health
+        # Test API health with status code
         echo "🔍 Testing API health endpoint..."
-        if curl -f -s "$BACKEND_API_URL/health" >/dev/null; then
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BACKEND_API_URL/health" || true)
+        echo "Health status: $STATUS"
+        if [[ "$STATUS" == "200" ]]; then
           echo "✅ API health check passed"
         else
-          echo "⚠️  API health check failed (may be normal for new deployments)"
+          echo "⚠️  API health check failed with status $STATUS (may be normal for new deployments)"
         fi
         
         # Test API CORS
@@ -1074,9 +1141,11 @@ jobs:
         name: deployment-logs
         path: |
           deployment-attempt-*.log
-          s3notif.json
-          aws/parameters.json
+          current_notif.json
+          new_lambda.json
+          merged_notif.json
           schema.sql
+          aws/parameters.json
         if-no-files-found: ignore
 
     - name: Error reporting and cleanup
@@ -1119,6 +1188,7 @@ jobs:
             echo "🧹 Automated cleanup..."
             delete_failed_stack_robust "$STACK_NAME" "$AWS_REGION" || true
             
+            # Safe cleanup (only if CLEANUP_ALL is enabled)
             if [[ "${{ env.CLEANUP_ALL }}" == "true" ]]; then
               echo "🧹 Destructive S3 cleanup enabled (CLEANUP_ALL=true)"
               ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
