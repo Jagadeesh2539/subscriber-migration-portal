@@ -720,23 +720,63 @@ jobs:
         BACKEND_LAMBDA_ARN=$(jq -r '.[] | select(.OutputKey=="BackendLambdaArn") | .OutputValue' /tmp/stack-outputs.json)
         
         # Validate critical variables and provide better error messaging
-        for VAR_NAME in UPLOAD_BUCKET FRONTEND_BUCKET FRONTEND_URL MIGRATION_ARN MIGRATION_LAMBDA_NAME BACKEND_API_URL BACKEND_LAMBDA_NAME; do
-          VAR_VALUE="${!VAR_NAME:-}"
-          if [[ -z "$VAR_VALUE" || "$VAR_VALUE" == "null" ]]; then
-            echo "❌ Critical output missing: $VAR_NAME"
+        if [[ -z "$UPLOAD_BUCKET" || "$UPLOAD_BUCKET" == "null" ]]; then
+          echo "❌ Critical error: Upload bucket not found in stack outputs"
+          echo "Available outputs:"
+          cat /tmp/stack-outputs.json | jq -r '.[] | "\(.OutputKey): \(.OutputValue)"'
+          exit 1
+        fi
+        
+        # Enhanced bucket verification with better error handling
+        echo "🔍 Verifying upload bucket exists: $UPLOAD_BUCKET"
+        if aws s3api head-bucket --bucket "$UPLOAD_BUCKET" 2>/dev/null; then
+          echo "✅ Upload bucket verified: $UPLOAD_BUCKET"
+        else
+          echo "⚠️  Upload bucket does not exist: $UPLOAD_BUCKET"
+          echo "🔧 This might be due to a CloudFormation stack inconsistency."
+          echo "🔍 Listing actual S3 buckets to debug:"
+          aws s3 ls | grep -i sub-mig || echo "No matching buckets found"
+          
+          # Try to determine the correct bucket name
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          POSSIBLE_BUCKETS=(
+            "sub-mig-data-$ACCOUNT_ID-prod"
+            "sub-mig-uploads-$ACCOUNT_ID-prod"
+            "subscriber-migration-data-$ACCOUNT_ID-prod"
+            "subscriber-migration-uploads-$ACCOUNT_ID-prod"
+          )
+          
+          echo "🔍 Checking for possible bucket names:"
+          FOUND_BUCKET=""
+          for bucket in "${POSSIBLE_BUCKETS[@]}"; do
+            echo "  Checking: $bucket"
+            if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+              echo "  ✅ Found: $bucket"
+              FOUND_BUCKET="$bucket"
+              break
+            else
+              echo "  ❌ Not found: $bucket"
+            fi
+          done
+          
+          if [[ -n "$FOUND_BUCKET" ]]; then
+            echo "🔧 Using found bucket: $FOUND_BUCKET"
+            UPLOAD_BUCKET="$FOUND_BUCKET"
+          else
+            echo "❌ No valid upload bucket found. Check your CloudFormation template."
+            exit 1
+          fi
+        fi
+        
+        # Additional validations for all critical outputs
+        for VAR in FRONTEND_BUCKET MIGRATION_ARN BACKEND_API_URL FRONTEND_URL BACKEND_LAMBDA_NAME MIGRATION_LAMBDA_NAME; do
+          if [[ -z "${!VAR:-}" || "${!VAR}" == "null" ]]; then
+            echo "❌ Critical output missing: $VAR"
             echo "Available outputs:"
             cat /tmp/stack-outputs.json | jq -r '.[] | "\(.OutputKey): \(.OutputValue)"'
             exit 1
           fi
         done
-        
-        # Verify bucket exists
-        if ! aws s3api head-bucket --bucket "$UPLOAD_BUCKET" 2>/dev/null; then
-          echo "❌ Upload bucket does not exist: $UPLOAD_BUCKET"
-          exit 1
-        fi
-        
-        echo "✅ Upload bucket verified: $UPLOAD_BUCKET"
         
         # Security: Mask sensitive values in GitHub Actions logs
         echo "::add-mask::$SUBSCRIBER_TABLE"
@@ -782,10 +822,19 @@ jobs:
         
         echo "🚀 Deploying application code to Lambda functions..."
         
-        # Backend Lambda
-        if [[ -d "backend" ]]; then
-          echo "📦 Packaging backend Lambda with dependencies..."
-          cd backend
+        # Backend Lambda - check multiple possible directory structures
+        BACKEND_DIRS=("backend" "src" "lambda" "api" "backend/api")
+        BACKEND_DIR=""
+        for dir in "${BACKEND_DIRS[@]}"; do
+          if [[ -d "$dir" ]]; then
+            BACKEND_DIR="$dir"
+            break
+          fi
+        done
+        
+        if [[ -n "$BACKEND_DIR" ]]; then
+          echo "📦 Packaging backend Lambda from: $BACKEND_DIR"
+          cd "$BACKEND_DIR"
           
           # Install production dependencies if package.json exists
           if [[ -f "package.json" ]]; then
@@ -807,15 +856,37 @@ jobs:
           # Wait for deployment to complete
           wait_for_lambda_ready "$BACKEND_LAMBDA_NAME" "deployment"
           
-          echo "✅ Backend Lambda code deployed"
+          echo "✅ Backend Lambda code deployed from: $BACKEND_DIR"
         else
-          echo "⚠️  Backend directory not found, skipping"
+          echo "⚠️  Backend directory not found (tried: ${BACKEND_DIRS[*]}), skipping"
         fi
         
-        # Migration Processor
-        if [[ -d "migration-processor" ]]; then
-          echo "📦 Packaging migration processor Lambda with dependencies..."
-          cd migration-processor
+        # Migration Processor - check multiple possible directory structures (including nested)
+        MIGRATION_DIRS=(
+          "migration-processor" 
+          "migration" 
+          "processor" 
+          "lambda-processor" 
+          "functions"
+          "backend/migration-processor"
+          "backend/migration_processor" 
+          "backend/migration"
+          "backend/processor"
+          "src/migration-processor"
+          "src/migration_processor"
+          "src/migration"
+        )
+        MIGRATION_DIR=""
+        for dir in "${MIGRATION_DIRS[@]}"; do
+          if [[ -d "$dir" ]]; then
+            MIGRATION_DIR="$dir"
+            break
+          fi
+        done
+        
+        if [[ -n "$MIGRATION_DIR" ]]; then
+          echo "📦 Packaging migration processor Lambda from: $MIGRATION_DIR"
+          cd "$MIGRATION_DIR"
           
           # Install production dependencies if requirements.txt exists
           if [[ -f "requirements.txt" ]]; then
@@ -830,6 +901,14 @@ jobs:
           
           cd ..
           
+          # Handle nested directory zipping correctly
+          if [[ "$MIGRATION_DIR" == */* ]]; then
+            # For nested dirs like "backend/migration-processor", move zip to root
+            if [[ -f "${MIGRATION_DIR%/*}/migration.zip" ]]; then
+              mv "${MIGRATION_DIR%/*}/migration.zip" ./migration.zip
+            fi
+          fi
+          
           aws lambda update-function-code \
             --function-name "$MIGRATION_LAMBDA_NAME" \
             --zip-file fileb://migration.zip
@@ -837,9 +916,15 @@ jobs:
           # Wait for deployment to complete
           wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "deployment"
           
-          echo "✅ Migration processor code deployed"
+          echo "✅ Migration processor code deployed from: $MIGRATION_DIR"
         else
-          echo "⚠️  Migration processor directory not found, skipping"
+          echo "⚠️  Migration processor directory not found (tried: ${MIGRATION_DIRS[*]}), skipping"
+          echo "🔍 Available directories in project root:"
+          find . -maxdepth 2 -type d -name "*migration*" -o -name "*processor*" | head -10
+          echo "🔍 Available directories in backend/:"
+          if [[ -d "backend" ]]; then
+            find backend/ -maxdepth 2 -type d 2>/dev/null | head -10
+          fi
         fi
 
     - name: Configure Lambda environment variables
@@ -997,26 +1082,54 @@ jobs:
         
         echo "🌐 Deploying React frontend..."
         
-        if [[ -d "frontend" ]]; then
-          cd frontend
+        # Check multiple possible frontend directory names
+        FRONTEND_DIRS=("frontend" "web" "client" "ui" "app")
+        FRONTEND_DIR=""
+        for dir in "${FRONTEND_DIRS[@]}"; do
+          if [[ -d "$dir" ]]; then
+            FRONTEND_DIR="$dir"
+            break
+          fi
+        done
+        
+        if [[ -n "$FRONTEND_DIR" ]]; then
+          echo "📦 Building frontend from: $FRONTEND_DIR"
+          cd "$FRONTEND_DIR"
           
           # Install dependencies and build
           if [[ -f "package.json" ]]; then
-            npm ci
+            echo "📦 Installing frontend dependencies..."
+            
+            # Try npm ci first, fallback to npm install if package-lock.json is out of sync
+            if ! npm ci 2>/dev/null; then
+              echo "⚠️  npm ci failed, trying npm install (package-lock.json might be out of sync)"
+              npm install
+              
+              # Update package-lock.json if needed
+              if [[ -f "package-lock.json" ]]; then
+                echo "🔧 Updating package-lock.json..."
+                npm install --package-lock-only
+              fi
+            fi
+            
+            echo "🏗️  Building frontend..."
             npm run build
             
             # Upload to S3 (using cached environment variable with --no-progress for cleaner logs)
+            echo "📤 Uploading to S3..."
             aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete --no-progress
             
-            echo "✅ Frontend deployed"
+            echo "✅ Frontend deployed from: $FRONTEND_DIR"
             echo "🌐 Frontend URL: $FRONTEND_URL"
           else
-            echo "⚠️  package.json not found in frontend directory"
+            echo "⚠️  package.json not found in $FRONTEND_DIR directory"
           fi
           
           cd ..
         else
-          echo "⚠️  Frontend directory not found, skipping"
+          echo "⚠️  Frontend directory not found (tried: ${FRONTEND_DIRS[*]}), skipping"
+          echo "🔍 Available directories:"
+          ls -la . | grep ^d || echo "No directories found"
         fi
 
     - name: Initialize database schema conditionally
