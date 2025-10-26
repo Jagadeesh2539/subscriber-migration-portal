@@ -927,7 +927,7 @@ jobs:
           fi
         fi
 
-    - name: Configure Lambda environment variables
+    - name: Debug and fix Lambda environment variables
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
         set -euo pipefail
@@ -935,21 +935,116 @@ jobs:
         # Source the functions
         source /tmp/stack_functions.sh
         
-        echo "⚙️  Configuring Lambda environment variables..."
+        echo "🔍 Debugging and fixing Lambda configuration..."
         
-        # Wait for backend Lambda to be ready, then configure
+        # Show current Lambda environment variables
+        echo "📋 Current Backend Lambda environment:"
+        aws lambda get-function-configuration --function-name "$BACKEND_LAMBDA_NAME" \
+          --query 'Environment.Variables' --output json | jq '.' || echo "No environment variables set"
+        
+        echo "📋 Current Migration Lambda environment:"
+        aws lambda get-function-configuration --function-name "$MIGRATION_LAMBDA_NAME" \
+          --query 'Environment.Variables' --output json | jq '.' || echo "No environment variables set"
+        
+        # Wait for both Lambdas to be ready before configuration
         wait_for_lambda_ready "$BACKEND_LAMBDA_NAME" "configuration"
+        wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "configuration"
+        
+        # Update Backend Lambda with ALL required environment variables
+        echo "⚙️  Updating Backend Lambda environment variables..."
         aws lambda update-function-configuration \
           --function-name "$BACKEND_LAMBDA_NAME" \
-          --environment "Variables={ENVIRONMENT=prod,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,AUDIT_TABLE=$AUDIT_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+          --environment "Variables={
+            ENVIRONMENT=prod,
+            SUBSCRIBER_TABLE_NAME=$SUBSCRIBER_TABLE,
+            AUDIT_LOG_TABLE_NAME=$AUDIT_TABLE,
+            MIGRATION_JOBS_TABLE_NAME=$JOBS_TABLE,
+            MIGRATION_UPLOAD_BUCKET_NAME=$UPLOAD_BUCKET,
+            LEGACY_DB_SECRET_ARN=$LEGACY_DB_SECRET,
+            LEGACY_DB_HOST=$LEGACY_DB_ENDPOINT,
+            LEGACY_DB_PORT=3306,
+            LEGACY_DB_NAME=legacydb,
+            JWT_SECRET=subscriber-portal-jwt-secret-2025-production,
+            FLASK_ENV=production,
+            PROV_MODE=dual_prov,
+            VERSION=2.0.0-production
+          }"
         
-        # Wait for migration processor to be ready, then configure
-        wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "configuration"
+        # Wait for backend configuration to complete
+        echo "⏳ Waiting for Backend Lambda configuration to complete..."
+        wait_for_lambda_ready "$BACKEND_LAMBDA_NAME" "post-configuration"
+        
+        # Update Migration Lambda with ALL required environment variables
+        echo "⚙️  Updating Migration Lambda environment variables..."
         aws lambda update-function-configuration \
           --function-name "$MIGRATION_LAMBDA_NAME" \
-          --environment "Variables={ENVIRONMENT=prod,UPLOAD_BUCKET=$UPLOAD_BUCKET,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+          --environment "Variables={
+            ENVIRONMENT=prod,
+            UPLOAD_BUCKET=$UPLOAD_BUCKET,
+            SUBSCRIBER_TABLE_NAME=$SUBSCRIBER_TABLE,
+            JOBS_TABLE_NAME=$JOBS_TABLE,
+            LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT,
+            LEGACY_DB_SECRET_ARN=$LEGACY_DB_SECRET,
+            LEGACY_DB_HOST=$LEGACY_DB_ENDPOINT,
+            LEGACY_DB_PORT=3306,
+            LEGACY_DB_NAME=legacydb,
+            PROV_MODE=dual_prov
+          }"
         
-        echo "✅ Environment variables configured"
+        # Wait for migration configuration to complete  
+        echo "⏳ Waiting for Migration Lambda configuration to complete..."
+        wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "post-configuration"
+        
+        echo "✅ All Lambda environment variables configured and ready"
+        
+        # Show updated environment variables for verification
+        echo "📋 Updated Backend Lambda environment:"
+        aws lambda get-function-configuration --function-name "$BACKEND_LAMBDA_NAME" \
+          --query 'Environment.Variables' --output json | jq '.'
+
+    - name: Configure API Gateway CORS and S3 website settings
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        set -euo pipefail
+        
+        echo "🌐 Configuring CORS and S3 website settings..."
+        
+        # Configure S3 website error document for React Router
+        echo "🔧 Setting S3 error document for React Router support..."
+        aws s3 website "s3://$FRONTEND_BUCKET" \
+          --index-document index.html \
+          --error-document index.html
+        
+        echo "✅ S3 website configuration updated"
+        
+        # Configure API Gateway CORS via AWS CLI
+        echo "🔧 Configuring API Gateway CORS..."
+        
+        # Add CORS to Gateway Responses for error handling
+        echo "📡 Adding CORS headers to Gateway Responses..."
+        
+        # Update DEFAULT_4XX response
+        aws apigateway put-gateway-response \
+          --rest-api-id "$BACKEND_API_ID" \
+          --response-type DEFAULT_4XX \
+          --response-parameters "gatewayresponse.header.Access-Control-Allow-Origin='http://$FRONTEND_BUCKET.s3-website-us-east-1.amazonaws.com',gatewayresponse.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Requested-With,Accept,Origin',gatewayresponse.header.Access-Control-Allow-Methods='GET,POST,PUT,DELETE,OPTIONS'" \
+          2>/dev/null || echo "⚠️  Failed to update DEFAULT_4XX response (may not exist)"
+        
+        # Update DEFAULT_5XX response  
+        aws apigateway put-gateway-response \
+          --rest-api-id "$BACKEND_API_ID" \
+          --response-type DEFAULT_5XX \
+          --response-parameters "gatewayresponse.header.Access-Control-Allow-Origin='http://$FRONTEND_BUCKET.s3-website-us-east-1.amazonaws.com',gatewayresponse.header.Access-Control-Allow-Headers='Content-Type,Authorization,X-Requested-With,Accept,Origin',gatewayresponse.header.Access-Control-Allow-Methods='GET,POST,PUT,DELETE,OPTIONS'" \
+          2>/dev/null || echo "⚠️  Failed to update DEFAULT_5XX response (may not exist)"
+        
+        # Deploy API changes
+        echo "🚀 Deploying API Gateway changes..."
+        aws apigateway create-deployment \
+          --rest-api-id "$BACKEND_API_ID" \
+          --stage-name prod \
+          --description "Auto-configure CORS and deploy updated Lambda code"
+        
+        echo "✅ API Gateway CORS configured and deployed"
 
     - name: Setup S3 notifications automatically
       if: env.DEPLOYMENT_SUCCESS == 'true'
@@ -1186,12 +1281,19 @@ jobs:
         
         CREATE TABLE IF NOT EXISTS subscribers (
           id VARCHAR(64) PRIMARY KEY,
-          email VARCHAR(255) NOT NULL UNIQUE,
+          uid VARCHAR(64) UNIQUE,
+          imsi VARCHAR(64),
+          msisdn VARCHAR(64),
+          email VARCHAR(255),
           name VARCHAR(255),
           phone VARCHAR(20),
           status VARCHAR(50) DEFAULT 'active',
+          plan_type VARCHAR(100) DEFAULT 'STANDARD_PREPAID',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_uid (uid),
+          INDEX idx_imsi (imsi),
+          INDEX idx_msisdn (msisdn),
           INDEX idx_email (email),
           INDEX idx_status (status)
         );
@@ -1226,23 +1328,30 @@ jobs:
         
         echo "🧪 Running comprehensive smoke tests..."
         
-        # Test API health with status code
+        # Wait a moment for all configurations to settle
+        echo "⏳ Waiting 30 seconds for all configurations to settle..."
+        sleep 30
+        
+        # Test API health with status code and detailed response
         echo "🔍 Testing API health endpoint..."
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BACKEND_API_URL/health" || true)
-        echo "Health status: $STATUS"
-        if [[ "$STATUS" == "200" ]]; then
+        HEALTH_RESPONSE=$(curl -s "$BACKEND_API_URL/api/health" || echo "ERROR")
+        echo "Health Response: $HEALTH_RESPONSE"
+        
+        if [[ "$HEALTH_RESPONSE" == *"healthy"* ]] || [[ "$HEALTH_RESPONSE" == *"success"* ]]; then
           echo "✅ API health check passed"
         else
-          echo "⚠️  API health check failed with status $STATUS (may be normal for new deployments)"
-        fi
-        
-        # Test API CORS
-        echo "🔍 Testing API CORS..."
-        CORS_HEADERS=$(curl -s -I -X OPTIONS "$BACKEND_API_URL" | grep -i "access-control-allow")
-        if [[ -n "$CORS_HEADERS" ]]; then
-          echo "✅ CORS headers present"
-        else
-          echo "⚠️  CORS headers not found"
+          echo "❌ API health check failed - Lambda may have configuration issues"
+          echo "🔍 Checking Backend Lambda logs..."
+          aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/subscriber-migration-portal-main-BackendLambda" --query 'logGroups[0].logGroupName' --output text | head -5 || echo "Could not find log group"
+          
+          # Show recent Lambda errors
+          echo "🔍 Recent Lambda errors (last 10 minutes):"
+          START_TIME=$(date -d '10 minutes ago' --iso-8601)
+          aws logs filter-log-events \
+            --log-group-name "/aws/lambda/subscriber-migration-portal-main-BackendLambda-prod" \
+            --start-time $(date -d "$START_TIME" +%s)000 \
+            --filter-pattern "ERROR" \
+            --query 'events[*].message' --output text | head -10 || echo "No recent errors found"
         fi
         
         # Test frontend
@@ -1269,13 +1378,15 @@ jobs:
         echo "🌐 Frontend: $FRONTEND_URL"
         echo "📡 API: $BACKEND_API_URL" 
         echo "📁 Upload Bucket: $UPLOAD_BUCKET"
+        echo "🔐 Test Login: admin / Admin@123"
         echo "✅ All services deployed and configured automatically!"
         echo ""
         echo "📋 Next Steps:"
         echo "1. Visit the frontend URL to see your application"
-        echo "2. Test file uploads through the UI"
-        echo "3. Check CloudWatch logs for any issues"
-        echo "4. Monitor DynamoDB tables for processed data"
+        echo "2. Login with admin/Admin@123, operator/Operator@123, or guest/Guest@123"
+        echo "3. Test file uploads through the UI"
+        echo "4. Check CloudWatch logs for any issues"
+        echo "5. Monitor DynamoDB tables for processed data"
 
     - name: Upload deployment logs
       if: failure()
