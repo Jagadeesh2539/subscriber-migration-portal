@@ -489,7 +489,7 @@ Resources:
     Properties:
       FunctionName: !Sub '${AWS::StackName}-BackendLambda-${Environment}'
       Runtime: python3.11
-      Handler: index.lambda_handler
+      Handler: app.lambda_handler
       Code:
         ZipFile: |
           import json
@@ -514,7 +514,7 @@ Resources:
     Properties:
       FunctionName: !Sub '${AWS::StackName}-MigrationProcessor-${Environment}'
       Runtime: python3.11
-      Handler: index.lambda_handler
+      Handler: app.lambda_handler
       Code:
         ZipFile: |
           import json
