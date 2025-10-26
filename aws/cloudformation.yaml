@@ -490,6 +490,8 @@ Resources:
       FunctionName: !Sub '${AWS::StackName}-BackendLambda-${Environment}'
       Runtime: python3.11
       Handler: app.lambda_handler
+      Timeout: 30  # ← ADD THIS (default is 3 seconds)
+      MemorySize: 256  # ← ADD THIS for better performance
       Code:
         ZipFile: |
           import json
