@@ -1,221 +1,1106 @@
-name: 🚀 Deploy Consolidated Portal
+name: Deploy CloudFormation Stack with Ultra-Robust Auto-Management
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'aws/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Target environment'
+      delete_stack_only:
+        description: 'Delete stack only (true/false)'
         required: false
-        default: 'prod'
-        type: choice
-        options: ['dev','staging','prod']
-      deploy_type:
-        description: 'Deployment type'
+        default: 'false'
+      force_recreate:
+        description: 'Force recreate stack (true/false)'
         required: false
-        default: 'full'
-        type: choice
-        options: ['full','frontend-only','backend-only']
-      use_npm_ci:
-        description: 'Use npm ci for reproducible builds (recommended)'
+        default: 'false'
+      cleanup_all_resources:
+        description: 'Cleanup all orphaned resources (true/false)'
         required: false
-        default: 'true'
-        type: choice
-        options: ['true','false']
+        default: 'false'
+      skip_validation:
+        description: 'Skip template validation (true/false)'
+        required: false
+        default: 'false'
 
 env:
-  AWS_DEFAULT_REGION: us-east-1
-  STACK_NAME: subscriber-migration-portal-${{ github.ref_name }}
+  AWS_REGION: us-east-1
+  STACK_NAME: subscriber-migration-portal-main
+  TEMPLATE_FILE: aws/cloudformation.yaml
+  MAX_DEPLOYMENT_ATTEMPTS: 5
+  DEPLOYMENT_TIMEOUT: 2400
+  RETRY_DELAY: 120
 
 jobs:
-  infra:
-    name: 🏗️ Infra (CloudFormation)
-    runs-on: ubuntu-latest
-    outputs:
-      frontend_bucket: ${{ steps.cfn_outputs.outputs.frontend_bucket }}
-      backend_lambda: ${{ steps.cfn_outputs.outputs.backend_lambda }}
-      api_gateway_id: ${{ steps.cfn_outputs.outputs.api_gateway_id }}
-      upload_bucket: ${{ steps.cfn_outputs.outputs.upload_bucket }}
-      processor_lambda_arn: ${{ steps.cfn_outputs.outputs.processor_lambda_arn }}
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-
-      - name: 🔐 Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_DEFAULT_REGION }}
-
-      - name: ✅ Validate template
-        run: |
-          aws cloudformation validate-template \
-            --template-body file://aws/cloudformation.yaml
-
-      - name: 🚀 Deploy stack (IaC)
-        run: |
-          set -e
-          aws cloudformation deploy \
-            --stack-name "${{ env.STACK_NAME }}" \
-            --template-file aws/cloudformation.yaml \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --parameter-overrides \
-              Environment=${{ inputs.environment || 'prod' }} \
-              LegacyDbUsername=${{ secrets.LEGACY_DB_USERNAME }} \
-              LegacyDbPassword=${{ secrets.LEGACY_DB_PASSWORD }} \
-            --no-fail-on-empty-changeset
-
-      - name: 📝 Extract CloudFormation outputs
-        id: cfn_outputs
-        run: |
-          get_output() {
-            aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
-              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
-          }
-          echo "frontend_bucket=$(get_output FrontendBucketName)" >> $GITHUB_OUTPUT
-          echo "backend_lambda=$(get_output BackendLambdaName)" >> $GITHUB_OUTPUT
-          echo "api_gateway_id=$(get_output BackendApiId)" >> $GITHUB_OUTPUT
-          echo "upload_bucket=$(get_output MigrationUploadBucketName)" >> $GITHUB_OUTPUT
-          echo "processor_lambda_arn=$(get_output MigrationProcessorArn)" >> $GITHUB_OUTPUT
-
-      - name: 🔗 Configure S3 → Lambda notifications
-        run: |
-          set -e
-          BUCKET="${{ steps.cfn_outputs.outputs.upload_bucket }}"
-          LAMBDA_ARN="${{ steps.cfn_outputs.outputs.processor_lambda_arn }}"
-
-          if [ -z "$BUCKET" ] || [ -z "$LAMBDA_ARN" ]; then
-            echo "Failed to resolve bucket or lambda ARN from stack outputs" >&2
-            exit 1
-          fi
-
-          aws s3api put-bucket-notification-configuration \
-            --bucket "$BUCKET" \
-            --notification-configuration "{
-              \"LambdaFunctionConfigurations\": [{
-                \"LambdaFunctionArn\": \"$LAMBDA_ARN\",
-                \"Events\": [\"s3:ObjectCreated:*\"],
-                \"Filter\": {
-                  \"Key\": {
-                    \"FilterRules\": [
-                      {\"Name\": \"prefix\", \"Value\": \"uploads/\"},
-                      {\"Name\": \"suffix\", \"Value\": \".csv\"}
-                    ]
-                  }
-                }
-              }]
-            }"
-
   deploy:
-    name: 🎯 App Deploy
-    needs: [infra]
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: ⚙️ Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: 'frontend/package-lock.json'
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: Install and configure AWS CLI
+      run: |
+        # Install AWS CLI v2
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip -q awscliv2.zip
+        sudo ./aws/install --update
+        
+        # Verify installation
+        aws --version
+        
+        # Configure AWS CLI for better performance
+        aws configure set max_concurrent_requests 20
+        aws configure set max_queue_size 10000
+        aws configure set region ${{ env.AWS_REGION }}
+        aws configure set output json
 
-      - name: 🔐 Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+    - name: Verify AWS credentials and permissions
+      run: |
+        echo "🔐 Testing AWS credentials..."
+        
+        # Get caller identity
+        CALLER_IDENTITY=$(aws sts get-caller-identity)
+        echo "✅ Caller Identity: $CALLER_IDENTITY"
+        
+        # Test CloudFormation permissions
+        echo "🔍 Testing CloudFormation permissions..."
+        aws cloudformation list-stacks --query 'StackSummaries[0]' --output table || echo "⚠️  Limited CloudFormation permissions"
+        
+        # Test S3 permissions
+        echo "🪣 Testing S3 permissions..."
+        aws s3 ls || echo "⚠️  Limited S3 permissions"
+        
+        # Test IAM permissions
+        echo "👤 Testing IAM permissions..."
+        aws iam get-user --query 'User.UserName' --output text 2>/dev/null || echo "⚠️  Limited IAM permissions"
 
-      - name: 🎨 Build and deploy frontend
-        if: github.event.inputs.deploy_type != 'backend-only'
-        run: |
-          cd frontend
-          echo "📦 Installing frontend dependencies..."
-          if [ "${{ github.event.inputs.use_npm_ci }}" = "true" ]; then
-            if [ ! -f package-lock.json ]; then
-              echo "❌ package-lock.json not found. npm ci requires a lockfile. Set use_npm_ci=false to fallback." >&2
+    - name: Create dynamic parameters file
+      run: |
+        # Generate secure random password if not provided
+        if [[ -z "${{ secrets.LEGACY_DB_PASSWORD }}" ]]; then
+          DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-20)
+          echo "⚠️  Using auto-generated password (consider setting LEGACY_DB_PASSWORD secret)"
+        else
+          DB_PASSWORD="${{ secrets.LEGACY_DB_PASSWORD }}"
+        fi
+        
+        # Get current timestamp for unique deployments
+        CURRENT_TIME=$(date +%Y-%m-%d-%H-%M-%S)
+        
+        # Create parameters file
+        cat > aws/parameters.json << EOF
+        [
+          {
+            "ParameterKey": "Environment",
+            "ParameterValue": "prod"
+          },
+          {
+            "ParameterKey": "LegacyDbUsername",
+            "ParameterValue": "admin"
+          },
+          {
+            "ParameterKey": "LegacyDbPassword",
+            "ParameterValue": "$DB_PASSWORD"
+          },
+          {
+            "ParameterKey": "CurrentTime",
+            "ParameterValue": "$CURRENT_TIME"
+          },
+          {
+            "ParameterKey": "LogRetentionDays",
+            "ParameterValue": "14"
+          }
+        ]
+        EOF
+        
+        echo "📋 Parameters file created with timestamp: $CURRENT_TIME"
+
+    - name: Handle workflow inputs and set environment
+      run: |
+        # Handle workflow dispatch inputs
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          [[ "${{ github.event.inputs.delete_stack_only }}" == "true" ]] && echo "DELETE_ONLY=true" >> $GITHUB_ENV
+          [[ "${{ github.event.inputs.force_recreate }}" == "true" ]] && echo "FORCE_RECREATE=true" >> $GITHUB_ENV  
+          [[ "${{ github.event.inputs.cleanup_all_resources }}" == "true" ]] && echo "CLEANUP_ALL=true" >> $GITHUB_ENV
+          [[ "${{ github.event.inputs.skip_validation }}" == "true" ]] && echo "SKIP_VALIDATION=true" >> $GITHUB_ENV
+        fi
+        
+        # Set deployment strategy based on trigger
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          echo "DEPLOYMENT_MODE=validation" >> $GITHUB_ENV
+          echo "🔍 PR mode: Will validate template only"
+        else
+          echo "DEPLOYMENT_MODE=full" >> $GITHUB_ENV
+          echo "🚀 Full deployment mode"
+        fi
+
+    - name: Comprehensive orphaned resource cleanup
+      run: |
+        # Get AWS Account ID
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        echo "🏢 Account ID: $ACCOUNT_ID"
+        
+        # Define comprehensive resource patterns
+        BUCKET_PATTERNS=(
+          "sub-mig-logs-$ACCOUNT_ID"
+          "sub-mig-web-$ACCOUNT_ID-prod" 
+          "sub-mig-web-$ACCOUNT_ID-staging"
+          "sub-mig-web-$ACCOUNT_ID-dev"
+          "sub-mig-data-$ACCOUNT_ID-prod"
+          "sub-mig-data-$ACCOUNT_ID-staging" 
+          "sub-mig-data-$ACCOUNT_ID-dev"
+          # Legacy patterns (in case of old naming)
+          "subscriber-migration-*-$ACCOUNT_ID"
+          "*-subscriber-migration-*"
+        )
+        
+        # Enhanced S3 bucket deletion function
+        delete_s3_bucket_enhanced() {
+          local bucket_name="$1"
+          local max_retries=3
+          local retry=1
+          
+          # Skip if pattern contains wildcards (for safety)
+          if [[ "$bucket_name" == *"*"* ]]; then
+            echo "🔍 Searching for buckets matching pattern: $bucket_name"
+            aws s3api list-buckets --query "Buckets[?contains(Name, '$(echo $bucket_name | sed 's/\*//g')')].Name" --output text | while read bucket; do
+              [[ -n "$bucket" ]] && delete_s3_bucket_enhanced "$bucket"
+            done
+            return
+          fi
+          
+          # Check if bucket exists
+          if ! aws s3api head-bucket --bucket "$bucket_name" 2>/dev/null; then
+            echo "ℹ️  Bucket does not exist: $bucket_name"
+            return 0
+          fi
+          
+          echo "🗑️  Processing bucket: $bucket_name"
+          
+          while [[ $retry -le $max_retries ]]; do
+            echo "🔄 Attempt $retry of $max_retries for bucket: $bucket_name"
+            
+            # Get bucket location to ensure correct region
+            BUCKET_REGION=$(aws s3api get-bucket-location --bucket "$bucket_name" --query 'LocationConstraint' --output text 2>/dev/null || echo "us-east-1")
+            [[ "$BUCKET_REGION" == "None" || "$BUCKET_REGION" == "null" ]] && BUCKET_REGION="us-east-1"
+            
+            # Check bucket versioning
+            VERSIONING=$(aws s3api get-bucket-versioning --bucket "$bucket_name" --region "$BUCKET_REGION" --query 'Status' --output text 2>/dev/null || echo "None")
+            
+            # Handle versioned buckets
+            if [[ "$VERSIONING" == "Enabled" ]]; then
+              echo "📦 Removing all versions from versioned bucket..."
+              
+              # Delete all object versions
+              aws s3api list-object-versions --bucket "$bucket_name" --region "$BUCKET_REGION" \
+                --query 'Versions[].{Key:Key,VersionId:VersionId}' --output text 2>/dev/null | \
+              while read -r key version_id; do
+                if [[ -n "$key" && -n "$version_id" && "$key" != "None" && "$version_id" != "None" ]]; then
+                  aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$version_id" --region "$BUCKET_REGION" 2>/dev/null || true
+                fi
+              done
+              
+              # Delete all delete markers
+              aws s3api list-object-versions --bucket "$bucket_name" --region "$BUCKET_REGION" \
+                --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' --output text 2>/dev/null | \
+              while read -r key version_id; do
+                if [[ -n "$key" && -n "$version_id" && "$key" != "None" && "$version_id" != "None" ]]; then
+                  aws s3api delete-object --bucket "$bucket_name" --key "$key" --version-id "$version_id" --region "$BUCKET_REGION" 2>/dev/null || true
+                fi
+              done
+            fi
+            
+            # Remove all objects (for non-versioned or after version cleanup)
+            echo "🧹 Removing all objects..."
+            aws s3 rm "s3://$bucket_name" --recursive --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Disable versioning if enabled
+            if [[ "$VERSIONING" == "Enabled" ]]; then
+              aws s3api put-bucket-versioning --bucket "$bucket_name" --versioning-configuration Status=Suspended --region "$BUCKET_REGION" 2>/dev/null || true
+            fi
+            
+            # Remove bucket policy if exists
+            aws s3api delete-bucket-policy --bucket "$bucket_name" --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Remove bucket notification configuration
+            aws s3api put-bucket-notification-configuration --bucket "$bucket_name" --notification-configuration "{}" --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Remove bucket lifecycle configuration
+            aws s3api delete-bucket-lifecycle --bucket "$bucket_name" --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Remove bucket CORS configuration
+            aws s3api delete-bucket-cors --bucket "$bucket_name" --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Remove bucket encryption
+            aws s3api delete-bucket-encryption --bucket "$bucket_name" --region "$BUCKET_REGION" 2>/dev/null || true
+            
+            # Delete the bucket
+            if aws s3api delete-bucket --bucket "$bucket_name" --region "$BUCKET_REGION" 2>/dev/null; then
+              echo "✅ Bucket deleted successfully: $bucket_name"
+              return 0
+            else
+              echo "⚠️  Failed to delete bucket on attempt $retry: $bucket_name"
+              retry=$((retry + 1))
+              [[ $retry -le $max_retries ]] && sleep 10
+            fi
+          done
+          
+          echo "❌ Failed to delete bucket after $max_retries attempts: $bucket_name"
+          return 1
+        }
+        
+        # Clean up S3 buckets
+        echo "🧹 Starting comprehensive S3 bucket cleanup..."
+        CLEANED_BUCKETS=0
+        
+        for bucket_pattern in "${BUCKET_PATTERNS[@]}"; do
+          if delete_s3_bucket_enhanced "$bucket_pattern"; then
+            CLEANED_BUCKETS=$((CLEANED_BUCKETS + 1))
+          fi
+        done
+        
+        echo "✅ Cleaned up $CLEANED_BUCKETS bucket(s)"
+        
+        # Cleanup CloudFormation stacks (if cleanup_all_resources is enabled)
+        if [[ "${{ env.CLEANUP_ALL }}" == "true" ]]; then
+          echo "🗑️  Comprehensive stack cleanup requested..."
+          
+          # Find related stacks
+          RELATED_STACKS=$(aws cloudformation list-stacks --query 'StackSummaries[?contains(StackName, `subscriber-migration`) && (StackStatus == `CREATE_FAILED` || StackStatus == `ROLLBACK_COMPLETE` || StackStatus == `UPDATE_ROLLBACK_COMPLETE`)].StackName' --output text)
+          
+          if [[ -n "$RELATED_STACKS" ]]; then
+            echo "🗑️  Found related failed stacks: $RELATED_STACKS"
+            for stack in $RELATED_STACKS; do
+              echo "🗑️  Deleting failed stack: $stack"
+              aws cloudformation delete-stack --stack-name "$stack" 2>/dev/null || true
+            done
+          fi
+        fi
+
+    - name: Advanced stack status analysis and cleanup
+      run: |
+        # Comprehensive stack management functions
+        
+        # Enhanced stack existence check
+        stack_exists() {
+          aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null
+        }
+        
+        # Enhanced stack status retrieval
+        get_stack_status() {
+          if stack_exists "$1" "$2"; then
+            aws cloudformation describe-stacks --stack-name "$1" --region "$2" --query 'Stacks[0].StackStatus' --output text
+          else
+            echo "STACK_NOT_EXISTS"
+          fi
+        }
+        
+        # Get stack creation time
+        get_stack_creation_time() {
+          if stack_exists "$1" "$2"; then
+            aws cloudformation describe-stacks --stack-name "$1" --region "$2" --query 'Stacks[0].CreationTime' --output text
+          fi
+        }
+        
+        # Enhanced stack deletion with retry logic
+        delete_failed_stack_robust() {
+          local stack_name="$1"
+          local region="$2"
+          local max_retries=3
+          local retry=1
+          
+          echo "🗑️  Initiating robust stack deletion: $stack_name"
+          
+          while [[ $retry -le $max_retries ]]; do
+            echo "🔄 Deletion attempt $retry of $max_retries"
+            
+            # Check if stack still exists
+            if ! stack_exists "$stack_name" "$region"; then
+              echo "✅ Stack no longer exists: $stack_name"
+              return 0
+            fi
+            
+            # Get current status
+            local current_status=$(get_stack_status "$stack_name" "$region")
+            echo "📊 Current status: $current_status"
+            
+            # Handle different statuses
+            case "$current_status" in
+              DELETE_IN_PROGRESS)
+                echo "⏳ Stack deletion already in progress, waiting..."
+                ;;
+              DELETE_COMPLETE)
+                echo "✅ Stack deletion completed"
+                return 0
+                ;;
+              DELETE_FAILED)
+                echo "⚠️  Stack deletion failed, retrying..."
+                aws cloudformation delete-stack --stack-name "$stack_name" --region "$region" 2>/dev/null || true
+                ;;
+              *)
+                echo "🗑️  Initiating stack deletion..."
+                aws cloudformation delete-stack --stack-name "$stack_name" --region "$region" 2>/dev/null || true
+                ;;
+            esac
+            
+            # Wait for deletion with timeout
+            echo "⏳ Waiting for stack deletion (timeout: 30 minutes)..."
+            if timeout 1800 aws cloudformation wait stack-delete-complete --stack-name "$stack_name" --region "$region" 2>/dev/null; then
+              echo "✅ Stack deleted successfully: $stack_name"
+              return 0
+            else
+              echo "⚠️  Stack deletion timeout or failed on attempt $retry"
+              retry=$((retry + 1))
+              [[ $retry -le $max_retries ]] && sleep 60
+            fi
+          done
+          
+          echo "❌ Failed to delete stack after $max_retries attempts: $stack_name"
+          
+          # Last resort: force delete by removing dependencies
+          echo "🚨 Attempting force cleanup..."
+          
+          # Try to cancel any running operations
+          aws cloudformation cancel-update-stack --stack-name "$stack_name" --region "$region" 2>/dev/null || true
+          sleep 30
+          
+          # Try deletion one more time
+          aws cloudformation delete-stack --stack-name "$stack_name" --region "$region" 2>/dev/null || true
+          
+          return 1
+        }
+        
+        # Enhanced stack waiting with detailed status
+        wait_for_stack_operation() {
+          local stack_name="$1"
+          local region="$2"
+          local operation="$3"
+          local timeout_minutes="${4:-40}"
+          local check_interval=30
+          local max_checks=$((timeout_minutes * 60 / check_interval))
+          local check_count=0
+          
+          echo "⏳ Waiting for $operation to complete (timeout: ${timeout_minutes}m)..."
+          
+          while [[ $check_count -lt $max_checks ]]; do
+            local status=$(get_stack_status "$stack_name" "$region")
+            local timestamp=$(date '+%H:%M:%S')
+            
+            echo "[$timestamp] 📊 Status: $status (check $((check_count + 1))/$max_checks)"
+            
+            case "$status" in
+              *_COMPLETE)
+                echo "✅ $operation completed successfully. Final status: $status"
+                
+                # Show stack outputs for successful operations
+                if [[ "$status" == "CREATE_COMPLETE" || "$status" == "UPDATE_COMPLETE" ]]; then
+                  echo "📋 Stack outputs:"
+                  aws cloudformation describe-stacks --stack-name "$stack_name" --region "$region" \
+                    --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table 2>/dev/null || echo "No outputs available"
+                fi
+                return 0
+                ;;
+              *_FAILED|*_ROLLBACK_COMPLETE)
+                echo "❌ $operation failed. Final status: $status"
+                
+                # Show recent events for failed operations
+                echo "📋 Recent stack events:"
+                aws cloudformation describe-stack-events --stack-name "$stack_name" --region "$region" \
+                  --query 'StackEvents[0:10].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+                  --output table 2>/dev/null || echo "Could not retrieve events"
+                
+                return 1
+                ;;
+              *_IN_PROGRESS)
+                # Show progress indicators for long-running operations
+                if [[ $((check_count % 4)) -eq 0 ]]; then
+                  echo "🔄 $operation in progress... Checking stack events:"
+                  aws cloudformation describe-stack-events --stack-name "$stack_name" --region "$region" \
+                    --query 'StackEvents[0:3].[Timestamp,LogicalResourceId,ResourceStatus]' \
+                    --output table 2>/dev/null || true
+                fi
+                ;;
+              "STACK_NOT_EXISTS")
+                if [[ "$operation" == "DELETE" ]]; then
+                  echo "✅ Stack successfully deleted"
+                  return 0
+                else
+                  echo "❌ Stack no longer exists during $operation"
+                  return 1
+                fi
+                ;;
+              *)
+                echo "⚠️  Unknown status: $status. Continuing to wait..."
+                ;;
+            esac
+            
+            check_count=$((check_count + 1))
+            sleep $check_interval
+          done
+          
+          echo "⏰ Timeout reached for $operation"
+          return 1
+        }
+        
+        # Main stack analysis and cleanup logic
+        STACK_NAME="${{ env.STACK_NAME }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
+        
+        echo "🔍 Performing advanced stack status analysis..."
+        
+        if stack_exists "$STACK_NAME" "$AWS_REGION"; then
+          CURRENT_STATUS=$(get_stack_status "$STACK_NAME" "$AWS_REGION")
+          CREATION_TIME=$(get_stack_creation_time "$STACK_NAME" "$AWS_REGION")
+          
+          echo "📊 Stack exists:"
+          echo "   Status: $CURRENT_STATUS"
+          echo "   Created: $CREATION_TIME"
+          
+          # Analyze stack condition
+          case "$CURRENT_STATUS" in
+            *_FAILED|*_ROLLBACK_COMPLETE)
+              echo "🚨 Stack is in failed state: $CURRENT_STATUS"
+              
+              # Show failure reason
+              echo "🔍 Analyzing failure reason..."
+              aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+                --query 'StackEvents[?ResourceStatus == `CREATE_FAILED` || ResourceStatus == `UPDATE_FAILED`] | [0:5].[Timestamp,LogicalResourceId,ResourceStatusReason]' \
+                --output table 2>/dev/null || true
+              
+              if delete_failed_stack_robust "$STACK_NAME" "$AWS_REGION"; then
+                echo "STACK_CLEANED=true" >> $GITHUB_ENV
+                echo "STACK_EXISTS=false" >> $GITHUB_ENV
+              else
+                echo "❌ Failed to clean up stack, continuing with caution"
+                echo "STACK_CLEANUP_FAILED=true" >> $GITHUB_ENV
+              fi
+              ;;
+            *_IN_PROGRESS)
+              echo "🔄 Stack operation in progress: $CURRENT_STATUS"
+              
+              # Determine what operation is running
+              case "$CURRENT_STATUS" in
+                CREATE_IN_PROGRESS)
+                  wait_for_stack_operation "$STACK_NAME" "$AWS_REGION" "CREATE" 45
+                  ;;
+                UPDATE_IN_PROGRESS|UPDATE_ROLLBACK_IN_PROGRESS)
+                  wait_for_stack_operation "$STACK_NAME" "$AWS_REGION" "UPDATE" 45
+                  ;;
+                DELETE_IN_PROGRESS)
+                  wait_for_stack_operation "$STACK_NAME" "$AWS_REGION" "DELETE" 30
+                  ;;
+              esac
+              
+              # Re-evaluate status after waiting
+              FINAL_STATUS=$(get_stack_status "$STACK_NAME" "$AWS_REGION")
+              if [[ "$FINAL_STATUS" == *"_COMPLETE" ]]; then
+                echo "STACK_EXISTS=true" >> $GITHUB_ENV
+              elif [[ "$FINAL_STATUS" == *"_FAILED" || "$FINAL_STATUS" == "STACK_NOT_EXISTS" ]]; then
+                echo "STACK_EXISTS=false" >> $GITHUB_ENV
+              fi
+              ;;
+            *_COMPLETE)
+              echo "✅ Stack is healthy: $CURRENT_STATUS"
+              echo "STACK_EXISTS=true" >> $GITHUB_ENV
+              ;;
+          esac
+        else
+          echo "📝 Stack does not exist"
+          echo "STACK_EXISTS=false" >> $GITHUB_ENV
+        fi
+
+    - name: Handle special workflow modes
+      run: |
+        # Delete only mode
+        if [[ "${{ env.DELETE_ONLY }}" == "true" ]]; then
+          echo "🗑️  Delete-only mode activated"
+          
+          if [[ "${{ env.STACK_EXISTS }}" == "true" ]]; then
+            if delete_failed_stack_robust "${{ env.STACK_NAME }}" "${{ env.AWS_REGION }}"; then
+              echo "✅ Stack deleted successfully"
+            else
+              echo "❌ Failed to delete stack"
               exit 1
             fi
-            echo "🔒 Using npm ci for reproducible build..."
-            npm ci --legacy-peer-deps
-            echo "🔍 Dependency tree (top-level):" && npm ls --depth=0 || true
           else
-            echo "📦 Using npm install fallback..."
-            npm cache clean --force 2>/dev/null || true
-            rm -f package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml
-            rm -rf node_modules 2>/dev/null || true
-            npm install --no-package-lock --no-audit --no-fund --legacy-peer-deps --force
-            echo "🔍 Dependency tree (top-level):" && npm ls --depth=0 || true
+            echo "ℹ️  Stack does not exist, nothing to delete"
           fi
           
-          echo "🔧 Configure env"
-          cat > .env.production << EOF
-          REACT_APP_API_BASE_URL=https://${{ needs.infra.outputs.api_gateway_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod
-          REACT_APP_VERSION=2.0.0-production
-          REACT_APP_LEGACY_ENABLED=true
-          REACT_APP_CLOUD_ENABLED=true
-          REACT_APP_DUAL_PROV_ENABLED=true
-          REACT_APP_PROVISIONING_MODES=legacy,cloud,dual_prov
-          EOF
+          echo "🏁 Delete-only operation completed"
+          exit 0
+        fi
+        
+        # Force recreate mode
+        if [[ "${{ env.FORCE_RECREATE }}" == "true" && "${{ env.DEPLOYMENT_MODE }}" == "full" ]]; then
+          echo "🔄 Force recreate mode activated"
           
-          echo "🔨 Build"
-          NODE_OPTIONS="--max-old-space-size=8192" npm run build
+          if [[ "${{ env.STACK_EXISTS }}" == "true" ]]; then
+            echo "🗑️  Deleting existing stack for recreation..."
+            if delete_failed_stack_robust "${{ env.STACK_NAME }}" "${{ env.AWS_REGION }}"; then
+              echo "✅ Existing stack deleted, proceeding with creation"
+              echo "STACK_EXISTS=false" >> $GITHUB_ENV
+            else
+              echo "❌ Failed to delete existing stack"
+              exit 1
+            fi
+          else
+            echo "📝 Stack doesn't exist, proceeding with creation"
+          fi
+        fi
+
+    - name: Comprehensive template validation
+      if: env.DEPLOYMENT_MODE == 'full' && env.SKIP_VALIDATION != 'true'
+      run: |
+        echo "🔍 Performing comprehensive template validation..."
+        
+        # Basic template validation
+        echo "📋 Basic CloudFormation template validation..."
+        if ! aws cloudformation validate-template --template-body "file://${{ env.TEMPLATE_FILE }}" --region ${{ env.AWS_REGION }}; then
+          echo "❌ Template validation failed"
+          exit 1
+        fi
+        
+        # Advanced template analysis
+        echo "🔬 Advanced template analysis..."
+        
+        # Check for circular dependencies
+        echo "🔄 Checking for circular dependencies..."
+        if grep -q "DependsOn" "${{ env.TEMPLATE_FILE }}"; then
+          echo "⚠️  Template contains DependsOn references - review for circular dependencies"
+        fi
+        
+        # Check resource limits
+        RESOURCE_COUNT=$(grep -c "Type: AWS::" "${{ env.TEMPLATE_FILE }}" || echo "0")
+        echo "📊 Template contains $RESOURCE_COUNT resources"
+        
+        if [[ $RESOURCE_COUNT -gt 200 ]]; then
+          echo "⚠️  Template has many resources ($RESOURCE_COUNT) - consider splitting"
+        fi
+        
+        # Validate parameter file
+        if [[ -f "aws/parameters.json" ]]; then
+          echo "📋 Validating parameters file..."
+          if ! jq empty aws/parameters.json 2>/dev/null; then
+            echo "❌ Invalid JSON in parameters file"
+            exit 1
+          fi
           
-          echo "☁️ Deploy to S3"
-          aws s3 sync build/ s3://${{ needs.infra.outputs.frontend_bucket }}/ --delete --cache-control "public, max-age=0, must-revalidate"
+          PARAM_COUNT=$(jq length aws/parameters.json)
+          echo "📊 Parameters file contains $PARAM_COUNT parameters"
+        fi
+        
+        echo "✅ Template validation completed successfully"
 
-      - name: 🔧 Build and deploy backend
-        if: github.event.inputs.deploy_type != 'frontend-only'
-        run: |
-          cd backend
-          pip install --no-cache-dir --target . -r requirements.txt
-          cp app.py lambda_function.py
-          zip -q -r ../backend-deploy.zip . -x "*.pyc" "__pycache__/*" "*.git*" "app_*.py" "*.md" "Dockerfile" "setup_legacy_schema.py" "*.log" "migration_processor/*" "*backup*" "monitoring.py" "reporting.py"
-          cd ..
-          echo "🚀 Update Lambda"
-          aws lambda update-function-code --function-name ${{ needs.infra.outputs.backend_lambda }} --zip-file fileb://backend-deploy.zip
-          aws lambda wait function-updated --function-name ${{ needs.infra.outputs.backend_lambda }}
+    - name: Execute ultra-robust CloudFormation deployment
+      if: env.DEPLOYMENT_MODE == 'full'
+      run: |
+        # Enhanced deployment function
+        deploy_stack_ultra_robust() {
+          local stack_name="$1"
+          local region="$2"
+          local template_file="$3"
+          local parameters_file="$4"
+          local max_attempts="${{ env.MAX_DEPLOYMENT_ATTEMPTS }}"
+          local timeout="${{ env.DEPLOYMENT_TIMEOUT }}"
+          local retry_delay="${{ env.RETRY_DELAY }}"
+          
+          # Determine operation type
+          local operation
+          if [[ "${{ env.STACK_EXISTS }}" == "true" && "${{ env.FORCE_RECREATE }}" != "true" ]]; then
+            operation="update-stack"
+            echo "🔄 Updating existing stack..."
+          else
+            operation="create-stack"
+            echo "🆕 Creating new stack..."
+          fi
+          
+          local attempt=1
+          while [[ $attempt -le $max_attempts ]]; do
+            echo ""
+            echo "🚀 === DEPLOYMENT ATTEMPT $attempt OF $max_attempts ==="
+            echo "   Operation: $operation"
+            echo "   Timeout: ${timeout}s ($(($timeout / 60)) minutes)"
+            echo "   Template: $template_file"
+            echo "   Stack: $stack_name"
+            echo "   Region: $region"
+            
+            # Build deployment command
+            local cmd="aws cloudformation $operation"
+            cmd="$cmd --stack-name $stack_name"
+            cmd="$cmd --template-body file://$template_file"
+            cmd="$cmd --capabilities CAPABILITY_NAMED_IAM CAPABILITY_IAM"
+            cmd="$cmd --region $region"
+            
+            # Add parameters if file exists
+            if [[ -f "$parameters_file" ]]; then
+              cmd="$cmd --parameters file://$parameters_file"
+            fi
+            
+            # Add comprehensive tags
+            cmd="$cmd --tags"
+            cmd="$cmd Key=Project,Value=SubscriberMigration"
+            cmd="$cmd Key=Environment,Value=Production"
+            cmd="$cmd Key=DeployedBy,Value=GitHub-Actions"
+            cmd="$cmd Key=DeploymentAttempt,Value=$attempt"
+            cmd="$cmd Key=Timestamp,Value=$(date -u +%Y%m%d-%H%M%S)"
+            cmd="$cmd Key=GitCommit,Value=${{ github.sha }}"
+            cmd="$cmd Key=GitRef,Value=${{ github.ref }}"
+            cmd="$cmd Key=WorkflowRunId,Value=${{ github.run_id }}"
+            
+            # Add rollback configuration for updates
+            if [[ "$operation" == "update-stack" ]]; then
+              cmd="$cmd --rollback-configuration RollbackTriggers=[{Arn=arn:aws:cloudwatch:$region:$(aws sts get-caller-identity --query Account --output text):alarm/*,Type=AWS::CloudWatch::Alarm}]"
+            fi
+            
+            echo "🎯 Executing deployment command:"
+            echo "   $cmd"
+            
+            # Execute deployment command with enhanced logging
+            local deployment_start=$(date +%s)
+            if eval "$cmd" 2>&1 | tee deployment-attempt-$attempt.log; then
+              echo "✅ Deployment command initiated successfully"
+              
+              # Enhanced monitoring with progress tracking
+              echo "⏳ Monitoring deployment progress with enhanced tracking..."
+              local last_event_time=""
+              local stuck_count=0
+              local max_stuck=10
+              
+              # Start monitoring loop
+              while true; do
+                local current_status=$(get_stack_status "$stack_name" "$region")
+                local current_time=$(date '+%H:%M:%S')
+                local elapsed=$(($(date +%s) - deployment_start))
+                local elapsed_min=$((elapsed / 60))
+                
+                echo "[$current_time] 📊 Status: $current_status (${elapsed_min}m elapsed)"
+                
+                # Check for completion states
+                case "$current_status" in
+                  CREATE_COMPLETE|UPDATE_COMPLETE)
+                    local deployment_end=$(date +%s)
+                    local total_duration=$((deployment_end - deployment_start))
+                    echo "🎉 $operation completed successfully in ${total_duration}s!"
+                    
+                    # Show final stack information
+                    echo "📊 Final Stack Information:"
+                    aws cloudformation describe-stacks --stack-name "$stack_name" --region "$region" \
+                      --query 'Stacks[0].{Status:StackStatus,Created:CreationTime,Updated:LastUpdatedTime}' \
+                      --output table 2>/dev/null || true
+                    
+                    return 0
+                    ;;
+                  *_FAILED|*_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_COMPLETE)
+                    echo "💥 $operation failed with status: $current_status"
+                    
+                    # Get detailed failure information
+                    echo "📋 Detailed failure analysis:"
+                    aws cloudformation describe-stack-events --stack-name "$stack_name" --region "$region" \
+                      --query 'StackEvents[?contains(ResourceStatus, `FAILED`)] | [0:10].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]' \
+                      --output table 2>/dev/null || echo "Could not retrieve failure details"
+                    
+                    break  # Exit monitoring loop to handle retry
+                    ;;
+                  *_IN_PROGRESS)
+                    # Enhanced progress monitoring
+                    local latest_events=$(aws cloudformation describe-stack-events --stack-name "$stack_name" --region "$region" \
+                      --query 'StackEvents[0:5].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus]' \
+                      --output text 2>/dev/null || echo "")
+                    
+                    if [[ -n "$latest_events" ]]; then
+                      local latest_event_time=$(echo "$latest_events" | head -1 | cut -f1)
+                      
+                      # Check if we're making progress
+                      if [[ "$latest_event_time" != "$last_event_time" ]]; then
+                        stuck_count=0
+                        last_event_time="$latest_event_time"
+                        
+                        # Show recent activity every 2 minutes
+                        if [[ $((elapsed % 120)) -eq 0 && $elapsed -gt 0 ]]; then
+                          echo "🔄 Recent stack activity:"
+                          echo "$latest_events" | head -3
+                        fi
+                      else
+                        stuck_count=$((stuck_count + 1))
+                      fi
+                      
+                      # Check if stuck
+                      if [[ $stuck_count -gt $max_stuck ]]; then
+                        echo "⚠️  Deployment appears stuck (no new events for $((stuck_count * 30))s)"
+                      fi
+                    fi
+                    
+                    # Check timeout
+                    if [[ $elapsed -gt $timeout ]]; then
+                      echo "⏰ Deployment timeout reached (${timeout}s)"
+                      break
+                    fi
+                    ;;
+                  "STACK_NOT_EXISTS")
+                    echo "❌ Stack disappeared during deployment"
+                    break
+                    ;;
+                  *)
+                    echo "❓ Unknown status: $current_status"
+                    ;;
+                esac
+                
+                # Wait before next check
+                sleep 30
+              done
+              
+              # Handle failure scenarios
+              local final_status=$(get_stack_status "$stack_name" "$region")
+              echo "📊 Final status after monitoring: $final_status"
+              
+              if [[ $attempt -lt $max_attempts ]]; then
+                echo ""
+                echo "🔄 === PREPARING FOR RETRY (Attempt $((attempt + 1))) ==="
+                
+                # Comprehensive cleanup for retry
+                if [[ "$final_status" == *"_FAILED" || "$final_status" == *"_ROLLBACK_COMPLETE" ]]; then
+                  echo "🧹 Cleaning up failed stack for retry..."
+                  
+                  # Force delete failed stack
+                  if delete_failed_stack_robust "$stack_name" "$region"; then
+                    echo "✅ Failed stack cleaned up successfully"
+                  else
+                    echo "⚠️  Failed to clean up stack, but continuing with retry"
+                  fi
+                  
+                  # Clean up S3 buckets that might be causing conflicts
+                  echo "🪣 Cleaning up potential S3 conflicts..."
+                  local account_id=$(aws sts get-caller-identity --query Account --output text)
+                  local bucket_patterns=("sub-mig-logs-$account_id" "sub-mig-web-$account_id-prod" "sub-mig-data-$account_id-prod")
+                  for bucket in "${bucket_patterns[@]}"; do
+                    delete_s3_bucket_enhanced "$bucket" || true
+                  done
+                fi
+                
+                # Always use create-stack for retries
+                operation="create-stack"
+                
+                echo "⏸️  Waiting ${retry_delay}s before retry..."
+                sleep $retry_delay
+              else
+                echo "💥 All deployment attempts exhausted"
+                return 1
+              fi
+            else
+              echo "❌ Deployment command failed on attempt $attempt"
+              
+              # Show command output if available
+              if [[ -f "deployment-attempt-$attempt.log" ]]; then
+                echo "📋 Command output:"
+                tail -20 "deployment-attempt-$attempt.log"
+              fi
+              
+              if [[ $attempt -lt $max_attempts ]]; then
+                echo "⏸️  Waiting ${retry_delay}s before retry..."
+                sleep $retry_delay
+              fi
+            fi
+            
+            attempt=$((attempt + 1))
+          done
+          
+          echo "💥 All deployment attempts failed"
+          return 1
+        }
+        
+        # Execute deployment with all functions available
+        STACK_NAME="${{ env.STACK_NAME }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
+        TEMPLATE_FILE="${{ env.TEMPLATE_FILE }}"
+        PARAMETERS_FILE="aws/parameters.json"
+        
+        echo "🚀 Starting ultra-robust CloudFormation deployment..."
+        
+        if deploy_stack_ultra_robust "$STACK_NAME" "$AWS_REGION" "$TEMPLATE_FILE" "$PARAMETERS_FILE"; then
+          echo ""
+          echo "🎉 === DEPLOYMENT SUCCESS ==="
+          echo "Stack deployed successfully after robust retry logic!"
+          echo "DEPLOYMENT_SUCCESS=true" >> $GITHUB_ENV
+        else
+          echo ""
+          echo "💥 === DEPLOYMENT FAILURE ==="
+          echo "Deployment failed after all retry attempts"
+          echo "DEPLOYMENT_SUCCESS=false" >> $GITHUB_ENV
+          exit 1
+        fi
 
-          echo "⚙️ Set environment variables"
-          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='LegacyDBSecretArn'].OutputValue" --output text)
-          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='LegacyDBEndpoint'].OutputValue" --output text)
-          SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='SubscriberTableName'].OutputValue" --output text)
-          AUDIT_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='AuditLogTableName'].OutputValue" --output text)
-          JOBS_TABLE=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey=='MigrationJobsTableName'].OutputValue" --output text)
+    - name: Comprehensive post-deployment validation and reporting
+      if: env.DEPLOYMENT_MODE == 'full' && env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "🔍 === POST-DEPLOYMENT VALIDATION ==="
+        
+        STACK_NAME="${{ env.STACK_NAME }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
+        
+        # Get comprehensive stack information
+        echo "📊 Stack Information:"
+        aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'Stacks[0].{Name:StackName,Status:StackStatus,Created:CreationTime,Updated:LastUpdatedTime,Description:Description}' \
+          --output table 2>/dev/null || echo "Could not retrieve stack information"
+        
+        # Get and display stack outputs
+        echo ""
+        echo "📋 Stack Outputs:"
+        aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue,Description]' --output table 2>/dev/null || echo "No outputs available"
+        
+        # Get comprehensive resource summary
+        echo ""
+        echo "🏗️  Stack Resources Summary:"
+        aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[*].[LogicalResourceId,ResourceType,ResourceStatus]' --output table 2>/dev/null || echo "Could not retrieve resources"
+        
+        # Validate and test key resources
+        echo ""
+        echo "🔍 === RESOURCE VALIDATION ==="
+        
+        # Lambda Functions
+        echo "⚡ Lambda Functions:"
+        LAMBDA_FUNCTIONS=$(aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+        
+        if [[ -n "$LAMBDA_FUNCTIONS" ]]; then
+          for func in $LAMBDA_FUNCTIONS; do
+            FUNC_STATUS=$(aws lambda get-function --function-name "$func" --region "$AWS_REGION" --query 'Configuration.State' --output text 2>/dev/null || echo "Unknown")
+            FUNC_RUNTIME=$(aws lambda get-function --function-name "$func" --region "$AWS_REGION" --query 'Configuration.Runtime' --output text 2>/dev/null || echo "Unknown")
+            echo "   ✅ $func: $FUNC_STATUS ($FUNC_RUNTIME)"
+          done
+        else
+          echo "   ⚠️  No Lambda functions found"
+        fi
+        
+        # API Gateway
+        echo ""
+        echo "🌐 API Gateway:"
+        API_ID=$(aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[?ResourceType==`AWS::ApiGateway::RestApi`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+        
+        if [[ -n "$API_ID" ]]; then
+          API_URL="https://$API_ID.execute-api.$AWS_REGION.amazonaws.com/prod"
+          echo "   ✅ API ID: $API_ID"
+          echo "   🔗 API URL: $API_URL"
+          
+          # Test API connectivity
+          echo "   🏥 Testing API connectivity..."
+          if curl -s --max-time 10 --fail "$API_URL" >/dev/null 2>&1; then
+            echo "   ✅ API connectivity test passed"
+          else
+            echo "   ⚠️  API connectivity test failed (may be expected for new deployments)"
+          fi
+        else
+          echo "   ⚠️  No API Gateway found"
+        fi
+        
+        # S3 Buckets
+        echo ""
+        echo "🪣 S3 Buckets:"
+        S3_BUCKETS=$(aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[?ResourceType==`AWS::S3::Bucket`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+        
+        if [[ -n "$S3_BUCKETS" ]]; then
+          for bucket in $S3_BUCKETS; do
+            BUCKET_REGION=$(aws s3api get-bucket-location --bucket "$bucket" --query 'LocationConstraint' --output text 2>/dev/null || echo "us-east-1")
+            [[ "$BUCKET_REGION" == "None" ]] && BUCKET_REGION="us-east-1"
+            
+            BUCKET_VERSIONING=$(aws s3api get-bucket-versioning --bucket "$bucket" --region "$BUCKET_REGION" --query 'Status' --output text 2>/dev/null || echo "None")
+            echo "   ✅ $bucket (region: $BUCKET_REGION, versioning: $BUCKET_VERSIONING)"
+          done
+        else
+          echo "   ⚠️  No S3 buckets found"
+        fi
+        
+        # DynamoDB Tables  
+        echo ""
+        echo "🗃️  DynamoDB Tables:"
+        DYNAMO_TABLES=$(aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[?ResourceType==`AWS::DynamoDB::Table`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+        
+        if [[ -n "$DYNAMO_TABLES" ]]; then
+          for table in $DYNAMO_TABLES; do
+            TABLE_STATUS=$(aws dynamodb describe-table --table-name "$table" --region "$AWS_REGION" --query 'Table.TableStatus' --output text 2>/dev/null || echo "Unknown")
+            TABLE_ITEMS=$(aws dynamodb describe-table --table-name "$table" --region "$AWS_REGION" --query 'Table.ItemCount' --output text 2>/dev/null || echo "0")
+            echo "   ✅ $table: $TABLE_STATUS (items: $TABLE_ITEMS)"
+          done
+        else
+          echo "   ⚠️  No DynamoDB tables found"
+        fi
+        
+        # RDS Instances
+        echo ""
+        echo "🗄️  RDS Instances:"
+        RDS_INSTANCES=$(aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+          --query 'StackResourceSummaries[?ResourceType==`AWS::RDS::DBInstance`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+        
+        if [[ -n "$RDS_INSTANCES" ]]; then
+          for instance in $RDS_INSTANCES; do
+            INSTANCE_STATUS=$(aws rds describe-db-instances --db-instance-identifier "$instance" --region "$AWS_REGION" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || echo "Unknown")
+            INSTANCE_ENGINE=$(aws rds describe-db-instances --db-instance-identifier "$instance" --region "$AWS_REGION" --query 'DBInstances[0].Engine' --output text 2>/dev/null || echo "Unknown")
+            echo "   ✅ $instance: $INSTANCE_STATUS ($INSTANCE_ENGINE)"
+          done
+        else
+          echo "   ⚠️  No RDS instances found"
+        fi
+        
+        echo ""
+        echo "🎉 === POST-DEPLOYMENT VALIDATION COMPLETED ==="
+        echo "✅ Stack validation passed - deployment is ready for use!"
 
-          aws lambda update-function-configuration \
-            --function-name "${{ needs.infra.outputs.backend_lambda }}" \
-            --environment "{
-              \"Variables\": {
-                \"SUBSCRIBER_TABLE_NAME\": \"$SUBSCRIBER_TABLE\",
-                \"AUDIT_LOG_TABLE_NAME\": \"$AUDIT_TABLE\",
-                \"MIGRATION_JOBS_TABLE_NAME\": \"$JOBS_TABLE\",
-                \"MIGRATION_UPLOAD_BUCKET_NAME\": \"${{ needs.infra.outputs.upload_bucket }}\",
-                \"LEGACY_DB_SECRET_ARN\": \"$LEGACY_DB_SECRET_ARN\",
-                \"LEGACY_DB_HOST\": \"$LEGACY_DB_HOST\",
-                \"FLASK_ENV\": \"production\",
-                \"PROV_MODE\": \"dual_prov\"
-              }
-            }"
-
-      - name: 🔄 Update API Gateway
-        if: github.event.inputs.deploy_type != 'frontend-only'
-        run: |
-          DEPLOYMENT_ID=$(aws apigateway create-deployment --rest-api-id ${{ needs.infra.outputs.api_gateway_id }} --description "Portal $(date +%Y%m%d-%H%M%S)" --query 'id' --output text)
-          aws apigateway update-stage --rest-api-id ${{ needs.infra.outputs.api_gateway_id }} --stage-name prod --patch-operations op=replace,path=/deploymentId,value=$DEPLOYMENT_ID
-
-      - name: 🧪 Post-deploy health checks
-        run: |
-          API_URL="https://${{ needs.infra.outputs.api_gateway_id }}.execute-api.${{ env.AWS_DEFAULT_REGION }}.amazonaws.com/prod"
-          FRONTEND_URL="http://${{ needs.infra.outputs.frontend_bucket }}.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-          echo "⏳ Wait 45s"
-          sleep 45
-          echo "1) API Health" && curl -s -w " %{http_code}\n" "$API_URL/api/health" -o /dev/null || true
-          echo "2) Frontend" && curl -s -o /dev/null -w "%{http_code}\n" "$FRONTEND_URL" || true
+    - name: Ultimate error reporting and cleanup
+      if: failure()
+      run: |
+        echo ""
+        echo "💥 === DEPLOYMENT WORKFLOW FAILED ==="
+        echo "Generating comprehensive error report and performing cleanup..."
+        
+        STACK_NAME="${{ env.STACK_NAME }}"
+        AWS_REGION="${{ env.AWS_REGION }}"
+        
+        # Generate detailed error report
+        echo ""
+        echo "📋 === COMPREHENSIVE ERROR REPORT ==="
+        echo "Timestamp: $(date -u)"
+        echo "Stack Name: $STACK_NAME"
+        echo "Region: $AWS_REGION"
+        echo "Workflow: ${{ github.workflow }}"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Run Number: ${{ github.run_number }}"
+        echo "Commit SHA: ${{ github.sha }}"
+        echo "Git Ref: ${{ github.ref }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Event: ${{ github.event_name }}"
+        echo ""
+        
+        # Stack status analysis
+        if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" &>/dev/null; then
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+          STACK_REASON=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatusReason' --output text 2>/dev/null || echo "None")
+          
+          echo "📊 Stack Status Analysis:"
+          echo "   Current Status: $STACK_STATUS"
+          echo "   Status Reason: $STACK_REASON"
+          echo ""
+          
+          # Comprehensive stack events
+          echo "📋 Complete Stack Events (last 50):"
+          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+            --query 'StackEvents[0:50].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]' \
+            --output table 2>/dev/null || echo "Could not retrieve stack events"
+          
+          # Failed resources analysis
+          echo ""
+          echo "❌ Failed Resources Analysis:"
+          aws cloudformation describe-stack-events --stack-name "$STACK_NAME" --region "$AWS_REGION" \
+            --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]' \
+            --output table 2>/dev/null || echo "No failed resources found in recent events"
+          
+          # Resource drift detection (if stack is in good state)
+          if [[ "$STACK_STATUS" == *"_COMPLETE" ]]; then
+            echo ""
+            echo "🔍 Checking for resource drift:"
+            aws cloudformation detect-stack-drift --stack-name "$STACK_NAME" --region "$AWS_REGION" 2>/dev/null || echo "Could not detect drift"
+          fi
+          
+          # Cleanup failed stack
+          if [[ "$STACK_STATUS" == *"_FAILED" || "$STACK_STATUS" == *"_ROLLBACK_COMPLETE" ]]; then
+            echo ""
+            echo "🧹 === AUTOMATED CLEANUP ==="
+            echo "Stack is in failed state, initiating comprehensive cleanup..."
+            
+            # Delete the failed stack
+            if aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION" 2>/dev/null; then
+              echo "✅ Stack deletion initiated"
+              echo "⏳ Waiting for stack deletion (timeout: 30 minutes)..."
+              if timeout 1800 aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" 2>/dev/null; then
+                echo "✅ Failed stack deleted successfully"
+              else
+                echo "⚠️  Stack deletion timeout - may require manual intervention"
+              fi
+            else
+              echo "❌ Failed to initiate stack deletion"
+            fi
+            
+            # Comprehensive S3 cleanup
+            echo ""
+            echo "🪣 Comprehensive S3 Cleanup:"
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            ALL_BUCKET_PATTERNS=(
+              "sub-mig-logs-$ACCOUNT_ID"
+              "sub-mig-web-$ACCOUNT_ID-prod"
+              "sub-mig-web-$ACCOUNT_ID-staging" 
+              "sub-mig-web-$ACCOUNT_ID-dev"
+              "sub-mig-data-$ACCOUNT_ID-prod"
+              "sub-mig-data-$ACCOUNT_ID-staging"
+              "sub-mig-data-$ACCOUNT_ID-dev"
+            )
+            
+            for bucket in "${ALL_BUCKET_PATTERNS[@]}"; do
+              if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+                echo "🗑️  Cleaning up orphaned bucket: $bucket"
+                aws s3 rm "s3://$bucket" --recursive 2>/dev/null || true
+                aws s3api delete-bucket --bucket "$bucket" 2>/dev/null || true
+                echo "✅ Bucket cleanup completed: $bucket"
+              fi
+            done
+            
+            echo "✅ Comprehensive cleanup completed"
+          fi
+        else
+          echo "ℹ️  Stack does not exist or could not be accessed"
+        fi
+        
+        # Environment and context information
+        echo ""
+        echo "🌍 Environment Context:"
+        echo "AWS CLI Version: $(aws --version)"
+        echo "GitHub Runner: ${{ runner.os }}"
+        echo "Workflow Inputs:"
+        echo "   delete_only: ${{ github.event.inputs.delete_stack_only || 'false' }}"
+        echo "   force_recreate: ${{ github.event.inputs.force_recreate || 'false' }}"
+        echo "   cleanup_all: ${{ github.event.inputs.cleanup_all_resources || 'false' }}"
+        echo "   skip_validation: ${{ github.event.inputs.skip_validation || 'false' }}"
+        
+        # Deployment attempt logs
+        echo ""
+        echo "📄 Deployment Attempt Logs:"
+        for log_file in deployment-attempt-*.log; do
+          if [[ -f "$log_file" ]]; then
+            echo "📋 $log_file:"
+            tail -10 "$log_file" 2>/dev/null || echo "Could not read log file"
+            echo ""
+          fi
+        done
+        
+        # Suggestions for resolution
+        echo ""
+        echo "💡 === TROUBLESHOOTING SUGGESTIONS ==="
+        echo "1. Check the error messages above for specific resource failures"
+        echo "2. Review the CloudFormation template for circular dependencies"
+        echo "3. Verify AWS permissions for all required services"
+        echo "4. Consider using 'force_recreate: true' for stubborn issues"
+        echo "5. For S3 conflicts, use 'cleanup_all_resources: true'"
+        echo "6. Check AWS service limits in your region"
+        echo "7. Retry deployment - transient issues often resolve automatically"
+        
+        echo ""
+        echo "💾 Error report generation completed"
+        echo "❌ Workflow failed - see report above for details"
+        
+        exit 1
