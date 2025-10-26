@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Subscriber Migration Portal - Production Ready (All Dependencies Fixed v7 - S3 Bucket Names Fixed)'
+Description: 'Subscriber Migration Portal - Production Ready (All Dependencies Fixed v8 - API Gateway Logging Fixed)'
 
 Parameters:
   Environment:
@@ -368,6 +368,26 @@ Resources:
         - Key: Name
           Value: !Sub 'legacy-database-${Environment}'
 
+  # API Gateway CloudWatch Logs Role
+  ApiGatewayCloudWatchLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  # API Gateway Account Settings
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchLogsRole.Arn
+
   # IAM Roles (Created Early to Avoid Dependencies)
   BackendLambdaRole:
     Type: AWS::IAM::Role
@@ -637,6 +657,7 @@ Resources:
 
   BackendApiStage:
     Type: AWS::ApiGateway::Stage
+    DependsOn: ApiGatewayAccount
     Properties:
       DeploymentId: !Ref BackendApiDeployment
       RestApiId: !Ref BackendApi
@@ -646,7 +667,7 @@ Resources:
         - ResourcePath: '/*'
           HttpMethod: '*'
           LoggingLevel: INFO
-          DataTraceEnabled: true
+          DataTraceEnabled: false
           MetricsEnabled: true
 
   # Lambda Permissions (Separated to Break Circular Dependencies)
