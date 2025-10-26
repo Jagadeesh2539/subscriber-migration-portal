@@ -1,8 +1,8 @@
 // Single Source of Truth API Configuration
 import axios from 'axios';
 
-// Consolidated API Base URL - standardized on REACT_APP_API_BASE_URL
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://hsebznxeu6.execute-api.us-east-1.amazonaws.com/prod';
+// Consolidated API Base URL - FIXED to match your deployed API Gateway
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'https://thrfgb2la9.execute-api.us-east-1.amazonaws.com/prod';
 
 // Create axios instance with consistent configuration
 const api = axios.create({
@@ -32,6 +32,8 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       authToken = null;
       localStorage.removeItem('authToken');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -43,9 +45,12 @@ const apiService = {
   // Authentication
   async login(credentials) {
     const response = await api.post('/api/auth/login', credentials);
-    if (response.data.token) {
-      authToken = response.data.token;
+    // Backend returns: {status: "success", data: {token, user, expires_in}, message}
+    if (response.data.status === 'success' && response.data.data.token) {
+      authToken = response.data.data.token;
       localStorage.setItem('authToken', authToken);
+      localStorage.setItem('token', authToken);
+      localStorage.setItem('user', JSON.stringify(response.data.data.user));
     }
     return response.data;
   },
@@ -53,6 +58,8 @@ const apiService = {
   async logout() {
     authToken = null;
     localStorage.removeItem('authToken');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     return api.post('/api/auth/logout');
   },
 
@@ -81,6 +88,10 @@ const apiService = {
 
   async deleteSubscriber(id, mode = 'cloud') {
     return api.delete(`/api/subscribers/${id}?mode=${mode}`);
+  },
+
+  async searchSubscriber(identifier, type = 'uid') {
+    return api.get(`/api/subscribers/search?identifier=${identifier}&type=${type}`);
   },
 
   // Migration Jobs - Enhanced with Timestamps & Cancel
@@ -126,8 +137,8 @@ const apiService = {
   },
 
   // Bulk Operations - Enhanced
-  async bulkDelete(criteria) {
-    return api.post('/api/subscribers/bulk-delete', criteria);
+  async bulkDelete(identifiers) {
+    return api.post('/api/operations/bulk-delete', { identifiers });
   },
 
   async bulkAudit(systems = ['legacy', 'cloud']) {
@@ -162,6 +173,10 @@ const apiService = {
     return api.get('/api/config/provisioning-mode');
   },
 
+  async getProvisioningDashboard() {
+    return api.get('/api/provision/dashboard');
+  },
+
   // Analytics & Reporting
   async getAnalyticsData(timeRange = '30d') {
     return api.get(`/api/analytics?range=${timeRange}`);
@@ -178,22 +193,23 @@ const apiService = {
   // Audit Logs
   async getAuditLogs(params = {}) {
     const queryParams = new URLSearchParams(params).toString();
-    return api.get(`/api/audit/logs${queryParams ? `?${queryParams}` : ''}`);
-  },
+    return api.get(`/api/audit/logs${queryParams ? `?${queryParams}` : ''}`);\n  },
 
   // Utility Methods
   setAuthToken(token) {
     authToken = token;
     if (token) {
       localStorage.setItem('authToken', token);
+      localStorage.setItem('token', token);
     } else {
       localStorage.removeItem('authToken');
+      localStorage.removeItem('token');
     }
   },
 
   getAuthToken() {
     if (!authToken) {
-      authToken = localStorage.getItem('authToken');
+      authToken = localStorage.getItem('authToken') || localStorage.getItem('token');
     }
     return authToken;
   },
@@ -204,7 +220,7 @@ const apiService = {
 
   // Initialize token on app startup
   init() {
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('authToken') || localStorage.getItem('token');
     if (token) {
       this.setAuthToken(token);
     }
