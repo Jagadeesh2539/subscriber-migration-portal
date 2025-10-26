@@ -115,7 +115,7 @@ jobs:
           fi
         }
         
-        # Unified Lambda readiness check function (consolidates both wait functions)
+        # Unified Lambda readiness check function
         wait_for_lambda_ready() {
           local function_name="$1"
           local operation_type="${2:-deployment}"  # 'deployment' or 'configuration'
@@ -666,6 +666,10 @@ jobs:
         aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
           --query 'Stacks[0].Outputs' --output json > /tmp/stack-outputs.json
         
+        # Debug: Show raw outputs
+        echo "🔍 Raw stack outputs:"
+        cat /tmp/stack-outputs.json | jq .
+        
         # Parse outputs once and set environment variables for all subsequent steps
         SUBSCRIBER_TABLE=$(jq -r '.[] | select(.OutputKey=="SubscriberTableName") | .OutputValue' /tmp/stack-outputs.json)
         AUDIT_TABLE=$(jq -r '.[] | select(.OutputKey=="AuditLogTableName") | .OutputValue' /tmp/stack-outputs.json)
@@ -679,6 +683,19 @@ jobs:
         FRONTEND_URL=$(jq -r '.[] | select(.OutputKey=="FrontendURL") | .OutputValue' /tmp/stack-outputs.json)
         BACKEND_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="BackendLambdaName") | .OutputValue' /tmp/stack-outputs.json)
         MIGRATION_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorFunctionName") | .OutputValue' /tmp/stack-outputs.json)
+        
+        # Debug: Show parsed variables
+        echo "🔍 Parsed environment variables:"
+        echo "UPLOAD_BUCKET=$UPLOAD_BUCKET"
+        echo "MIGRATION_ARN=$MIGRATION_ARN"
+        echo "MIGRATION_LAMBDA_NAME=$MIGRATION_LAMBDA_NAME"
+        echo "BACKEND_LAMBDA_NAME=$BACKEND_LAMBDA_NAME"
+        
+        # Validate critical variables
+        if [[ -z "$UPLOAD_BUCKET" || "$UPLOAD_BUCKET" == "null" ]]; then
+          echo "❌ Critical error: UPLOAD_BUCKET is empty or null"
+          exit 1
+        fi
         
         # Security: Mask sensitive values in GitHub Actions logs
         echo "::add-mask::$SUBSCRIBER_TABLE"
@@ -821,37 +838,81 @@ jobs:
         
         echo "✅ Lambda environment variable configuration completed"
 
-    - name: Setup S3 notifications automatically  
+    - name: Setup S3 notifications with comprehensive validation
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
-        echo "📡 Setting up S3 → Lambda notifications..."
+        echo "📡 Setting up S3 → Lambda notifications with comprehensive validation..."
         
-        # Ensure migration processor Lambda is ready before setting up notifications
-        if [[ -n "$MIGRATION_LAMBDA_NAME" && "$MIGRATION_LAMBDA_NAME" != "null" ]]; then
-          # Add Lambda permission (allow failure if already exists)
-          aws lambda add-permission \
-            --function-name "$MIGRATION_LAMBDA_NAME" \
-            --statement-id s3invoke \
-            --action lambda:InvokeFunction \
-            --principal s3.amazonaws.com \
-            --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" 2>/dev/null || echo "Permission already exists"
-          
-          # Configure S3 notifications (fail fast - no error suppression)
-          aws s3api put-bucket-notification-configuration \
-            --bucket "$UPLOAD_BUCKET" \
-            --notification-configuration "{
-              \"LambdaFunctionConfigurations\": [{
-                \"Id\": \"MigrationProcessorTrigger\",
-                \"LambdaFunctionArn\": \"$MIGRATION_ARN\",
-                \"Events\": [\"s3:ObjectCreated:*\"],
-                \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
-              }]
-            }"
-          
-          echo "✅ S3 notifications configured"
-        else
-          echo "⚠️  Migration processor Lambda not available, skipping S3 notifications"
+        # Comprehensive validation of required variables
+        echo "🔍 Validating required variables..."
+        
+        if [[ -z "$UPLOAD_BUCKET" || "$UPLOAD_BUCKET" == "null" ]]; then
+          echo "❌ Critical error: Upload bucket name not found in stack outputs"
+          echo "📋 Available stack outputs:"
+          aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+            --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table
+          exit 1
         fi
+        
+        if [[ -z "$MIGRATION_ARN" || "$MIGRATION_ARN" == "null" ]]; then
+          echo "❌ Critical error: Migration processor ARN not found in stack outputs"
+          exit 1
+        fi
+        
+        if [[ -z "$MIGRATION_LAMBDA_NAME" || "$MIGRATION_LAMBDA_NAME" == "null" ]]; then
+          echo "❌ Critical error: Migration processor Lambda name not found in stack outputs"
+          exit 1
+        fi
+        
+        # Verify bucket exists
+        echo "🔍 Verifying S3 bucket exists: $UPLOAD_BUCKET"
+        if ! aws s3api head-bucket --bucket "$UPLOAD_BUCKET" 2>/dev/null; then
+          echo "❌ S3 bucket does not exist: $UPLOAD_BUCKET"
+          echo "🔍 Listing all S3 buckets to debug:"
+          aws s3 ls
+          exit 1
+        fi
+        
+        echo "✅ S3 bucket verified: $UPLOAD_BUCKET"
+        
+        # Verify Lambda function exists
+        echo "🔍 Verifying Lambda function exists: $MIGRATION_LAMBDA_NAME"
+        if ! aws lambda get-function --function-name "$MIGRATION_LAMBDA_NAME" >/dev/null 2>&1; then
+          echo "❌ Lambda function does not exist: $MIGRATION_LAMBDA_NAME"
+          exit 1
+        fi
+        
+        echo "✅ Lambda function verified: $MIGRATION_LAMBDA_NAME"
+        
+        # Add Lambda permission (allow failure if already exists)
+        echo "🔑 Adding Lambda permission for S3..."
+        aws lambda add-permission \
+          --function-name "$MIGRATION_LAMBDA_NAME" \
+          --statement-id s3invoke \
+          --action lambda:InvokeFunction \
+          --principal s3.amazonaws.com \
+          --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" 2>/dev/null || echo "Permission already exists"
+        
+        # Configure S3 notifications
+        echo "🔧 Configuring S3 bucket notifications..."
+        aws s3api put-bucket-notification-configuration \
+          --bucket "$UPLOAD_BUCKET" \
+          --notification-configuration "{
+            \"LambdaFunctionConfigurations\": [{
+              \"Id\": \"MigrationProcessorTrigger\",
+              \"LambdaFunctionArn\": \"$MIGRATION_ARN\",
+              \"Events\": [\"s3:ObjectCreated:*\"],
+              \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
+            }]
+          }"
+        
+        echo "✅ S3 notifications configured successfully"
+        
+        # Verify notification configuration
+        echo "🔍 Verifying notification configuration..."
+        aws s3api get-bucket-notification-configuration --bucket "$UPLOAD_BUCKET" --output table
+        
+        echo "✅ S3 → Lambda notifications setup completed"
 
     - name: Deploy frontend automatically
       if: env.DEPLOYMENT_SUCCESS == 'true'  
