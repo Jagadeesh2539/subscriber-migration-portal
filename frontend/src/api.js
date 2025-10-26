@@ -94,7 +94,7 @@ const apiService = {
     return api.get(`/api/subscribers/search?identifier=${identifier}&type=${type}`);
   },
 
-  // Migration Jobs - Enhanced with Timestamps & Cancel
+  // Migration Jobs - Enhanced with Timestamps and Cancel
   async getMigrationJobs(params = {}) {
     const queryParams = new URLSearchParams(params).toString();
     return api.get(`/api/migration/jobs${queryParams ? `?${queryParams}` : ''}`);
@@ -177,7 +177,7 @@ const apiService = {
     return api.get('/api/provision/dashboard');
   },
 
-  // Analytics & Reporting
+  // Analytics and Reporting
   async getAnalyticsData(timeRange = '30d') {
     return api.get(`/api/analytics?range=${timeRange}`);
   },
@@ -193,7 +193,8 @@ const apiService = {
   // Audit Logs
   async getAuditLogs(params = {}) {
     const queryParams = new URLSearchParams(params).toString();
-    return api.get(`/api/audit/logs${queryParams ? `?${queryParams}` : ''}`);\n  },
+    return api.get(`/api/audit/logs${queryParams ? `?${queryParams}` : ''}`);
+  },
 
   // Utility Methods
   setAuthToken(token) {
