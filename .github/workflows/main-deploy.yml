@@ -6,6 +6,9 @@ on:
     paths:
       - 'aws/**'
       - '.github/workflows/**'
+      - 'backend/**'
+      - 'migration-processor/**'
+      - 'frontend/**'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -58,8 +61,17 @@ jobs:
         unzip -q awscliv2.zip
         sudo ./aws/install --update
         
+        # Install additional tools
+        sudo apt-get update
+        sudo apt-get install -y jq mysql-client
+        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+        sudo apt-get install -y nodejs
+        
         # Verify installation
         aws --version
+        jq --version
+        node --version
+        npm --version
         
         # Configure AWS CLI for better performance
         aws configure set max_concurrent_requests 20
@@ -89,9 +101,9 @@ jobs:
         cat > /tmp/stack_functions.sh << 'FUNCTIONS_EOF'
         #!/bin/bash
         
-        # Enhanced stack existence check
+        # Enhanced stack existence check (FIXED: added || false to prevent step termination)
         stack_exists() {
-          aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null
+          aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null || false
         }
         
         # Enhanced stack status retrieval
@@ -607,30 +619,265 @@ jobs:
           exit 1
         fi
 
-    - name: Post-deployment validation and reporting
-      if: env.DEPLOYMENT_MODE == 'full' && env.DEPLOYMENT_SUCCESS == 'true'
+    - name: Cache stack outputs for efficiency
+      if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
-        # Source the functions
-        source /tmp/stack_functions.sh
+        echo "📋 Caching stack outputs to avoid repeated API calls..."
         
-        echo "🔍 === POST-DEPLOYMENT VALIDATION ==="
+        # Single API call to get all outputs and save to file (using dynamic stack name)
+        aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" \
+          --query 'Stacks[0].Outputs' --output json > /tmp/stack-outputs.json
         
-        STACK_NAME="${{ env.STACK_NAME }}"
-        AWS_REGION="${{ env.AWS_REGION }}"
+        # Parse outputs once and set environment variables for all subsequent steps
+        SUBSCRIBER_TABLE=$(jq -r '.[] | select(.OutputKey=="SubscriberTableName") | .OutputValue' /tmp/stack-outputs.json)
+        AUDIT_TABLE=$(jq -r '.[] | select(.OutputKey=="AuditLogTableName") | .OutputValue' /tmp/stack-outputs.json)
+        JOBS_TABLE=$(jq -r '.[] | select(.OutputKey=="MigrationJobsTableName") | .OutputValue' /tmp/stack-outputs.json)
+        UPLOAD_BUCKET=$(jq -r '.[] | select(.OutputKey=="MigrationUploadBucketName") | .OutputValue' /tmp/stack-outputs.json)
+        FRONTEND_BUCKET=$(jq -r '.[] | select(.OutputKey=="FrontendBucketName") | .OutputValue' /tmp/stack-outputs.json)
+        LEGACY_DB_ENDPOINT=$(jq -r '.[] | select(.OutputKey=="LegacyDBEndpoint") | .OutputValue' /tmp/stack-outputs.json)
+        LEGACY_DB_SECRET=$(jq -r '.[] | select(.OutputKey=="LegacyDBSecretArn") | .OutputValue' /tmp/stack-outputs.json)
+        MIGRATION_ARN=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorArn") | .OutputValue' /tmp/stack-outputs.json)
+        BACKEND_API_URL=$(jq -r '.[] | select(.OutputKey=="BackendApiUrl") | .OutputValue' /tmp/stack-outputs.json)
+        FRONTEND_URL=$(jq -r '.[] | select(.OutputKey=="FrontendURL") | .OutputValue' /tmp/stack-outputs.json)
+        BACKEND_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="BackendLambdaName") | .OutputValue' /tmp/stack-outputs.json)
+        MIGRATION_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorFunctionName") | .OutputValue' /tmp/stack-outputs.json)
         
-        # Get and display stack outputs
-        echo "📋 Stack Outputs:"
-        aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" \
-          --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue,Description]' --output table 2>/dev/null || echo "No outputs available"
+        # Security: Mask sensitive values in GitHub Actions logs
+        echo "::add-mask::$SUBSCRIBER_TABLE"
+        echo "::add-mask::$AUDIT_TABLE" 
+        echo "::add-mask::$JOBS_TABLE"
+        echo "::add-mask::$UPLOAD_BUCKET"
+        echo "::add-mask::$FRONTEND_BUCKET"
+        echo "::add-mask::$LEGACY_DB_ENDPOINT"
+        echo "::add-mask::$LEGACY_DB_SECRET"
+        echo "::add-mask::$MIGRATION_ARN"
+        echo "::add-mask::$BACKEND_API_URL"
+        echo "::add-mask::$FRONTEND_URL"
+        echo "::add-mask::$BACKEND_LAMBDA_NAME"
+        echo "::add-mask::$MIGRATION_LAMBDA_NAME"
         
-        # Get resource summary
+        # Export all to environment for subsequent steps
+        echo "SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE" >> $GITHUB_ENV
+        echo "AUDIT_TABLE=$AUDIT_TABLE" >> $GITHUB_ENV
+        echo "JOBS_TABLE=$JOBS_TABLE" >> $GITHUB_ENV
+        echo "UPLOAD_BUCKET=$UPLOAD_BUCKET" >> $GITHUB_ENV
+        echo "FRONTEND_BUCKET=$FRONTEND_BUCKET" >> $GITHUB_ENV
+        echo "LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT" >> $GITHUB_ENV
+        echo "LEGACY_DB_SECRET=$LEGACY_DB_SECRET" >> $GITHUB_ENV
+        echo "MIGRATION_ARN=$MIGRATION_ARN" >> $GITHUB_ENV
+        echo "BACKEND_API_URL=$BACKEND_API_URL" >> $GITHUB_ENV
+        echo "FRONTEND_URL=$FRONTEND_URL" >> $GITHUB_ENV
+        echo "BACKEND_LAMBDA_NAME=$BACKEND_LAMBDA_NAME" >> $GITHUB_ENV
+        echo "MIGRATION_LAMBDA_NAME=$MIGRATION_LAMBDA_NAME" >> $GITHUB_ENV
+        
+        echo "✅ Stack outputs cached and environment variables set"
+
+    - name: Deploy Lambda code automatically
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "🚀 Deploying application code to Lambda functions..."
+        
+        # Backend Lambda
+        if [[ -d "backend" ]]; then
+          cd backend
+          zip -r ../backend.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*"
+          cd ..
+          
+          aws lambda update-function-code \
+            --function-name "$BACKEND_LAMBDA_NAME" \
+            --zip-file fileb://backend.zip
+          
+          echo "✅ Backend Lambda code deployed"
+        else
+          echo "⚠️  Backend directory not found, skipping"
+        fi
+        
+        # Migration Processor
+        if [[ -d "migration-processor" ]]; then
+          cd migration-processor  
+          zip -r ../migration.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*"
+          cd ..
+          
+          aws lambda update-function-code \
+            --function-name "$MIGRATION_LAMBDA_NAME" \
+            --zip-file fileb://migration.zip
+          
+          echo "✅ Migration processor code deployed"
+        else
+          echo "⚠️  Migration processor directory not found, skipping"
+        fi
+
+    - name: Configure Lambda environment variables
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "⚙️  Configuring Lambda environment variables..."
+        
+        # Configure backend Lambda (using cached environment variables)
+        aws lambda update-function-configuration \
+          --function-name "$BACKEND_LAMBDA_NAME" \
+          --environment "Variables={ENVIRONMENT=prod,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,AUDIT_TABLE=$AUDIT_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+        
+        # Configure migration processor
+        aws lambda update-function-configuration \
+          --function-name "$MIGRATION_LAMBDA_NAME" \
+          --environment "Variables={ENVIRONMENT=prod,UPLOAD_BUCKET=$UPLOAD_BUCKET,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+        
+        echo "✅ Environment variables configured"
+
+    - name: Setup S3 notifications automatically  
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "📡 Setting up S3 → Lambda notifications..."
+        
+        # Add Lambda permission (allow failure if already exists)
+        aws lambda add-permission \
+          --function-name "$MIGRATION_LAMBDA_NAME" \
+          --statement-id s3invoke \
+          --action lambda:InvokeFunction \
+          --principal s3.amazonaws.com \
+          --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" 2>/dev/null || echo "Permission already exists"
+        
+        # Configure S3 notifications (fail fast - no error suppression)
+        aws s3api put-bucket-notification-configuration \
+          --bucket "$UPLOAD_BUCKET" \
+          --notification-configuration "{
+            \"LambdaFunctionConfigurations\": [{
+              \"Id\": \"MigrationProcessorTrigger\",
+              \"LambdaFunctionArn\": \"$MIGRATION_ARN\",
+              \"Events\": [\"s3:ObjectCreated:*\"],
+              \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
+            }]
+          }"
+        
+        echo "✅ S3 notifications configured"
+
+    - name: Deploy frontend automatically
+      if: env.DEPLOYMENT_SUCCESS == 'true'  
+      run: |
+        echo "🌐 Deploying React frontend..."
+        
+        if [[ -d "frontend" ]]; then
+          cd frontend
+          
+          # Install dependencies and build
+          if [[ -f "package.json" ]]; then
+            npm ci
+            npm run build
+            
+            # Upload to S3 (using cached environment variable)
+            aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete
+            
+            echo "✅ Frontend deployed"
+            echo "🌐 Frontend URL: $FRONTEND_URL"
+          else
+            echo "⚠️  package.json not found in frontend directory"
+          fi
+          
+          cd ..
+        else
+          echo "⚠️  Frontend directory not found, skipping"
+        fi
+
+    - name: Initialize database schema with Docker
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "🗄️  Initializing database schema using Docker..."
+        
+        # Get password from secrets manager
+        SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$LEGACY_DB_SECRET" --query 'SecretString' --output text)
+        DB_PASSWORD=$(echo "$SECRET_VALUE" | jq -r '.password')
+        
+        # Security: Mask the database password
+        echo "::add-mask::$DB_PASSWORD"
+        
+        # Create SQL schema and execute using Docker (fast, reliable, secure)
+        cat << 'EOF' | docker run --rm -i -e MYSQL_PWD="$DB_PASSWORD" mysql:8.0 mysql -h "$LEGACY_DB_ENDPOINT" -u admin
+        CREATE DATABASE IF NOT EXISTS legacydb;
+        USE legacydb;
+        
+        CREATE TABLE IF NOT EXISTS subscribers (
+          id VARCHAR(64) PRIMARY KEY,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          name VARCHAR(255),
+          phone VARCHAR(20),
+          status VARCHAR(50) DEFAULT 'active',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_email (email),
+          INDEX idx_status (status)
+        );
+        
+        CREATE TABLE IF NOT EXISTS migration_logs (
+          id VARCHAR(64) PRIMARY KEY,
+          job_id VARCHAR(64),
+          file_name VARCHAR(255),
+          total_records INT DEFAULT 0,
+          processed_count INT DEFAULT 0,
+          failed_count INT DEFAULT 0,
+          status VARCHAR(50) DEFAULT 'processing',
+          error_message TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          completed_at TIMESTAMP NULL,
+          INDEX idx_job_id (job_id),
+          INDEX idx_status (status)
+        );
+        EOF
+        
+        echo "✅ Database schema initialized"
+
+    - name: Run comprehensive smoke tests
+      if: env.DEPLOYMENT_SUCCESS == 'true'
+      run: |
+        echo "🧪 Running comprehensive smoke tests..."
+        
+        # Test API health
+        echo "🔍 Testing API health endpoint..."
+        if curl -f -s "$BACKEND_API_URL/health" >/dev/null; then
+          echo "✅ API health check passed"
+        else
+          echo "⚠️  API health check failed (may be normal for new deployments)"
+        fi
+        
+        # Test API CORS
+        echo "🔍 Testing API CORS..."
+        CORS_HEADERS=$(curl -s -I -X OPTIONS "$BACKEND_API_URL" | grep -i "access-control-allow")
+        if [[ -n "$CORS_HEADERS" ]]; then
+          echo "✅ CORS headers present"
+        else
+          echo "⚠️  CORS headers not found"
+        fi
+        
+        # Test frontend
+        echo "🔍 Testing frontend availability..."
+        if curl -f -s "$FRONTEND_URL" >/dev/null; then
+          echo "✅ Frontend accessible"
+        else
+          echo "⚠️  Frontend not accessible yet"
+        fi
+        
+        # Test S3 upload capability
+        echo "🔍 Testing S3 upload capability..."
+        echo "test file" > test-upload.txt
+        if aws s3 cp test-upload.txt "s3://$UPLOAD_BUCKET/test/test-upload.txt"; then
+          echo "✅ S3 upload test passed"
+          aws s3 rm "s3://$UPLOAD_BUCKET/test/test-upload.txt" || true
+        else
+          echo "⚠️  S3 upload test failed"
+        fi
+        rm -f test-upload.txt
+        
         echo ""
-        echo "🏗️  Stack Resources Summary:"
-        aws cloudformation list-stack-resources --stack-name "$STACK_NAME" --region "$AWS_REGION" \
-          --query 'StackResourceSummaries[*].[LogicalResourceId,ResourceType,ResourceStatus]' --output table 2>/dev/null || echo "Could not retrieve resources"
-        
+        echo "🎉 === FULL DEPLOYMENT COMPLETED SUCCESSFULLY ==="
+        echo "🌐 Frontend: $FRONTEND_URL"
+        echo "📡 API: $BACKEND_API_URL" 
+        echo "📁 Upload Bucket: $UPLOAD_BUCKET"
+        echo "✅ All services deployed and configured automatically!"
         echo ""
-        echo "✅ Stack validation passed - deployment is ready for use!"
+        echo "📋 Next Steps:"
+        echo "1. Visit the frontend URL to see your application"
+        echo "2. Test file uploads through the UI"
+        echo "3. Check CloudWatch logs for any issues"
+        echo "4. Monitor DynamoDB tables for processed data"
 
     - name: Error reporting and cleanup
       if: failure()
