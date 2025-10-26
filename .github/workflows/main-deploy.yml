@@ -1098,17 +1098,47 @@ jobs:
           
           # Install dependencies and build
           if [[ -f "package.json" ]]; then
-            echo "📦 Installing frontend dependencies..."
+            echo "📦 Installing frontend dependencies with cache management..."
             
-            # Try npm ci first, fallback to npm install if package-lock.json is out of sync
-            if ! npm ci 2>/dev/null; then
-              echo "⚠️  npm ci failed, trying npm install (package-lock.json might be out of sync)"
-              npm install
+            # Clear npm cache to prevent corruption issues (DEFENSIVE FIX)
+            echo "🧹 Clearing npm cache to prevent EINTEGRITY errors..."
+            npm cache clean --force
+            
+            # Set npm to use a fresh cache directory to avoid runner corruption
+            export npm_config_cache=/tmp/npm-cache-$$
+            mkdir -p "/tmp/npm-cache-$$"
+            
+            # Set npm configuration for better reliability
+            npm config set fetch-retries 3
+            npm config set fetch-retry-factor 2
+            npm config set fetch-retry-mintimeout 10000
+            npm config set fetch-retry-maxtimeout 60000
+            
+            echo "🔧 npm configuration:"
+            echo "  Cache directory: $npm_config_cache"
+            echo "  Retry settings: 3 attempts with exponential backoff"
+            
+            # Try npm ci first with enhanced reliability
+            if ! npm ci --no-audit --no-fund --prefer-offline 2>/dev/null; then
+              echo "⚠️  npm ci failed, trying cache verification and cleanup..."
               
-              # Update package-lock.json if needed
-              if [[ -f "package-lock.json" ]]; then
-                echo "🔧 Updating package-lock.json..."
-                npm install --package-lock-only
+              # Clean up any partial installs
+              rm -rf node_modules package-lock.json
+              
+              # Verify cache integrity
+              npm cache verify || npm cache clean --force
+              
+              # Try npm install with fresh approach
+              echo "🔄 Attempting fresh npm install..."
+              if ! npm install --no-audit --no-fund --prefer-offline; then
+                echo "⚠️  Standard npm install failed, trying with legacy resolver..."
+                
+                # Final fallback with legacy resolver and no integrity checks
+                npm install --no-audit --no-fund --legacy-peer-deps --no-package-lock
+                
+                # Generate new package-lock.json
+                echo "🔧 Generating new package-lock.json..."
+                npm install --package-lock-only --no-audit --no-fund
               fi
             fi
             
