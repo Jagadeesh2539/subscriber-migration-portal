@@ -115,6 +115,44 @@ jobs:
           fi
         }
         
+        # Unified Lambda readiness check function (consolidates both wait functions)
+        wait_for_lambda_ready() {
+          local function_name="$1"
+          local operation_type="${2:-deployment}"  # 'deployment' or 'configuration'
+          local max_wait=300  # 5 minutes
+          local wait_time=0
+          
+          echo "⏳ Waiting for Lambda $operation_type to complete: $function_name"
+          
+          while [[ $wait_time -lt $max_wait ]]; do
+            local state=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.State' --output text 2>/dev/null || echo "Unknown")
+            local status=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.LastUpdateStatus' --output text 2>/dev/null || echo "Unknown")
+            
+            # Success condition
+            if [[ "$state" == "Active" && "$status" == "Successful" ]]; then
+              echo "✅ Lambda $operation_type completed: $function_name"
+              return 0
+            fi
+            
+            # Failure condition
+            if [[ "$status" == "Failed" ]]; then
+              echo "❌ Lambda $operation_type failed: $function_name"
+              return 1
+            fi
+            
+            # Progress logging (every 30 seconds)
+            if [[ $((wait_time % 30)) -eq 0 ]]; then
+              echo "⏳ Still waiting for $operation_type... ($wait_time/$max_wait seconds) - State: $state, Status: $status"
+            fi
+            
+            sleep 10
+            wait_time=$((wait_time + 10))
+          done
+          
+          echo "⚠️  Timeout waiting for Lambda $operation_type: $function_name"
+          return 1
+        }
+        
         # Enhanced S3 bucket deletion function
         delete_s3_bucket_enhanced() {
           local bucket_name="$1"
@@ -672,84 +710,148 @@ jobs:
         
         echo "✅ Stack outputs cached and environment variables set"
 
-    - name: Deploy Lambda code automatically
+    - name: Deploy Lambda code with smart directory detection
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
+        # Source the functions
+        source /tmp/stack_functions.sh
+        
         echo "🚀 Deploying application code to Lambda functions..."
         
         # Backend Lambda
         if [[ -d "backend" ]]; then
+          echo "📦 Packaging backend Lambda..."
           cd backend
-          zip -r ../backend.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*"
+          zip -r ../backend.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*" "*.DS_Store"
           cd ..
           
-          aws lambda update-function-code \
-            --function-name "$BACKEND_LAMBDA_NAME" \
-            --zip-file fileb://backend.zip
-          
-          echo "✅ Backend Lambda code deployed"
+          if [[ -n "$BACKEND_LAMBDA_NAME" && "$BACKEND_LAMBDA_NAME" != "null" ]]; then
+            echo "🚀 Deploying backend Lambda code..."
+            aws lambda update-function-code \
+              --function-name "$BACKEND_LAMBDA_NAME" \
+              --zip-file fileb://backend.zip
+            
+            # Wait for deployment to complete
+            if wait_for_lambda_ready "$BACKEND_LAMBDA_NAME" "deployment"; then
+              echo "✅ Backend Lambda code deployed successfully"
+            else
+              echo "⚠️  Backend Lambda deployment may have issues, but continuing..."
+            fi
+          else
+            echo "⚠️  Backend Lambda name not found"
+          fi
         else
           echo "⚠️  Backend directory not found, skipping"
         fi
         
-        # Migration Processor
-        if [[ -d "migration-processor" ]]; then
-          cd migration-processor  
-          zip -r ../migration.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*"
+        # Migration Processor - check multiple possible locations
+        MIGRATION_DIR=""
+        for dir in "migration-processor" "migrationprocessor" "processor" "backend/migration-processor" "backend/processor"; do
+          if [[ -d "$dir" ]]; then
+            MIGRATION_DIR="$dir"
+            break
+          fi
+        done
+        
+        if [[ -n "$MIGRATION_DIR" ]]; then
+          echo "📦 Packaging migration processor Lambda from: $MIGRATION_DIR"
+          cd "$MIGRATION_DIR"
+          zip -r ../migration.zip . -x "*.git*" "node_modules/*" "__pycache__/*" "*.pyc" "venv/*" "*.DS_Store"
           cd ..
           
-          aws lambda update-function-code \
-            --function-name "$MIGRATION_LAMBDA_NAME" \
-            --zip-file fileb://migration.zip
-          
-          echo "✅ Migration processor code deployed"
+          if [[ -n "$MIGRATION_LAMBDA_NAME" && "$MIGRATION_LAMBDA_NAME" != "null" ]]; then
+            echo "🚀 Deploying migration processor Lambda code..."
+            aws lambda update-function-code \
+              --function-name "$MIGRATION_LAMBDA_NAME" \
+              --zip-file fileb://migration.zip
+            
+            # Wait for deployment to complete
+            if wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "deployment"; then
+              echo "✅ Migration processor Lambda code deployed successfully"
+            else
+              echo "⚠️  Migration processor deployment may have issues, but continuing..."
+            fi
+          else
+            echo "⚠️  Migration processor Lambda name not found"
+          fi
         else
-          echo "⚠️  Migration processor directory not found, skipping"
+          echo "⚠️  Migration processor directory not found (checked: migration-processor, migrationprocessor, processor, backend/migration-processor, backend/processor)"
+          echo "📁 Available directories:"
+          ls -la . | grep ^d || echo "No directories found"
+          echo "💡 Note: If your migration processor code is in backend/, consider creating a separate migration-processor/ directory"
         fi
 
-    - name: Configure Lambda environment variables
+    - name: Configure Lambda environment variables with race condition protection
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
-        echo "⚙️  Configuring Lambda environment variables..."
+        # Source the functions
+        source /tmp/stack_functions.sh
         
-        # Configure backend Lambda (using cached environment variables)
-        aws lambda update-function-configuration \
-          --function-name "$BACKEND_LAMBDA_NAME" \
-          --environment "Variables={ENVIRONMENT=prod,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,AUDIT_TABLE=$AUDIT_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+        echo "⚙️  Configuring Lambda environment variables with race condition protection..."
         
-        # Configure migration processor
-        aws lambda update-function-configuration \
-          --function-name "$MIGRATION_LAMBDA_NAME" \
-          --environment "Variables={ENVIRONMENT=prod,UPLOAD_BUCKET=$UPLOAD_BUCKET,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+        # Configure backend Lambda
+        if [[ -n "$BACKEND_LAMBDA_NAME" && "$BACKEND_LAMBDA_NAME" != "null" ]]; then
+          if wait_for_lambda_ready "$BACKEND_LAMBDA_NAME" "configuration"; then
+            echo "🔧 Configuring backend Lambda environment variables..."
+            aws lambda update-function-configuration \
+              --function-name "$BACKEND_LAMBDA_NAME" \
+              --environment "Variables={ENVIRONMENT=prod,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,AUDIT_TABLE=$AUDIT_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+            echo "✅ Backend Lambda environment variables configured"
+          else
+            echo "⚠️  Backend Lambda not ready for configuration, skipping..."
+          fi
+        else
+          echo "⚠️  Backend Lambda name not found, skipping environment configuration"
+        fi
         
-        echo "✅ Environment variables configured"
+        # Configure migration processor Lambda
+        if [[ -n "$MIGRATION_LAMBDA_NAME" && "$MIGRATION_LAMBDA_NAME" != "null" ]]; then
+          if wait_for_lambda_ready "$MIGRATION_LAMBDA_NAME" "configuration"; then
+            echo "🔧 Configuring migration processor environment variables..."
+            aws lambda update-function-configuration \
+              --function-name "$MIGRATION_LAMBDA_NAME" \
+              --environment "Variables={ENVIRONMENT=prod,UPLOAD_BUCKET=$UPLOAD_BUCKET,SUBSCRIBER_TABLE=$SUBSCRIBER_TABLE,JOBS_TABLE=$JOBS_TABLE,LEGACY_DB_ENDPOINT=$LEGACY_DB_ENDPOINT}"
+            echo "✅ Migration processor environment variables configured"
+          else
+            echo "⚠️  Migration processor Lambda not ready for configuration, skipping..."
+          fi
+        else
+          echo "⚠️  Migration processor name not found, skipping environment configuration"
+        fi
+        
+        echo "✅ Lambda environment variable configuration completed"
 
     - name: Setup S3 notifications automatically  
       if: env.DEPLOYMENT_SUCCESS == 'true'
       run: |
         echo "📡 Setting up S3 → Lambda notifications..."
         
-        # Add Lambda permission (allow failure if already exists)
-        aws lambda add-permission \
-          --function-name "$MIGRATION_LAMBDA_NAME" \
-          --statement-id s3invoke \
-          --action lambda:InvokeFunction \
-          --principal s3.amazonaws.com \
-          --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" 2>/dev/null || echo "Permission already exists"
-        
-        # Configure S3 notifications (fail fast - no error suppression)
-        aws s3api put-bucket-notification-configuration \
-          --bucket "$UPLOAD_BUCKET" \
-          --notification-configuration "{
-            \"LambdaFunctionConfigurations\": [{
-              \"Id\": \"MigrationProcessorTrigger\",
-              \"LambdaFunctionArn\": \"$MIGRATION_ARN\",
-              \"Events\": [\"s3:ObjectCreated:*\"],
-              \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
-            }]
-          }"
-        
-        echo "✅ S3 notifications configured"
+        # Ensure migration processor Lambda is ready before setting up notifications
+        if [[ -n "$MIGRATION_LAMBDA_NAME" && "$MIGRATION_LAMBDA_NAME" != "null" ]]; then
+          # Add Lambda permission (allow failure if already exists)
+          aws lambda add-permission \
+            --function-name "$MIGRATION_LAMBDA_NAME" \
+            --statement-id s3invoke \
+            --action lambda:InvokeFunction \
+            --principal s3.amazonaws.com \
+            --source-arn "arn:aws:s3:::$UPLOAD_BUCKET" 2>/dev/null || echo "Permission already exists"
+          
+          # Configure S3 notifications (fail fast - no error suppression)
+          aws s3api put-bucket-notification-configuration \
+            --bucket "$UPLOAD_BUCKET" \
+            --notification-configuration "{
+              \"LambdaFunctionConfigurations\": [{
+                \"Id\": \"MigrationProcessorTrigger\",
+                \"LambdaFunctionArn\": \"$MIGRATION_ARN\",
+                \"Events\": [\"s3:ObjectCreated:*\"],
+                \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
+              }]
+            }"
+          
+          echo "✅ S3 notifications configured"
+        else
+          echo "⚠️  Migration processor Lambda not available, skipping S3 notifications"
+        fi
 
     - name: Deploy frontend automatically
       if: env.DEPLOYMENT_SUCCESS == 'true'  
@@ -761,10 +863,14 @@ jobs:
           
           # Install dependencies and build
           if [[ -f "package.json" ]]; then
+            echo "📦 Installing frontend dependencies..."
             npm ci
+            
+            echo "🏗️  Building frontend..."
             npm run build
             
             # Upload to S3 (using cached environment variable)
+            echo "📤 Uploading frontend to S3..."
             aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete
             
             echo "✅ Frontend deployed"
@@ -776,6 +882,8 @@ jobs:
           cd ..
         else
           echo "⚠️  Frontend directory not found, skipping"
+          echo "📁 Available directories:"
+          ls -la . | grep ^d || echo "No directories found"
         fi
 
     - name: Initialize database schema with Docker
@@ -791,6 +899,7 @@ jobs:
         echo "::add-mask::$DB_PASSWORD"
         
         # Create SQL schema and execute using Docker (fast, reliable, secure)
+        echo "🐳 Running database schema initialization..."
         cat << 'EOF' | docker run --rm -i -e MYSQL_PWD="$DB_PASSWORD" mysql:8.0 mysql -h "$LEGACY_DB_ENDPOINT" -u admin
         CREATE DATABASE IF NOT EXISTS legacydb;
         USE legacydb;
@@ -832,7 +941,7 @@ jobs:
         
         # Test API health
         echo "🔍 Testing API health endpoint..."
-        if curl -f -s "$BACKEND_API_URL/health" >/dev/null; then
+        if curl -f -s "$BACKEND_API_URL/health" >/dev/null 2>&1; then
           echo "✅ API health check passed"
         else
           echo "⚠️  API health check failed (may be normal for new deployments)"
@@ -840,7 +949,7 @@ jobs:
         
         # Test API CORS
         echo "🔍 Testing API CORS..."
-        CORS_HEADERS=$(curl -s -I -X OPTIONS "$BACKEND_API_URL" | grep -i "access-control-allow")
+        CORS_HEADERS=$(curl -s -I -X OPTIONS "$BACKEND_API_URL" 2>/dev/null | grep -i "access-control-allow" || echo "")
         if [[ -n "$CORS_HEADERS" ]]; then
           echo "✅ CORS headers present"
         else
@@ -849,7 +958,7 @@ jobs:
         
         # Test frontend
         echo "🔍 Testing frontend availability..."
-        if curl -f -s "$FRONTEND_URL" >/dev/null; then
+        if curl -f -s "$FRONTEND_URL" >/dev/null 2>&1; then
           echo "✅ Frontend accessible"
         else
           echo "⚠️  Frontend not accessible yet"
@@ -857,10 +966,10 @@ jobs:
         
         # Test S3 upload capability
         echo "🔍 Testing S3 upload capability..."
-        echo "test file" > test-upload.txt
-        if aws s3 cp test-upload.txt "s3://$UPLOAD_BUCKET/test/test-upload.txt"; then
+        echo "test file content" > test-upload.txt
+        if aws s3 cp test-upload.txt "s3://$UPLOAD_BUCKET/test/test-upload.txt" 2>/dev/null; then
           echo "✅ S3 upload test passed"
-          aws s3 rm "s3://$UPLOAD_BUCKET/test/test-upload.txt" || true
+          aws s3 rm "s3://$UPLOAD_BUCKET/test/test-upload.txt" 2>/dev/null || true
         else
           echo "⚠️  S3 upload test failed"
         fi
@@ -878,6 +987,10 @@ jobs:
         echo "2. Test file uploads through the UI"
         echo "3. Check CloudWatch logs for any issues"
         echo "4. Monitor DynamoDB tables for processed data"
+        echo ""
+        echo "🔧 Debugging Commands (if needed):"
+        echo "aws logs tail /aws/lambda/$BACKEND_LAMBDA_NAME --follow"
+        echo "aws logs tail /aws/lambda/$MIGRATION_LAMBDA_NAME --follow"
 
     - name: Error reporting and cleanup
       if: failure()
