@@ -12,3 +12,7 @@ serverless-wsgi==3.1.0
 # Enhanced dependencies for AWS Lambda
 botocore>=1.29.0
 awsgi
+flask-limiter
+jwt
+cryptography
+
