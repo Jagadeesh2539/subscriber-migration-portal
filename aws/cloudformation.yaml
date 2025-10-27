@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Subscriber Migration Portal - Production Ready (All Dependencies Fixed v8 - API Gateway Logging Fixed)'
+Description: 'Subscriber Migration Portal - Enterprise Production Ready (v11 - Enhanced Based on Existing Structure)'
 
 Parameters:
   Environment:
@@ -23,17 +23,10 @@ Parameters:
   CurrentTime:
     Type: String
     Default: 'placeholder'
-    Description: 'Unique value to force API Gateway deployment update (override in workflow)'
-
-  LogRetentionDays:
-    Type: Number
-    Default: 14
-    MinValue: 1
-    MaxValue: 3653
-    Description: 'CloudWatch Logs retention in days'
+    Description: 'Unique value to force API Gateway deployment update'
 
 Resources:
-  # VPC and Networking
+  # VPC and Networking (Enhanced from your existing)
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -172,7 +165,7 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  # Security Groups (Fixed Circular Dependencies)
+  # Security Groups (Enhanced)
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -183,11 +176,12 @@ Resources:
           FromPort: 443
           ToPort: 443
           CidrIp: '0.0.0.0/0'
-        # Allow all outbound traffic on ephemeral ports (for database connections)
+          Description: 'HTTPS to AWS services'
         - IpProtocol: tcp
-          FromPort: 1024
-          ToPort: 65535
+          FromPort: 3306
+          ToPort: 3306
           CidrIp: '10.0.0.0/16'
+          Description: 'MySQL to RDS'
       Tags:
         - Key: Name
           Value: !Sub 'lambda-sg-${Environment}'
@@ -202,22 +196,48 @@ Resources:
           FromPort: 3306
           ToPort: 3306
           SourceSecurityGroupId: !Ref LambdaSecurityGroup
+          Description: 'MySQL from Lambda'
       Tags:
         - Key: Name
           Value: !Sub 'rds-sg-${Environment}'
 
-  # DynamoDB Tables
+  # DynamoDB Tables (Enhanced with your structure)
   SubscriberTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub 'subscriber-table-${Environment}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: SubscriberId
+        - AttributeName: subscriberId
+          AttributeType: S
+        - AttributeName: imsi
+          AttributeType: S
+        - AttributeName: msisdn
+          AttributeType: S
+        - AttributeName: status
           AttributeType: S
       KeySchema:
-        - AttributeName: SubscriberId
+        - AttributeName: subscriberId
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: imsi-index
+          KeySchema:
+            - AttributeName: imsi
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: msisdn-index
+          KeySchema:
+            - AttributeName: msisdn
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
@@ -235,6 +255,9 @@ Resources:
       KeySchema:
         - AttributeName: id
           KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -245,16 +268,43 @@ Resources:
       TableName: !Sub 'migration-jobs-table-${Environment}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: JobId
+        - AttributeName: jobId
+          AttributeType: S
+        - AttributeName: status
           AttributeType: S
       KeySchema:
-        - AttributeName: JobId
+        - AttributeName: jobId
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment
 
-  # S3 Buckets (FIXED NAMING - Shorter bucket names)
+  TokenBlacklistTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'token-blacklist-table-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jti
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jti
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # S3 Buckets (Enhanced)
   LoggingBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -274,35 +324,17 @@ Resources:
     DeletionPolicy: Retain
     Properties:
       BucketName: !Sub 'sub-mig-web-${AWS::AccountId}-${Environment}'
-      WebsiteConfiguration:
-        IndexDocument: 'index.html'
-        ErrorDocument: 'index.html'
-      LoggingConfiguration:
-        DestinationBucketName: !Ref LoggingBucket
-        LogFilePrefix: 'frontend-access/'
-      OwnershipControls:
-        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
-        BlockPublicPolicy: false
+        BlockPublicPolicy: true
         IgnorePublicAcls: true
-        RestrictPublicBuckets: false
+        RestrictPublicBuckets: true
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
-
-  FrontendBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref FrontendBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: PublicReadGetObject
-            Effect: Allow
-            Principal: '*'
-            Action: 's3:GetObject'
-            Resource: !Sub 'arn:aws:s3:::${FrontendBucket}/*'
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: 'frontend-access/'
 
   MigrationUploadBucket:
     Type: AWS::S3::Bucket
@@ -322,7 +354,71 @@ Resources:
         DestinationBucketName: !Ref LoggingBucket
         LogFilePrefix: 'migration-upload-access/'
 
-  # Secrets Manager (Independent - Created Early)
+  # CloudFront Distribution for HTTPS
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-frontend-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            Id: S3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+        Enabled: true
+        DefaultRootObject: index.html
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        DefaultCacheBehavior:
+          AllowedMethods: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT]
+          TargetOriginId: S3Origin
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+          MinTTL: 0
+          DefaultTTL: 86400
+          MaxTTL: 31536000
+          Compress: true
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Comment: !Sub 'CloudFront distribution for ${AWS::StackName}'
+
+  # Frontend Bucket Policy for CloudFront
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipal
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: 's3:GetObject'
+            Resource: !Sub 'arn:aws:s3:::${FrontendBucket}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # Secrets Manager (Enhanced)
   LegacyDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -336,7 +432,34 @@ Resources:
           "database": "legacydb"
         }
 
-  # RDS Database
+  UserCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-user-credentials-secret'
+      Description: !Sub 'User credentials for JWT authentication - ${Environment}'
+      SecretString: |
+        {
+          "admin": {
+            "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/lewUlFJ4KzGGxKS",
+            "role": "admin",
+            "permissions": ["read", "write", "delete", "admin"],
+            "rate_limit_override": true
+          },
+          "operator": {
+            "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/lewUlFJ4KzGGxKS",
+            "role": "operator", 
+            "permissions": ["read", "write"],
+            "rate_limit_override": false
+          },
+          "guest": {
+            "password_hash": "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/lewUlFJ4KzGGxKS",
+            "role": "guest",
+            "permissions": ["read"],
+            "rate_limit_override": false
+          }
+        }
+
+  # RDS Database (Enhanced)
   LegacyDBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -364,31 +487,14 @@ Resources:
       VPCSecurityGroups: [!Ref RDSSecurityGroup]
       MultiAZ: false
       PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
       Tags:
         - Key: Name
           Value: !Sub 'legacy-database-${Environment}'
 
-  # API Gateway CloudWatch Logs Role
-  ApiGatewayCloudWatchLogsRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: apigateway.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
-
-  # API Gateway Account Settings
-  ApiGatewayAccount:
-    Type: AWS::ApiGateway::Account
-    Properties:
-      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchLogsRole.Arn
-
-  # IAM Roles (Created Early to Avoid Dependencies)
+  # IAM Roles (Enhanced with your permissions structure)
   BackendLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -421,14 +527,18 @@ Resources:
                   - !Sub '${SubscriberTable.Arn}/index/*'
                   - !GetAtt AuditLogTable.Arn
                   - !GetAtt MigrationJobsTable.Arn
+                  - !Sub '${MigrationJobsTable.Arn}/index/*'
+                  - !GetAtt TokenBlacklistTable.Arn
         - PolicyName: SecretsManagerAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref LegacyDbSecret
-        - PolicyName: S3AccessBackend
+                Resource:
+                  - !Ref LegacyDbSecret
+                  - !Ref UserCredentialsSecret
+        - PolicyName: S3Access
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -436,8 +546,8 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
+                  - s3:DeleteObject
                   - s3:ListBucket
-                  - s3:GetBucketLocation
                 Resource:
                   - !GetAtt MigrationUploadBucket.Arn
                   - !Sub '${MigrationUploadBucket.Arn}/*'
@@ -456,7 +566,7 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
       Policies:
-        - PolicyName: MigrationDynamoS3Restricted
+        - PolicyName: MigrationProcessorAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -467,7 +577,6 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:Query
                   - dynamodb:Scan
-                  - dynamodb:DescribeTable
                 Resource:
                   - !GetAtt SubscriberTable.Arn
                   - !Sub '${SubscriberTable.Arn}/index/*'
@@ -483,33 +592,63 @@ Resources:
                 Action: secretsmanager:GetSecretValue
                 Resource: !Ref LegacyDbSecret
 
-  # Lambda Functions (Log groups auto-created)
+  # ENHANCED LAMBDA FUNCTIONS
   BackendLambda:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-BackendLambda-${Environment}'
       Runtime: python3.11
       Handler: app.lambda_handler
-      Timeout: 30  # ← ADD THIS (default is 3 seconds)
-      MemorySize: 256  # ← ADD THIS for better performance
+      Timeout: 60
+      MemorySize: 512
       Code:
         ZipFile: |
           import json
+          from datetime import datetime
           def lambda_handler(event, context):
-              return {
-                  'statusCode': 200,
-                  'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                  'body': json.dumps({'message': 'Backend Lambda operational - deploy code via workflow'})
-              }
+              try:
+                  # BULLETPROOF: Handle all event types without crashing
+                  if 'headers' not in event:
+                      return {
+                          'statusCode': 200,
+                          'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                          'body': json.dumps({'status': 'success', 'message': 'Lambda working - awaiting code deployment', 'version': '2.0.0-production', 'timestamp': datetime.utcnow().isoformat()})
+                      }
+                  return {
+                      'statusCode': 200,
+                      'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                      'body': json.dumps({'message': 'Backend Lambda operational'})
+                  }
+              except Exception as e:
+                  return {
+                      'statusCode': 500,
+                      'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                      'body': json.dumps({'error': str(e)})
+                  }
       Role: !GetAtt BackendLambdaRole.Arn
-      Timeout: 30
-      MemorySize: 512
       VpcConfig:
         SecurityGroupIds: [!Ref LambdaSecurityGroup]
         SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
+          FLASK_ENV: 'production'
+          VERSION: '2.0.0-production'
+          SUBSCRIBER_TABLE_NAME: !Ref SubscriberTable
+          AUDIT_LOG_TABLE_NAME: !Ref AuditLogTable
+          MIGRATION_JOBS_TABLE_NAME: !Ref MigrationJobsTable
+          TOKEN_BLACKLIST_TABLE_NAME: !Ref TokenBlacklistTable
+          MIGRATION_UPLOAD_BUCKET_NAME: !Ref MigrationUploadBucket
+          USERS_SECRET_ARN: !Ref UserCredentialsSecret
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDatabase.Endpoint.Address
+          LEGACY_DB_PORT: "3306"
+          LEGACY_DB_NAME: "legacydb"
+          PROV_MODE: "dual_prov"
+          FRONTEND_ORIGIN: !Sub "https://${CloudFrontDistribution.DomainName}"
+          MAX_UPLOAD_SIZE: "52428800"
+          ENABLE_MIGRATION_PROCESSING: "true"
+          JWT_SECRET: !Sub "${AWS::StackName}-jwt-secret-${Environment}"
 
   MigrationProcessorFunction:
     Type: AWS::Lambda::Function
@@ -535,7 +674,7 @@ Resources:
         Variables:
           ENVIRONMENT: !Ref Environment
 
-  # API Gateway (REST) with CORS
+  # API Gateway with COMPLETE CORS
   BackendApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
@@ -590,6 +729,7 @@ Resources:
           ResponseModels:
             application/json: Empty
 
+  # ENHANCED OPTIONS METHODS with CloudFront CORS
   ProxyOptionsMethod:
     Type: AWS::ApiGateway::Method
     Properties:
@@ -604,9 +744,10 @@ Resources:
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS,PATCH'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Requested-With,Accept,Origin,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'https://${CloudFrontDistribution.DomainName}'"
+              method.response.header.Access-Control-Allow-Credentials: "'true'"
             ResponseTemplates:
               application/json: ''
       MethodResponses:
@@ -615,6 +756,7 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Credentials: true
           ResponseModels:
             application/json: Empty
 
@@ -632,9 +774,10 @@ Resources:
         IntegrationResponses:
           - StatusCode: 200
             ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS,PATCH'"
-              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Requested-With,Accept,Origin,X-Amz-Date,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'https://${CloudFrontDistribution.DomainName}'"
+              method.response.header.Access-Control-Allow-Credentials: "'true'"
             ResponseTemplates:
               application/json: ''
       MethodResponses:
@@ -643,6 +786,7 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Credentials: true
           ResponseModels:
             application/json: Empty
 
@@ -659,7 +803,6 @@ Resources:
 
   BackendApiStage:
     Type: AWS::ApiGateway::Stage
-    DependsOn: ApiGatewayAccount
     Properties:
       DeploymentId: !Ref BackendApiDeployment
       RestApiId: !Ref BackendApi
@@ -672,7 +815,46 @@ Resources:
           DataTraceEnabled: false
           MetricsEnabled: true
 
-  # Lambda Permissions (Separated to Break Circular Dependencies)
+  # COMPREHENSIVE CORS GATEWAY RESPONSES
+  GatewayResponseDefault4XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref BackendApi
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: !Sub "'https://${CloudFrontDistribution.DomainName}'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Requested-With,Accept,Origin'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Credentials: "'true'"
+      ResponseTemplates:
+        application/json: '{"message":"$context.error.messageString","requestId":"$context.requestId"}'
+
+  GatewayResponseDefault5XX:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref BackendApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: !Sub "'https://${CloudFrontDistribution.DomainName}'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Requested-With,Accept,Origin'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        gatewayresponse.header.Access-Control-Allow-Credentials: "'true'"
+      ResponseTemplates:
+        application/json: '{"message":"Internal server error","requestId":"$context.requestId"}'
+
+  GatewayResponseTimeout:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref BackendApi
+      ResponseType: INTEGRATION_TIMEOUT
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: !Sub "'https://${CloudFrontDistribution.DomainName}'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Requested-With,Accept,Origin'"
+        gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      ResponseTemplates:
+        application/json: '{"message":"Request timeout - Lambda execution exceeded time limit","requestId":"$context.requestId"}'
+
+  # Lambda Permissions
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     DependsOn: 
@@ -684,7 +866,6 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BackendApi}/*/*'
 
-  # Permissions for S3 to invoke Lambda (S3 notification configured via workflow)
   S3InvokeMigrationProcessorPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -694,7 +875,7 @@ Resources:
       SourceArn: !GetAtt MigrationUploadBucket.Arn
       SourceAccount: !Ref AWS::AccountId
 
-  # VPC Endpoints (Created After Lambda Functions to Avoid Dependencies)
+  # VPC Endpoints for Private Access
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -730,16 +911,18 @@ Resources:
             Resource: '*'
 
 Outputs:
-  BackendApiId:
-    Description: API Gateway RestApi ID
-    Value: !Ref BackendApi
-    Export: { Name: !Sub '${AWS::StackName}-BackendApiId' }
-
+  # Primary URLs
   BackendApiUrl:
     Description: Base URL for the API Gateway prod stage
     Value: !Sub 'https://${BackendApi}.execute-api.${AWS::Region}.amazonaws.com/prod'
     Export: { Name: !Sub '${AWS::StackName}-BackendApiUrl' }
 
+  SecureFrontendURL:
+    Description: Secure HTTPS Frontend URL (PRIMARY)
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export: { Name: !Sub '${AWS::StackName}-SecureFrontendURL' }
+
+  # Lambda Functions
   BackendLambdaName:
     Description: Name of the backend Lambda function
     Value: !Ref BackendLambda
@@ -756,18 +939,22 @@ Outputs:
     Description: ARN of the migration processor Lambda function
     Value: !GetAtt MigrationProcessorFunction.Arn
 
+  # Frontend Infrastructure
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export: { Name: !Sub '${AWS::StackName}-CloudFrontDistributionId' }
+
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export: { Name: !Sub '${AWS::StackName}-CloudFrontDomainName' }
+
   FrontendBucketName:
     Description: S3 bucket name for frontend hosting
     Value: !Ref FrontendBucket
 
-  FrontendURL:
-    Description: Frontend website URL
-    Value: !GetAtt FrontendBucket.WebsiteURL
-
-  MigrationUploadBucketName:
-    Description: S3 bucket name for uploads
-    Value: !Ref MigrationUploadBucket
-
+  # Database Infrastructure
   SubscriberTableName:
     Description: DynamoDB Subscriber Table name
     Value: !Ref SubscriberTable
@@ -780,10 +967,29 @@ Outputs:
     Description: DynamoDB Migration Jobs Table name
     Value: !Ref MigrationJobsTable
 
-  LegacyDBSecretArn:
-    Description: ARN of Secrets Manager Legacy DB Secret
-    Value: !Ref LegacyDbSecret
+  TokenBlacklistTableName:
+    Description: DynamoDB Token Blacklist Table name
+    Value: !Ref TokenBlacklistTable
+
+  MigrationUploadBucketName:
+    Description: S3 bucket name for uploads
+    Value: !Ref MigrationUploadBucket
 
   LegacyDBEndpoint:
     Description: RDS legacy database endpoint
     Value: !GetAtt LegacyDatabase.Endpoint.Address
+
+  LegacyDBSecretArn:
+    Description: ARN of Secrets Manager Legacy DB Secret
+    Value: !Ref LegacyDbSecret
+
+  UserCredentialsSecretArn:
+    Description: ARN of User Credentials Secret
+    Value: !Ref UserCredentialsSecret
+    Export: { Name: !Sub '${AWS::StackName}-UserCredentialsSecretArn' }
+
+  # API Gateway Details
+  BackendApiId:
+    Description: API Gateway RestApi ID
+    Value: !Ref BackendApi
+    Export: { Name: !Sub '${AWS::StackName}-BackendApiId' }
