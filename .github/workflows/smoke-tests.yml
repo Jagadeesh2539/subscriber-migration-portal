@@ -32,317 +32,127 @@ on:
       api_url:
         description: 'API Gateway URL (optional)'
         required: false
+        default: ''
 
 env:
   AWS_REGION: us-east-1
 
 jobs:
   lambda-tests:
-    name: 🎯 Lambda Function Tests
+    name: Lambda Function Tests
     runs-on: ubuntu-latest
     steps:
-      - name: 🔄 Checkout Code
+      - name: Checkout Code
         uses: actions/checkout@v4
-        
-      - name: ⚙️ Configure AWS Credentials
+      
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          
-      - name: 🔍 Verify Function Exists
+      
+      - name: Verify Function Exists
+        shell: bash
         run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🔍 Checking if function exists: $FUNCTION_NAME"
-          
+          FUNCTION_NAME="${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
+          echo "Checking if function exists: $FUNCTION_NAME"
           if aws lambda get-function --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
-            echo "✅ Function exists and is accessible"
-            
-            # Get function info
-            echo "📊 Function Information:"
+            echo "Function exists and is accessible"
             aws lambda get-function --function-name "$FUNCTION_NAME" \
               --query 'Configuration.{Handler:Handler,Runtime:Runtime,State:State,LastUpdateStatus:LastUpdateStatus}' \
               --output table
           else
-            echo "❌ Function not found or not accessible: $FUNCTION_NAME"
+            echo "Function not found or not accessible: $FUNCTION_NAME"
             exit 1
           fi
-          
-      - name: 🧪 Test 1: Empty Event Handling
-        id: test-empty-event
+      
+      - name: Test 1 - Empty Event Handling
+        shell: bash
         run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🧪 Test 1: Empty event handling (KeyError regression test)"
-          
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --payload '{}' \
-            --cli-binary-format raw-in-base64-out \
-            response-empty.json
-          
-          if [ -f response-empty.json ]; then
-            STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-empty.json)
-            echo "Status Code: $STATUS_CODE"
-            
-            if [ "$STATUS_CODE" = "200" ]; then
-              echo "✅ Empty event test PASSED"
-              
-              # Check response body
-              BODY=$(jq -r '.body // "{}"' response-empty.json | jq -r '.message // "N/A"' 2>/dev/null || echo "N/A")
-              echo "Response message: $BODY"
-            else
-              echo "❌ Empty event test FAILED - Status: $STATUS_CODE"
-              echo "Full response:"
-              cat response-empty.json
-              exit 1
-            fi
-          else
-            echo "❌ No response file created"
+          FUNCTION_NAME="${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
+          aws lambda invoke --function-name "$FUNCTION_NAME" --payload '{}' --cli-binary-format raw-in-base64-out response-empty.json
+          STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-empty.json)
+          echo "Status Code: $STATUS_CODE"
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "Empty event test failed"
+            cat response-empty.json
             exit 1
           fi
-          
-      - name: 🧪 Test 2: Health Check API
-        id: test-health-api
+      
+      - name: Test 2 - Health Check API
+        shell: bash
         run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🧪 Test 2: Health check API endpoint"
-          
-          # Create API Gateway-style event
+          FUNCTION_NAME="${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
           cat > health-event.json << 'EOF'
           {
             "httpMethod": "GET",
             "path": "/api/health",
-            "headers": {
-              "Content-Type": "application/json",
-              "User-Agent": "GitHub-Actions-Smoke-Test"
-            },
-            "multiValueHeaders": {},
+            "headers": {"Content-Type": "application/json"},
             "queryStringParameters": null,
-            "multiValueQueryStringParameters": null,
-            "pathParameters": null,
-            "stageVariables": null,
-            "requestContext": {
-              "requestId": "smoke-test-health",
-              "stage": "prod",
-              "httpMethod": "GET",
-              "path": "/api/health",
-              "identity": {
-                "sourceIp": "127.0.0.1"
-              }
-            },
             "body": null,
             "isBase64Encoded": false
           }
           EOF
-          
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --payload file://health-event.json \
-            --cli-binary-format raw-in-base64-out \
-            response-health.json
-          
+          aws lambda invoke --function-name "$FUNCTION_NAME" --payload file://health-event.json --cli-binary-format raw-in-base64-out response-health.json
           STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-health.json)
           echo "Status Code: $STATUS_CODE"
-          
-          if [ "$STATUS_CODE" = "200" ]; then
-            echo "✅ Health API test PASSED"
-            
-            # Parse response body
-            RESPONSE_BODY=$(jq -r '.body // "{}"' response-health.json)
-            
-            # Check for required fields in health response
-            echo "Checking health response structure..."
-            
-            if echo "$RESPONSE_BODY" | jq -e '.version' >/dev/null 2>&1; then
-              VERSION=$(echo "$RESPONSE_BODY" | jq -r '.version')
-              echo "✅ Version found: $VERSION"
-            else
-              echo "⚠️ Version field missing"
-            fi
-            
-            if echo "$RESPONSE_BODY" | jq -e '.features' >/dev/null 2>&1; then
-              FEATURES=$(echo "$RESPONSE_BODY" | jq -r '.features | length')
-              echo "✅ Features found: $FEATURES"
-              
-              if [ "$FEATURES" -ge "5" ]; then
-                echo "✅ Sufficient features enabled ($FEATURES)"
-              else
-                echo "⚠️ Only $FEATURES features enabled (expected >= 5)"
-              fi
-            else
-              echo "⚠️ Features field missing"
-            fi
-            
-          else
-            echo "❌ Health API test FAILED - Status: $STATUS_CODE"
-            echo "Full response:"
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "Health API test failed"
             cat response-health.json
             exit 1
           fi
-          
-      - name: 🧪 Test 3: Authentication Endpoint
-        id: test-auth
+      
+      - name: Test 3 - Auth Endpoint
+        shell: bash
         run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🧪 Test 3: Authentication endpoint structure"
-          
-          # Create login attempt event
+          FUNCTION_NAME="${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
           cat > auth-event.json << 'EOF'
           {
             "httpMethod": "POST",
             "path": "/api/auth/login",
-            "headers": {
-              "Content-Type": "application/json"
-            },
+            "headers": {"Content-Type": "application/json"},
             "body": "{\"username\":\"admin\",\"password\":\"Admin@123\"}",
-            "queryStringParameters": null,
-            "pathParameters": null,
-            "requestContext": {
-              "requestId": "smoke-test-auth",
-              "httpMethod": "POST",
-              "path": "/api/auth/login"
-            },
             "isBase64Encoded": false
           }
           EOF
-          
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --payload file://auth-event.json \
-            --cli-binary-format raw-in-base64-out \
-            response-auth.json
-          
+          aws lambda invoke --function-name "$FUNCTION_NAME" --payload file://auth-event.json --cli-binary-format raw-in-base64-out response-auth.json
           STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-auth.json)
           echo "Auth endpoint status: $STATUS_CODE"
-          
-          # Auth endpoint should respond (200 for success, 401/400/500 are also valid responses indicating the endpoint works)
-          if [[ "$STATUS_CODE" =~ ^(200|400|401|500)$ ]]; then
-            echo "✅ Auth endpoint is responding (Status: $STATUS_CODE)"
-            
-            if [ "$STATUS_CODE" = "200" ]; then
-              echo "✅ Authentication successful (credentials work)"
-              
-              # Check for JWT token in response
-              RESPONSE_BODY=$(jq -r '.body // "{}"' response-auth.json)
-              if echo "$RESPONSE_BODY" | jq -e '.data.token' >/dev/null 2>&1; then
-                echo "✅ JWT token found in response"
-              else
-                echo "⚠️ No JWT token in response"
-              fi
-            elif [ "$STATUS_CODE" = "401" ]; then
-              echo "✅ Auth endpoint properly rejects invalid credentials"
-            else
-              echo "✅ Auth endpoint is functional (returned $STATUS_CODE)"
-            fi
-          else
-            echo "❌ Auth endpoint test FAILED - Unexpected status: $STATUS_CODE"
-            echo "Full response:"
+          if [[ ! "$STATUS_CODE" =~ ^(200|400|401|500)$ ]]; then
+            echo "Auth endpoint returned unexpected status"
             cat response-auth.json
             exit 1
           fi
-          
-      - name: 🧪 Test 4: Dashboard Stats Endpoint
-        id: test-dashboard
-        run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🧪 Test 4: Dashboard stats endpoint (should require auth)"
-          
-          # Create dashboard request without auth
-          cat > dashboard-event.json << 'EOF'
-          {
-            "httpMethod": "GET",
-            "path": "/api/dashboard/stats",
-            "headers": {
-              "Content-Type": "application/json"
-            },
-            "queryStringParameters": null,
-            "pathParameters": null,
-            "requestContext": {
-              "requestId": "smoke-test-dashboard",
-              "httpMethod": "GET",
-              "path": "/api/dashboard/stats"
-            },
-            "body": null,
-            "isBase64Encoded": false
-          }
-          EOF
-          
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --payload file://dashboard-event.json \
-            --cli-binary-format raw-in-base64-out \
-            response-dashboard.json
-          
-          STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-dashboard.json)
-          echo "Dashboard endpoint status: $STATUS_CODE"
-          
-          if [ "$STATUS_CODE" = "401" ]; then
-            echo "✅ Dashboard properly requires authentication"
-          elif [ "$STATUS_CODE" = "200" ]; then
-            echo "⚠️ Dashboard accessible without auth (may be intentional for demo)"
-          else
-            echo "✅ Dashboard endpoint is responding (Status: $STATUS_CODE)"
-          fi
-
+  
   api-gateway-tests:
-    name: 🌐 API Gateway Tests
+    name: API Gateway Tests
     runs-on: ubuntu-latest
     if: inputs.api_url != ''
     steps:
-      - name: 🌐 Test API Gateway Health
+      - name: Test API Gateway Health
+        shell: bash
         run: |
           API_URL="${{ inputs.api_url }}"
-          echo "🌐 Testing API Gateway endpoint: $API_URL"
-          
           if [ -z "$API_URL" ]; then
-            echo "⚠️ No API URL provided, skipping API Gateway tests"
+            echo "No API URL provided, skipping API Gateway tests"
             exit 0
           fi
-          
-          # Test health endpoint
-          echo "Testing: $API_URL/api/health"
-          
           RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code}" "$API_URL/api/health" || echo "HTTPSTATUS:000")
           HTTP_STATUS=$(echo $RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-          BODY=$(echo $RESPONSE | sed -e 's/HTTPSTATUS:.*//g')
-          
-          echo "HTTP Status: $HTTP_STATUS"
-          
-          if [ "$HTTP_STATUS" = "200" ]; then
-            echo "✅ API Gateway health check PASSED"
-            
-            # Check response structure
-            if echo "$BODY" | jq -e '.version' >/dev/null 2>&1; then
-              VERSION=$(echo "$BODY" | jq -r '.version')
-              echo "✅ API Gateway response valid - Version: $VERSION"
-            else
-              echo "⚠️ API Gateway response may not be properly formatted"
-            fi
-          elif [ "$HTTP_STATUS" = "000" ]; then
-            echo "⚠️ Could not connect to API Gateway (may still be propagating)"
-          else
-            echo "⚠️ API Gateway health check returned: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "API Gateway health check returned: $HTTP_STATUS"
           fi
-
+  
   integration-tests:
-    name: 🔗 Integration Tests
+    name: Integration Tests
     runs-on: ubuntu-latest
     needs: [lambda-tests]
     steps:
-      - name: ⚙️ Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          
-      - name: 🔗 Test Critical API Endpoints
+      - name: Test Critical API Endpoints
+        shell: bash
         run: |
-          FUNCTION_NAME="${{ inputs.function_name }}"
-          echo "🔗 Testing critical API endpoints..."
-          
-          # List of critical endpoints to test
+          FUNCTION_NAME="${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
           ENDPOINTS=(
             "/api/health:GET"
             "/api/auth/login:POST"
@@ -352,94 +162,47 @@ jobs:
             "/api/analytics:GET"
             "/api/config/provisioning-mode:GET"
           )
-          
           PASSED=0
           FAILED=0
-          
           for endpoint_method in "${ENDPOINTS[@]}"; do
             IFS=':' read -r endpoint method <<< "$endpoint_method"
-            
-            echo "Testing $method $endpoint..."
-            
-            # Create test event
             cat > test-event.json << EOF
           {
             "httpMethod": "$method",
             "path": "$endpoint",
             "headers": {"Content-Type": "application/json"},
             "body": null,
-            "queryStringParameters": null,
-            "requestContext": {
-              "httpMethod": "$method",
-              "path": "$endpoint"
-            }
+            "queryStringParameters": null
           }
           EOF
-            
-            aws lambda invoke \
-              --function-name "$FUNCTION_NAME" \
-              --payload file://test-event.json \
-              --cli-binary-format raw-in-base64-out \
-              response-integration.json >/dev/null 2>&1
-            
+            aws lambda invoke --function-name "$FUNCTION_NAME" --payload file://test-event.json --cli-binary-format raw-in-base64-out response-integration.json >/dev/null 2>&1
             STATUS_CODE=$(jq -r '.statusCode // "N/A"' response-integration.json 2>/dev/null || echo "N/A")
-            
             if [[ "$STATUS_CODE" =~ ^(200|401|403)$ ]]; then
-              echo "✅ $method $endpoint - Status: $STATUS_CODE"
               ((PASSED++))
             else
-              echo "❌ $method $endpoint - Status: $STATUS_CODE"
               ((FAILED++))
             fi
           done
-          
-          echo "📊 Integration Test Summary:"
-          echo "  Passed: $PASSED"
-          echo "  Failed: $FAILED"
-          echo "  Total: $((PASSED + FAILED))"
-          
-          if [ $FAILED -eq 0 ]; then
-            echo "✅ All integration tests PASSED"
-          else
-            echo "⚠️ $FAILED integration tests failed"
-          fi
-
+          echo "Passed: $PASSED Failed: $FAILED"
+          if [ $FAILED -gt 0 ]; then
+            echo "$FAILED integration tests failed"; fi
+  
   summary:
-    name: 📋 Test Summary
+    name: Test Summary
     runs-on: ubuntu-latest
     needs: [lambda-tests, api-gateway-tests, integration-tests]
     if: always()
     steps:
-      - name: 📋 Generate Test Summary
+      - name: Generate Test Summary
+        shell: bash
         run: |
-          echo "📋 Smoke Test Summary for ${{ inputs.environment }}"
-          echo "Function: ${{ inputs.function_name }}"
-          echo "API URL: ${{ inputs.api_url || 'Not provided' }}"
-          echo ""
-          
-          # Check results
-          LAMBDA_RESULT="${{ needs.lambda-tests.result }}"
-          API_RESULT="${{ needs.api-gateway-tests.result }}"
-          INTEGRATION_RESULT="${{ needs.integration-tests.result }}"
-          
-          echo "Test Results:"
-          echo "  Lambda Tests: $LAMBDA_RESULT"
-          echo "  API Gateway Tests: $API_RESULT"
-          echo "  Integration Tests: $INTEGRATION_RESULT"
-          echo ""
-          
-          if [ "$LAMBDA_RESULT" = "success" ] && [ "$INTEGRATION_RESULT" = "success" ]; then
-            echo "🎉 SMOKE TESTS PASSED"
-            echo "Your application is ready for use!"
-            
-            echo "🎯 Verified Features:"
-            echo "  ✅ KeyError: 'headers' issue fixed"
-            echo "  ✅ Health check endpoint working"
-            echo "  ✅ Authentication system functional"
-            echo "  ✅ API endpoints responding correctly"
-            echo "  ✅ Backend ready for frontend integration"
+          echo "Smoke Test Summary for ${{ inputs.environment }}"
+          echo "Function: ${{ inputs.function_name || secrets.LAMBDA_BACKEND_NAME }}"
+          echo "API URL: ${{ inputs.api_url }}"
+          echo "Lambda Tests: ${{ needs.lambda-tests.result }}"
+          echo "API Gateway Tests: ${{ needs.api-gateway-tests.result }}"
+          echo "Integration Tests: ${{ needs.integration-tests.result }}"
+          if [ "${{ needs.lambda-tests.result }}" = "success" ] && [ "${{ needs.integration-tests.result }}" = "success" ]; then
+            echo "SMOKE TESTS PASSED"
           else
-            echo "⚠️ SOME TESTS FAILED"
-            echo "Check the logs above for details."
-            exit 1
-          fi
+            echo "SOME TESTS FAILED"; exit 1; fi
