@@ -32,7 +32,7 @@ app = Flask(__name__)
 
 # Configuration
 CONFIG = {
-    'VERSION': '2.0.0-production',
+    'VERSION': '2.0.1-production',
     'JWT_SECRET': os.getenv('JWT_SECRET', 'subscriber-portal-jwt-secret-2025'),
     'JWT_ALGORITHM': 'HS256',
     'JWT_EXPIRY_HOURS': 24,
@@ -479,84 +479,95 @@ def internal_error(error):
 def ratelimit_handler(e):
     return create_response(message="Rate limit exceeded", status_code=429)
 
-# **BULLETPROOF LAMBDA HANDLER**
+# **BULLETPROOF LAMBDA HANDLER - FIXED**
 def lambda_handler(event, context):
-    """Bulletproof AWS Lambda entry point."""
+    """Bulletproof AWS Lambda entry point with proper event handling."""
     try:
-        logger.info(f"Lambda invoked with event keys: {list(event.keys()) if event else 'EMPTY'}")
+        logger.info(f"Lambda invoked with event: {json.dumps(event, default=str)[:500]}")
         
-        # Handle empty event
+        # Handle completely empty event
         if not event:
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type,Authorization'
-                },
-                'body': json.dumps({
-                    'status': 'success',
-                    'message': 'Lambda is working - empty event handled!',
-                    'version': CONFIG['VERSION'],
-                    'timestamp': datetime.utcnow().isoformat()
-                }),
-                'isBase64Encoded': False
-            }
+            logger.info("Handling empty event")
+            event = {}
         
-        # Handle direct invoke without headers
-        if 'headers' not in event:
-            logger.info("Handling direct Lambda invoke (no headers)")
+        # Create standard CORS headers
+        cors_headers = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With'
+        }
+        
+        # **CRITICAL FIX**: Ensure ALL required serverless_wsgi fields exist
+        # This prevents the KeyError: 'headers' issue
+        standardized_event = {
+            'httpMethod': event.get('httpMethod', 'GET'),
+            'path': event.get('path', '/api/health'),
+            'headers': event.get('headers', {}),
+            'multiValueHeaders': event.get('multiValueHeaders', {}),
+            'queryStringParameters': event.get('queryStringParameters', {}),
+            'multiValueQueryStringParameters': event.get('multiValueQueryStringParameters', {}),
+            'body': event.get('body', None),
+            'isBase64Encoded': event.get('isBase64Encoded', False),
+            'pathParameters': event.get('pathParameters', {}),
+            'stageVariables': event.get('stageVariables', {}),
+            'requestContext': event.get('requestContext', {
+                'requestId': context.aws_request_id if context else f'local-{uuid.uuid4().hex[:8]}',
+                'stage': 'prod',
+                'httpMethod': event.get('httpMethod', 'GET'),
+                'path': event.get('path', '/api/health'),
+                'identity': {
+                    'sourceIp': '127.0.0.1',
+                    'userAgent': 'AWS Lambda'
+                },
+                'requestTime': datetime.utcnow().strftime('%d/%b/%Y:%H:%M:%S +0000'),
+                'requestTimeEpoch': int(datetime.utcnow().timestamp() * 1000)
+            })
+        }
+        
+        # Handle health check directly for reliability
+        if standardized_event['path'] in ['/api/health', '/health', '/']:
+            logger.info("Direct health check response")
             return {
                 'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type,Authorization'
-                },
+                'headers': cors_headers,
                 'body': json.dumps({
                     'status': 'success',
-                    'message': 'Lambda is working - direct invoke!',
+                    'message': 'Subscriber Migration Portal API is healthy',
                     'version': CONFIG['VERSION'],
                     'timestamp': datetime.utcnow().isoformat(),
-                    'handler': 'app.lambda_handler',
+                    'handler': 'lambda_handler',
                     'services': {
                         'app': True,
                         'dynamodb': bool(dynamodb),
                         's3': bool(s3_client),
                         'secrets_manager': bool(secrets_client)
-                    }
+                    },
+                    'event_received': True,
+                    'path': standardized_event['path'],
+                    'method': standardized_event['httpMethod']
                 }),
                 'isBase64Encoded': False
             }
         
-        # Fix event structure for serverless_wsgi
-        if 'httpMethod' not in event:
-            event['httpMethod'] = 'GET'
-        if 'path' not in event:
-            event['path'] = '/api/health'
-        if 'queryStringParameters' not in event:
-            event['queryStringParameters'] = None
-        if 'body' not in event:
-            event['body'] = None
-        if 'isBase64Encoded' not in event:
-            event['isBase64Encoded'] = False
-        if 'requestContext' not in event:
-            event['requestContext'] = {
-                'requestId': context.aws_request_id if context else 'test-request',
-                'stage': 'prod',
-                'httpMethod': event.get('httpMethod', 'GET'),
-                'identity': {'sourceIp': '127.0.0.1'}
-            }
+        # Process through Flask using serverless_wsgi
+        logger.info(f"Processing Flask request: {standardized_event['httpMethod']} {standardized_event['path']}")
         
-        # Process with Flask
-        logger.info(f"Processing HTTP event: {event.get('httpMethod')} {event.get('path')}")
-        return handle_request(app, event, context)
+        # **FIXED**: Pass the properly structured event to serverless_wsgi
+        response = handle_request(app, standardized_event, context)
+        
+        # Ensure CORS headers are in response
+        if 'headers' not in response:
+            response['headers'] = {}
+        response['headers'].update(cors_headers)
+        
+        logger.info(f"Lambda response status: {response.get('statusCode', 'unknown')}")
+        return response
         
     except Exception as e:
-        logger.error(f"Lambda handler error: {str(e)}\n{traceback.format_exc()}")
+        logger.error(f"Lambda handler critical error: {str(e)}\n{traceback.format_exc()}")
         
+        # Return error response with proper structure
         return {
             'statusCode': 500,
             'headers': {
@@ -567,10 +578,14 @@ def lambda_handler(event, context):
             },
             'body': json.dumps({
                 'status': 'error',
-                'message': 'Lambda handler error',
+                'message': 'Lambda handler encountered an error',
                 'error': str(e),
                 'timestamp': datetime.utcnow().isoformat(),
-                'version': CONFIG['VERSION']
+                'version': CONFIG['VERSION'],
+                'debug_info': {
+                    'error_type': type(e).__name__,
+                    'handler': 'lambda_handler'
+                }
             }),
             'isBase64Encoded': False
         }
