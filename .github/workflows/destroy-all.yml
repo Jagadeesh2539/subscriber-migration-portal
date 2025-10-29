@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type DESTROY to confirm full teardown'
-        required: true
+        description: 'Type DESTROY to confirm full teardown (or set DESTROY_CONFIRM var)'
+        required: false
         default: ''
       region:
         description: 'AWS region'
@@ -18,16 +18,19 @@ permissions:
 
 env:
   AWS_REGION: ${{ inputs.region || vars.AWS_REGION || 'us-east-1' }}
+  CONFIRM_INPUT: ${{ inputs.confirm || '' }}
+  CONFIRM_VAR: ${{ vars.DESTROY_CONFIRM || '' }}
 
 jobs:
   destroy:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Safety confirmation
+      - name: Safety confirmation (input or variable)
         run: |
-          if [ "${{ inputs.confirm }}" != "DESTROY" ]; then
-            echo "Refusing to proceed without explicit confirmation. Type DESTROY."
+          CONFIRM="${CONFIRM_INPUT:-$CONFIRM_VAR}"
+          if [ "$CONFIRM" != "DESTROY" ]; then
+            echo "Refusing to proceed without explicit confirmation. Provide input or set DESTROY_CONFIRM repo variable to DESTROY."
             exit 1
           fi
 
@@ -70,8 +73,8 @@ jobs:
         run: |
           set -e
           if [ -n "${{ steps.names.outputs.API_ID }}" ]; then
-            if aws apigateway get-rest-api --rest-api-id "${{ steps.names.outputs.API_ID }}" >/dev/null 2>&1; then
-              echo "Deleting API Gateway ${ { steps.names.outputs.API_ID } }"
+            if aws apigateway get-rest-api --rest-api-id "${{ steps.names.outputs.API_ID }}" >/devnull 2>&1; then
+              echo "Deleting API Gateway ${{ steps.names.outputs.API_ID }}"
               aws apigateway delete-rest-api --rest-api-id "${{ steps.names.outputs.API_ID }}" || true
             fi
           fi
