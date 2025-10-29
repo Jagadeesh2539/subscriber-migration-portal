@@ -4,13 +4,9 @@ Subscriber Controller - CRUD Operations with Dual Database Support
 Handles: Create, Read, Update, Delete operations across Cloud (DynamoDB) and Legacy (MySQL RDS)
 """
 
-import json
-import logging
-from datetime import datetime, timedelta
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from datetime import datetime
 
-from flask import g, jsonify, make_response, request
+from flask import g, make_response, request
 from services.audit.service import AuditService
 from services.subscribers.service import SubscriberService
 from utils.logger import get_logger

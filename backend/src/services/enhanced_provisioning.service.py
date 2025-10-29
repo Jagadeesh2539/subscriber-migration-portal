@@ -5,13 +5,12 @@ Supports planId, barring controls, addons, and services provisioning
 """
 
 import json
-import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
-from models.subscriber.model import BarringControls, SubscriberData
+from models.subscriber.model import SubscriberData
 from services.audit.service import AuditService
 from services.provisioning.service import ProvisioningMode, ProvisioningResult
 from utils.logger import get_logger

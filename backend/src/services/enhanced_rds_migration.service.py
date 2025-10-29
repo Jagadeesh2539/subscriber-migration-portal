@@ -5,13 +5,12 @@ Supports planId, barring controls, addons, services, and all extended fields
 """
 
 import json
-import logging
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
-from models.subscriber.model import BarringControls, SubscriberData
+from models.subscriber.model import SubscriberData
 from services.audit.service import AuditService
 from utils.logger import get_logger
 from utils.validation import InputValidator

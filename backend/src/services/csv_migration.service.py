@@ -7,11 +7,10 @@ Supports batch operations with detailed reporting and error handling
 import csv
 import io
 import json
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
 from services.audit.service import AuditService

@@ -4,10 +4,9 @@ Provisioning Service - Handles dual provisioning logic as per specifications
 Implements create/update/delete operations with proper system coordination
 """
 
-import logging
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
 from services.audit.service import AuditService
