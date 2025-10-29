@@ -1,514 +1,236 @@
-name: Enhanced Subscriber Migration Portal Deployment
+name: Deploy Subscriber Migration Portal
 
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'aws/**'
-      - '.github/workflows/**'
-      - 'backend/**'
-      - 'frontend/**'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
     inputs:
       force_recreate:
         description: 'Force recreate stack (true/false)'
-        required: false
-        default: 'false'
+        type: boolean
+        default: false
       cleanup_resources:
-        description: 'Cleanup failed resources (true/false)'
-        required: false
-        default: 'false'
+        description: 'Cleanup failed/orphaned resources (true/false)'
+        type: boolean
+        default: false
+      environment:
+        description: 'Target Environment'
+        type: choice
+        options: [dev, stage, prod]
+        default: 'dev'
+
+permissions:
+  contents: read
+  id-token: write
 
 env:
-  AWS_REGION: us-east-1
-  STACK_NAME: subscriber-migration-portal-main
-  TEMPLATE_FILE: aws/cloudformation.yaml
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  CF_STACK_NAME: ${{ vars.CF_STACK_NAME || 'subscriber-migration-stack' }}
 
 jobs:
-  deploy:
+  lint-format-check:
+    name: Lint & Format Check (Backend)
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Tools
+        run: pip install black isort flake8
+      - name: Run Formatters & Linters (Check Only)
+        working-directory: backend
+        run: |
+          isort --check-only --diff .
+          black --check --diff .
+          flake8 --max-line-length 120 --extend-ignore E203,W503 .
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-
-    - name: Install required tools
-      run: |
-        set -euo pipefail
-        
-        # Install AWS CLI v2
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-        unzip -q awscliv2.zip
-        sudo ./aws/install --update
-        
-        # Install additional tools
-        sudo apt-get update
-        sudo apt-get install -y jq mysql-client zip python3-pip
-        curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-        sudo apt-get install -y nodejs
-        
-        # Verify installations
-        aws --version
-        node --version
-        python3 --version
-
-    - name: Create deployment functions
-      run: |
-        cat > /tmp/functions.sh << 'EOF'
-        #!/bin/bash
-        
-        stack_exists() {
-          aws cloudformation describe-stacks --stack-name "$1" --region "$2" &>/dev/null
-        }
-        
-        wait_for_lambda() {
-          local function_name="$1"
-          local max_wait=300
-          local wait_interval=15
-          local elapsed=0
-          
-          echo "⏳ Waiting for Lambda function '$function_name' to be ready..."
-          
-          while [[ $elapsed -lt $max_wait ]]; do
-            STATE=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.State' --output text 2>/dev/null || echo "UNKNOWN")
-            STATUS=$(aws lambda get-function --function-name "$function_name" --query 'Configuration.LastUpdateStatus' --output text 2>/dev/null || echo "UNKNOWN")
-            
-            if [[ "$STATE" == "Active" && "$STATUS" == "Successful" ]]; then
-              echo "✅ Lambda function '$function_name' is ready"
-              return 0
-            fi
-            
-            sleep $wait_interval
-            elapsed=$((elapsed + wait_interval))
-          done
-          
-          echo "⚠️ Timeout waiting for Lambda function '$function_name'"
-          return 1
-        }
-        EOF
-        chmod +x /tmp/functions.sh
-
-    - name: Create deployment parameters
-      run: |
-        source /tmp/functions.sh
-        
-        # Generate secure password
-        if [[ -z "${{ secrets.LEGACY_DB_PASSWORD }}" ]]; then
-          DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-20)
-          echo "⚠️ Using auto-generated password"
-        else
-          DB_PASSWORD="${{ secrets.LEGACY_DB_PASSWORD }}"
-        fi
-        
-        CURRENT_TIME=$(date +%Y-%m-%d-%H-%M-%S)
-        
-        cat > aws/parameters.json << EOF
-        [
-          {
-            "ParameterKey": "Environment",
-            "ParameterValue": "prod"
-          },
-          {
-            "ParameterKey": "LegacyDbUsername",
-            "ParameterValue": "admin"
-          },
-          {
-            "ParameterKey": "LegacyDbPassword",
-            "ParameterValue": "$DB_PASSWORD"
-          },
-          {
-            "ParameterKey": "CurrentTime",
-            "ParameterValue": "$CURRENT_TIME"
-          }
-        ]
-        EOF
-        
-        echo "📋 Parameters file created with timestamp: $CURRENT_TIME"
-
-    - name: Deploy CloudFormation stack
-      run: |
-        set -euo pipefail
-        source /tmp/functions.sh
-        
-        echo "🚀 Starting CloudFormation deployment..."
-        
-        # Handle force recreate
-        if [[ "${{ github.event.inputs.force_recreate }}" == "true" ]]; then
-          echo "🔄 Force recreate requested"
-          if stack_exists "$STACK_NAME" "$AWS_REGION"; then
-            echo "🗑️ Deleting existing stack..."
-            aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+  prepare-infra:
+    name: Prepare Infrastructure (Cleanup/Failed states)
+    needs: [lint-format-check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    env:
+      FORCE_RECREATE: ${{ github.event.inputs.force_recreate || vars.FORCE_RECREATE || 'false' }}
+      CLEANUP_RESOURCES: ${{ github.event.inputs.cleanup_resources || vars.CLEANUP_FAILED || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve resource names
+        id: names
+        run: |
+          echo "SUB_TABLE=${{ vars.SUBSCRIBER_TABLE_NAME || 'subscriber-table' }}" >> $GITHUB_OUTPUT
+          echo "MIG_TABLE=${{ vars.MIGRATION_JOBS_TABLE_NAME || 'migration-jobs-table' }}" >> $GITHUB_OUTPUT
+          echo "AUD_TABLE=${{ vars.AUDIT_LOG_TABLE_NAME || 'audit-log-table' }}" >> $GITHUB_OUTPUT
+          echo "FRONTEND_BUCKET=${{ vars.S3_FRONTEND_BUCKET || '' }}" >> $GITHUB_OUTPUT
+          echo "UPLOAD_BUCKET=${{ vars.MIGRATION_UPLOAD_BUCKET_NAME || '' }}" >> $GITHUB_OUTPUT
+      - name: Detect Stack Status & Cleanup/Prepare
+        run: |
+          set -e
+          STACK="${{ env.CF_STACK_NAME }}"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo 'NONE')
+          echo "Stack: $STACK Status: $STATUS"
+          if [ "$CLEANUP_RESOURCES" = "true" ]; then
+            case "$STATUS" in
+              DELETE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|CREATE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED)
+                echo "Deleting failed/rollback stack $STACK"
+                aws cloudformation delete-stack --stack-name "$STACK" || true
+                aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
+                ;;
+              *) echo "No failed stack deletion required";;
+            esac
+            # Orphan cleanup
+            for T in "${{ steps.names.outputs.SUB_TABLE }}" "${{ steps.names.outputs.MIG_TABLE }}" "${{ steps.names.outputs.AUD_TABLE }}"; do
+              if [ -n "$T" ] && aws dynamodb describe-table --table-name "$T" >/dev/null 2>&1; then
+                echo "Deleting DynamoDB table $T"; aws dynamodb delete-table --table-name "$T"; aws dynamodb wait table-not-exists --table-name "$T"; fi; done
+            for B in "${{ steps.names.outputs.FRONTEND_BUCKET }}" "${{ steps.names.outputs.UPLOAD_BUCKET }}"; do
+              if [ -n "$B" ] && aws s3api head-bucket --bucket "$B" 2>/dev/null; then
+                echo "Empty+delete S3 bucket $B"; aws s3 rm "s3://$B" --recursive || true; aws s3api delete-bucket --bucket "$B" || true; fi; done
+            for ARN in $(aws stepfunctions list-state-machines --query "stateMachines[?starts_with(name, 'subscriber-migration')].stateMachineArn" --output text); do
+              echo "Delete SFN $ARN"; aws stepfunctions delete-state-machine --state-machine-arn "$ARN" || true; done
+            for URL in $(aws sqs list-queues --queue-name-prefix "subscriber-migration" --query 'QueueUrls[]' --output text); do
+              echo "Delete SQS $URL"; aws sqs delete-queue --queue-url "$URL" || true; done
           fi
-        fi
-        
-        # Determine operation
-        if stack_exists "$STACK_NAME" "$AWS_REGION"; then
-          OPERATION="update-stack"
-          echo "🔄 Updating existing stack..."
-        else
-          OPERATION="create-stack"
-          echo "🆕 Creating new stack..."
-        fi
-        
-        # Execute CloudFormation deployment
-        aws cloudformation $OPERATION \
-          --stack-name "$STACK_NAME" \
-          --template-body "file://$TEMPLATE_FILE" \
-          --parameters file://aws/parameters.json \
-          --capabilities CAPABILITY_NAMED_IAM CAPABILITY_IAM \
-          --region "$AWS_REGION" \
-          --tags Key=Project,Value=SubscriberMigration Key=Environment,Value=Production Key=DeployedBy,Value=GitHub-Actions
-        
-        # Wait for completion
-        if [[ "$OPERATION" == "create-stack" ]]; then
-          echo "⏳ Waiting for stack creation (this may take 15-20 minutes)..."
-          aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-        else
-          echo "⏳ Waiting for stack update..."
-          aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-        fi
-        
-        echo "✅ CloudFormation deployment completed successfully"
-        echo "DEPLOYMENT_SUCCESS=true" >> $GITHUB_ENV
-
-    - name: Extract and cache stack outputs
-      if: env.DEPLOYMENT_SUCCESS == 'true'
-      run: |
-        set -euo pipefail
-        
-        echo "📋 Extracting stack outputs..."
-        
-        # Get all outputs in one API call
-        aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-          --query 'Stacks[0].Outputs' --output json > outputs.json
-        
-        echo "🔍 Available stack outputs:"
-        cat outputs.json | jq -r '.[] | "\(.OutputKey): \(.OutputValue)"'
-        
-        # Parse critical outputs
-        BACKEND_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="BackendLambdaName") | .OutputValue' outputs.json)
-        MIGRATION_LAMBDA_NAME=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorFunctionName") | .OutputValue' outputs.json)
-        FRONTEND_BUCKET=$(jq -r '.[] | select(.OutputKey=="FrontendBucketName") | .OutputValue' outputs.json)
-        UPLOAD_BUCKET=$(jq -r '.[] | select(.OutputKey=="MigrationUploadBucketName") | .OutputValue' outputs.json)
-        BACKEND_API_URL=$(jq -r '.[] | select(.OutputKey=="BackendApiUrl") | .OutputValue' outputs.json)
-        CLOUDFRONT_ID=$(jq -r '.[] | select(.OutputKey=="CloudFrontDistributionId") | .OutputValue' outputs.json)
-        CLOUDFRONT_DOMAIN=$(jq -r '.[] | select(.OutputKey=="CloudFrontDomainName") | .OutputValue' outputs.json)
-        HTTPS_FRONTEND_URL=$(jq -r '.[] | select(.OutputKey=="SecureFrontendURL") | .OutputValue' outputs.json)
-        BACKEND_API_ID=$(jq -r '.[] | select(.OutputKey=="BackendApiId") | .OutputValue' outputs.json)
-        
-        # Export to environment for subsequent steps
-        echo "BACKEND_LAMBDA_NAME=$BACKEND_LAMBDA_NAME" >> $GITHUB_ENV
-        echo "MIGRATION_LAMBDA_NAME=$MIGRATION_LAMBDA_NAME" >> $GITHUB_ENV
-        echo "FRONTEND_BUCKET=$FRONTEND_BUCKET" >> $GITHUB_ENV
-        echo "UPLOAD_BUCKET=$UPLOAD_BUCKET" >> $GITHUB_ENV
-        echo "BACKEND_API_URL=$BACKEND_API_URL" >> $GITHUB_ENV
-        echo "CLOUDFRONT_ID=$CLOUDFRONT_ID" >> $GITHUB_ENV
-        echo "CLOUDFRONT_DOMAIN=$CLOUDFRONT_DOMAIN" >> $GITHUB_ENV
-        echo "HTTPS_FRONTEND_URL=$HTTPS_FRONTEND_URL" >> $GITHUB_ENV
-        echo "BACKEND_API_ID=$BACKEND_API_ID" >> $GITHUB_ENV
-        
-        echo "✅ Stack outputs extracted and cached"
-
-    - name: Deploy enhanced backend Lambda code
-      if: env.DEPLOYMENT_SUCCESS == 'true'
-      run: |
-        set -euo pipefail
-        source /tmp/functions.sh
-        
-        echo "🚀 Deploying enhanced backend Lambda code..."
-        
-        if [[ -d "backend" ]]; then
-          cd backend
-          
-          # Install dependencies
-          echo "📦 Installing Python dependencies..."
-          pip3 install -r requirements.txt -t . --upgrade
-          
-          # Create optimized deployment package
-          echo "📦 Creating deployment package..."
-          zip -r ../backend-enhanced.zip . -x \
-            "*.git*" "__pycache__/*" "*.pyc" "venv/*" "env/*" \
-            "tests/*" "*.test.py" ".pytest_cache/*" \
-            "*.log" ".env" "*.env.*" "migration_processor/*"
-          
-          cd ..
-          
-          # Deploy to Lambda
-          echo "🚀 Deploying to Lambda function: $BACKEND_LAMBDA_NAME"
-          aws lambda update-function-code \
-            --function-name "$BACKEND_LAMBDA_NAME" \
-            --zip-file fileb://backend-enhanced.zip
-          
-          # Wait for deployment to complete
-          wait_for_lambda "$BACKEND_LAMBDA_NAME"
-          
-          echo "✅ Backend Lambda code deployed successfully"
-        else
-          echo "⚠️ Backend directory not found"
-        fi
-
-    - name: Deploy migration processor Lambda code
-      if: env.DEPLOYMENT_SUCCESS == 'true'
-      run: |
-        set -euo pipefail
-        source /tmp/functions.sh
-        
-        echo "🚀 Deploying migration processor Lambda code..."
-        
-        if [[ -d "backend/migration_processor" ]]; then
-          cd backend/migration_processor
-          
-          # Install dependencies if requirements.txt exists
-          if [[ -f "requirements.txt" ]]; then
-            pip3 install -r requirements.txt -t .
+          if [ "$FORCE_RECREATE" = "true" ]; then
+            echo "Force re-create $STACK";
+            if aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
+              aws cloudformation delete-stack --stack-name "$STACK"; aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true; fi
           fi
-          
-          # Create deployment package
-          zip -r ../../migration-processor.zip . -x \
-            "*.git*" "__pycache__/*" "*.pyc" "tests/*"
-          
-          cd ../..
-          
-          # Deploy to Lambda
-          aws lambda update-function-code \
-            --function-name "$MIGRATION_LAMBDA_NAME" \
-            --zip-file fileb://migration-processor.zip
-          
-          wait_for_lambda "$MIGRATION_LAMBDA_NAME"
-          
-          echo "✅ Migration processor Lambda deployed"
-        else
-          echo "ℹ️ Migration processor directory not found, using backend code"
-          
-          # Use main backend code as fallback
-          cd backend
-          zip -r ../migration-fallback.zip . -x \
-            "*.git*" "__pycache__/*" "*.pyc"
-          cd ..
-          
-          aws lambda update-function-code \
-            --function-name "$MIGRATION_LAMBDA_NAME" \
-            --zip-file fileb://migration-fallback.zip
-          
-          wait_for_lambda "$MIGRATION_LAMBDA_NAME"
-        fi
 
-    - name: Deploy enhanced frontend
-      if: env.DEPLOYMENT_SUCCESS == 'true'  
-      run: |
-        set -euo pipefail
-        
-        echo "🌐 Deploying enhanced React frontend..."
-        
-        if [[ -d "frontend" ]]; then
-          cd frontend
-          
-          # Enhanced npm installation with cache management
-          echo "📦 Installing frontend dependencies with enhanced error handling..."
-          
-          # Clear npm cache to prevent corruption
-          npm cache clean --force
-          export npm_config_cache=/tmp/npm-cache-$$
-          mkdir -p "/tmp/npm-cache-$$"
-          
-          # Enhanced npm configuration
-          npm config set fetch-retries 5
-          npm config set fetch-retry-factor 2
-          npm config set fetch-retry-mintimeout 10000
-          npm config set fetch-retry-maxtimeout 60000
-          
-          # Try multiple installation strategies
-          if ! npm ci --no-audit --no-fund --prefer-offline; then
-            echo "⚠️ npm ci failed, trying npm install"
-            rm -rf node_modules package-lock.json
-            
-            if ! npm install --no-audit --no-fund --prefer-offline; then
-              echo "⚠️ Standard npm install failed, trying legacy resolver"
-              npm install --no-audit --no-fund --legacy-peer-deps --no-package-lock
-              npm install --package-lock-only --no-audit --no-fund
-            fi
+  deploy-infra:
+    name: Deploy Infrastructure (CloudFormation)
+    needs: prepare-infra
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    outputs:
+      backend_lambda_name: ${{ steps.extract.outputs.backend_lambda_name }}
+      migration_lambda_name: ${{ steps.extract.outputs.migration_lambda_name }}
+      frontend_bucket: ${{ steps.extract.outputs.frontend_bucket }}
+      backend_api_url: ${{ steps.extract.outputs.backend_api_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Deploy CloudFormation stack (if template exists)
+        run: |
+          if [ -f infrastructure/cloudformation/stack.yaml ]; then
+            aws cloudformation deploy \
+              --template-file infrastructure/cloudformation/stack.yaml \
+              --stack-name "${{ env.CF_STACK_NAME }}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --parameter-overrides \
+                SubscriberTableName=${{ vars.SUBSCRIBER_TABLE_NAME || 'subscriber-table' }} \
+                MigrationJobsTableName=${{ vars.MIGRATION_JOBS_TABLE_NAME || 'migration-jobs-table' }} \
+                AuditLogTableName=${{ vars.AUDIT_LOG_TABLE_NAME || 'audit-log-table' }} \
+                FrontendBucket=${{ vars.S3_FRONTEND_BUCKET || 'subscriber-migration-frontend' }} || true
+          else
+            echo "No CloudFormation template found, skipping"
           fi
-          
-          # Build with production optimizations
-          echo "🏗️ Building production frontend..."
-          NODE_ENV=production npm run build
-          
-          # Upload to S3 with CloudFront-optimized headers
-          echo "📤 Uploading to S3 with CloudFront optimization..."
-          
-          # Static assets with long cache
-          aws s3 sync build/static/ "s3://$FRONTEND_BUCKET/static/" \
-            --delete \
-            --cache-control "public, max-age=31536000, immutable" \
-            --content-encoding gzip
-          
-          # HTML files with short cache
-          aws s3 sync build/ "s3://$FRONTEND_BUCKET/" \
-            --delete \
-            --cache-control "public, max-age=300" \
-            --exclude "static/*" --include "*.html"
-          
-          # Other files with medium cache
-          aws s3 sync build/ "s3://$FRONTEND_BUCKET/" \
-            --delete \
-            --cache-control "public, max-age=86400" \
-            --exclude "static/*" --exclude "*.html"
-          
-          cd ..
-          
-          # CloudFront cache invalidation
-          if [[ -n "$CLOUDFRONT_ID" && "$CLOUDFRONT_ID" != "null" ]]; then
-            echo "♻️ Invalidating CloudFront cache..."
-            INVALIDATION_ID=$(aws cloudfront create-invalidation \
-              --distribution-id "$CLOUDFRONT_ID" \
-              --paths "/*" \
-              --query 'Invalidation.Id' --output text)
-            
-            echo "⏳ CloudFront invalidation started: $INVALIDATION_ID"
-            echo "ℹ️ Cache invalidation will complete in the background"
-          fi
-          
-          echo "✅ Frontend deployed with CloudFront optimization"
-        else
-          echo "⚠️ Frontend directory not found"
-        fi
+      - name: Extract stack outputs
+        id: extract
+        run: |
+          set -e
+          STACK="${{ env.CF_STACK_NAME }}"
+          BK=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[?OutputKey==`BackendLambdaName`].OutputValue' --output text 2>/dev/null || echo '${{ vars.LAMBDA_FUNCTION_NAME || '' }}')
+          MP=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[?OutputKey==`MigrationLambdaName`].OutputValue' --output text 2>/dev/null || echo '')
+          FB=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucket`].OutputValue' --output text 2>/dev/null || echo '${{ vars.S3_FRONTEND_BUCKET || '' }}')
+          API=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[?OutputKey==`ApiBaseUrl`].OutputValue' --output text 2>/dev/null || echo "https://${{ vars.API_GATEWAY_ID }}.execute-api.${{ env.AWS_REGION }}.amazonaws.com/prod")
+          echo "backend_lambda_name=$BK" >> $GITHUB_OUTPUT
+          echo "migration_lambda_name=$MP" >> $GITHUB_OUTPUT
+          echo "frontend_bucket=$FB" >> $GITHUB_OUTPUT
+          echo "backend_api_url=$API" >> $GITHUB_OUTPUT
 
-    - name: Setup S3 notifications for migration processing
-      if: env.DEPLOYMENT_SUCCESS == 'true'
-      run: |
-        set -euo pipefail
-        
-        echo "📡 Setting up S3 notifications for migration processing..."
-        
-        # Get Migration Lambda ARN from outputs
-        MIGRATION_ARN=$(jq -r '.[] | select(.OutputKey=="MigrationProcessorArn") | .OutputValue' outputs.json)
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-        
-        # Configure S3 bucket notification
-        cat > notification-config.json << EOF
-        {
-          "LambdaFunctionConfigurations": [
-            {
-              "Id": "MigrationProcessorTrigger",
-              "LambdaFunctionArn": "$MIGRATION_ARN",
-              "Events": ["s3:ObjectCreated:*"],
-              "Filter": {
-                "Key": {
-                  "FilterRules": [
-                    {"Name": "prefix", "Value": "uploads/"},
-                    {"Name": "suffix", "Value": ".csv"}
-                  ]
-                }
-              }
-            }
-          ]
-        }
-        EOF
-        
-        # Apply notification configuration
-        aws s3api put-bucket-notification-configuration \
-          --bucket "$UPLOAD_BUCKET" \
-          --notification-configuration file://notification-config.json
-        
-        echo "✅ S3 notifications configured for automated migration processing"
+  deploy-backend:
+    name: Build & Deploy Backend
+    needs: deploy-infra
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Package Backend
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -t package/
+          cp app.py package/
+          if [ -d src ]; then cp -R src package/src; fi
+          cd package && zip -r ../lambda-deployment-package.zip .
+      - name: Deploy Backend Lambda Code
+        run: |
+          aws lambda update-function-code --function-name "${{ needs.deploy-infra.outputs.backend_lambda_name }}" --zip-file fileb://backend/lambda-deployment-package.zip
+          aws lambda wait function-updated --function-name "${{ needs.deploy-infra.outputs.backend_lambda_name }}"
 
-    - name: Run comprehensive smoke tests
-      if: env.DEPLOYMENT_SUCCESS == 'true'
-      run: |
-        set -euo pipefail
-        source /tmp/functions.sh
-        
-        echo "🧪 Running comprehensive smoke tests..."
-        
-        # Wait for all services to settle
-        echo "⏳ Waiting 60 seconds for all services to settle..."
-        sleep 60
-        
-        # Test 1: Direct Lambda health check (MAIN FIX TEST)
-        echo "🔍 Test 1: Direct Lambda health check (empty event)..."
-        aws lambda invoke \
-          --function-name "$BACKEND_LAMBDA_NAME" \
-          --payload '{}' \
-          lambda-direct.json
-        
-        echo "Direct Lambda Response:"
-        cat lambda-direct.json | jq '.'
-        
-        # Test 2: Direct Lambda with minimal event
-        echo "🔍 Test 2: Direct Lambda with minimal HTTP event..."
-        aws lambda invoke \
-          --function-name "$BACKEND_LAMBDA_NAME" \
-          --payload '{"httpMethod":"GET","path":"/api/health"}' \
-          lambda-http.json
-        
-        echo "HTTP Lambda Response:"
-        cat lambda-http.json | jq '.'
-        
-        # Test 3: API Gateway health endpoint
-        echo "🔍 Test 3: API Gateway health endpoint..."
-        HEALTH_RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" "$BACKEND_API_URL/api/health")
-        echo "API Health Response: $HEALTH_RESPONSE"
-        
-        # Test 4: Alternative health endpoint
-        echo "🔍 Test 4: Alternative health endpoint..."
-        ALT_HEALTH=$(curl -s -w "HTTP_CODE:%{http_code}" "$BACKEND_API_URL/health")
-        echo "Alternative Health: $ALT_HEALTH"
-        
-        # Test 5: Login endpoint functionality
-        echo "🔍 Test 5: Login endpoint..."
-        LOGIN_TEST=$(curl -s -X POST "$BACKEND_API_URL/api/auth/login" \
-          -H "Content-Type: application/json" \
-          -d '{"username":"admin","password":"Admin@123"}' \
-          -w "HTTP_CODE:%{http_code}")
-        echo "Login Test: $LOGIN_TEST"
-        
-        # Test 6: CloudFront HTTPS frontend
-        echo "🔍 Test 6: Testing secure HTTPS frontend..."
-        if curl -f -s "$HTTPS_FRONTEND_URL" >/dev/null; then
-          echo "✅ HTTPS frontend accessible"
-        else
-          echo "⚠️ HTTPS frontend not yet accessible (CloudFront may still be deploying)"
-        fi
-        
-        # Test 7: S3 upload capability
-        echo "🔍 Test 7: Testing S3 upload capability..."
-        echo "Enterprise test upload - $(date)" > test-upload.txt
-        if aws s3 cp test-upload.txt "s3://$UPLOAD_BUCKET/test/deployment-test.txt"; then
-          echo "✅ S3 upload test passed"
-          aws s3 rm "s3://$UPLOAD_BUCKET/test/deployment-test.txt"
-        else
-          echo "⚠️ S3 upload test failed"
-        fi
-        rm -f test-upload.txt
-        
-        # Test 8: DynamoDB table access
-        echo "🔍 Test 8: Testing DynamoDB table access..."
-        aws dynamodb describe-table --table-name "subscriber-table-prod" \
-          --query 'Table.TableStatus' --output text > /dev/null
-        echo "✅ DynamoDB tables accessible"
-        
-        echo ""
-        echo "🎉 === ENHANCED DEPLOYMENT COMPLETED SUCCESSFULLY ==="
-        echo ""
-        echo "🔐 **SECURE HTTPS FRONTEND**: $HTTPS_FRONTEND_URL"
-        echo "📡 **API ENDPOINT**: $BACKEND_API_URL"
-        echo "☁️ **CLOUDFRONT ID**: $CLOUDFRONT_ID"
-        echo "📁 **UPLOAD BUCKET**: $UPLOAD_BUCKET"
-        echo ""
-        echo "🔐 **LOGIN CREDENTIALS**:"
-        echo "   • admin / Admin@123 (Full Access)"
-        echo "   • operator / Operator@123 (Read/Write)"  
-        echo "   • guest / Guest@123 (Read Only)"
-        echo ""
-        echo "✅ **ALL SERVICES DEPLOYED WITH ENTERPRISE FEATURES!
+  deploy-frontend:
+    name: Build & Deploy Frontend
+    needs: deploy-infra
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Build Frontend
+        working-directory: frontend
+        env:
+          REACT_APP_API_BASE_URL: ${{ needs.deploy-infra.outputs.backend_api_url }}
+          REACT_APP_LEGACY_ENABLED: 'true'
+          REACT_APP_MIGRATION_ENABLED: 'true'
+        run: |
+          npm ci || npm install
+          npm run build
+      - name: Deploy Frontend to S3
+        run: |
+          aws s3 sync frontend/build "s3://${{ needs.deploy-infra.outputs.frontend_bucket }}" --delete --cache-control "public,max-age=300"
+      - name: Invalidate CloudFront Cache (Optional)
+        if: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        run: |
+          aws cloudfront create-invalidation --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" --paths "/*"
+
+  smoke-tests:
+    name: Post-Deployment Smoke Tests
+    needs: [deploy-backend, deploy-frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: API Health
+        run: |
+          curl -fsS ${{ needs.deploy-infra.outputs.backend_api_url }}/api/health
+      - name: Auth Smoke
+        run: |
+          TOKEN=$(curl -fsS -X POST "${{ needs.deploy-infra.outputs.backend_api_url }}/api/auth/login" -H "Content-Type: application/json" -d '{"username":"admin","password":"Admin@123"}' | jq -r '.token')
+          test -n "$TOKEN"
+      - name: Subscribers Stats
+        run: |
+          curl -fsS "${{ needs.deploy-infra.outputs.backend_api_url }}/api/subscribers/stats" -H "Authorization: Bearer $TOKEN"
