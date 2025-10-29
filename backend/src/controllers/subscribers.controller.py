@@ -55,9 +55,7 @@ class SubscriberController:
                 },
             )
 
-            return create_response(
-                data=result, message=f"Subscriber created successfully in {prov_mode} mode"
-            )
+            return create_response(data=result, message=f"Subscriber created successfully in {prov_mode} mode")
 
         except ValidationError as e:
             logger.warning(f"Validation error in create_subscriber: {str(e)}")
@@ -184,9 +182,7 @@ class SubscriberController:
                 },
             )
 
-            return create_response(
-                data=result, message=f"Subscriber updated successfully in {prov_mode} mode"
-            )
+            return create_response(data=result, message=f"Subscriber updated successfully in {prov_mode} mode")
 
         except ValidationError as e:
             return create_error_response(str(e), 400)
@@ -259,9 +255,7 @@ class SubscriberController:
                 soft_delete = data.get("soft_delete", True)
                 result = subscriber_service.bulk_delete(subscriber_ids, soft_delete, prov_mode)
             else:
-                result = subscriber_service.bulk_status_update(
-                    subscriber_ids, operation.upper(), prov_mode
-                )
+                result = subscriber_service.bulk_status_update(subscriber_ids, operation.upper(), prov_mode)
 
             audit_service.log_action(
                 action=f"bulk_{operation}",
@@ -423,14 +417,14 @@ class SubscriberController:
 
             if format_type == "csv":
                 response.headers["Content-Type"] = "text/csv; charset=utf-8"
-                response.headers[
-                    "Content-Disposition"
-                ] = f"attachment; filename=subscribers_{system}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                response.headers["Content-Disposition"] = (
+                    f"attachment; filename=subscribers_{system}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                )
             else:
                 response.headers["Content-Type"] = "application/json"
-                response.headers[
-                    "Content-Disposition"
-                ] = f"attachment; filename=subscribers_{system}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                response.headers["Content-Disposition"] = (
+                    f"attachment; filename=subscribers_{system}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                )
 
             return response
 
