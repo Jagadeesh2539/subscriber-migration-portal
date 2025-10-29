@@ -1,0 +1,56 @@
+name: Frontend - Build & Deploy (S3/CloudFront)
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  S3_FRONTEND_BUCKET: ${{ vars.S3_FRONTEND_BUCKET }}
+  API_BASE_URL: https://${{ vars.API_GATEWAY_ID }}.execute-api.${{ vars.AWS_REGION || 'us-east-1' }}.amazonaws.com/prod
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install & Build
+        working-directory: frontend
+        env:
+          REACT_APP_API_BASE_URL: ${{ env.API_BASE_URL }}
+          REACT_APP_LEGACY_ENABLED: "true"
+          REACT_APP_MIGRATION_ENABLED: "true"
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync frontend/build "s3://${S3_FRONTEND_BUCKET}" --delete --cache-control "public,max-age=300"
+
+      - name: CloudFront invalidation
+        if: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID != '' }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"
