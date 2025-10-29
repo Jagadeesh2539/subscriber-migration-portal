@@ -1,21 +1,10 @@
-# backend/src/services/enhanced_rds_migration.service.py
-
-#!/usr/bin/env python3
-"""
-Enhanced RDS Migration Service - Full Migration Logic
-Handles: Data extraction, transformation, validation, loading, auditing
-Integrates with Step Functions for orchestration
-"""
-
 import json
-import logging
+import uuid
 from datetime import datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Dict, Optional
 
 import boto3
-from config.database import get_dynamodb_table, get_legacy_db_connection
-from models.subscriber.model import BarringControls, SubscriberData
+from config.database import get_dynamodb_table
 from services.audit.service import AuditService
 from utils.logger import get_logger
 from utils.validation import InputValidator
@@ -232,13 +221,13 @@ class RDSMigrationService:
             "options": options,
             "summary": {
                 "records_checked": options.get("sample_size", 0),
-                "matched": options.get("sample_size", 0) * 0.95,  # Mock 95% match
-                "mismatched": options.get("sample_size", 0) * 0.03,
-                "source_only": options.get("sample_size", 0) * 0.01,
-                "target_only": options.get("sample_size", 0) * 0.01,
+                "matched": int(options.get("sample_size", 0) * 0.95),  # Mock 95% match
+                "mismatched": int(options.get("sample_size", 0) * 0.03),
+                "source_only": int(options.get("sample_size", 0) * 0.01),
+                "target_only": int(options.get("sample_size", 0) * 0.01),
                 "errors": 0,
             },
-            # "discrepancy_report_url": "s3://..." # Optional
+            # "discrepancy_report_url": "s3://..."  # Optional
         }
         self._update_job(job_id, audit_results=audit_summary)
         logger.info("Audit completed for job %s", job_id)
@@ -246,4 +235,96 @@ class RDSMigrationService:
 
     def export_migration_results(self, job_id: str, options: Dict) -> Dict:
         """Export job results, including errors or audit findings."""
-        logger
+        logger.info("Exporting results for job %s with options: %s", job_id, options)
+        # Placeholder for export logic:
+        # 1. Fetch job details, including error logs or audit results
+        # 2. Format data based on options['format'] (csv, json)
+        # 3. Handle inclusion of errors/audit details
+        # 4. Return content and content type
+
+        mock_content = "job_id,status,error\n"
+        if options.get("include_errors"):
+            mock_content += f"{job_id},FAILED,Sample error message\n"
+        else:
+            mock_content += f"{job_id},COMPLETED,\n"
+
+        return {
+            "job_id": job_id,
+            "format": options.get("format", "csv"),
+            "record_count": 1,
+            "content": mock_content.encode("utf-8"),
+        }
+
+    def retry_failed_records(self, job_id: str, options: Dict) -> Dict:
+        """Initiate a retry process for records that failed during migration."""
+        logger.info("Retrying failed records for job %s with options: %s", job_id, options)
+        # Placeholder for retry logic:
+        # 1. Fetch job details and identify failed records (from error_log or separate table)
+        # 2. Filter records based on options['specific_errors_only'] if provided
+        # 3. Create a new "retry job" or trigger a specific SFN task/workflow
+        # 4. Update original job status or link to retry job
+
+        retry_summary = {
+            "job_id": job_id,
+            "retry_timestamp": datetime.utcnow().isoformat(),
+            "options": options,
+            "summary": {
+                "records_to_retry": 5,  # Mock value
+                "retried_successfully": 4,
+                "still_failing": 1,
+            },
+            "retry_job_id": f"retry-{job_id[:8]}-{uuid.uuid4().hex[:4]}",  # Link to new job
+        }
+        self._update_job(job_id, retry_info=retry_summary)
+        logger.info("Retry process initiated for job %s", job_id)
+        return retry_summary
+
+    # --- Internal Helper Methods ---
+
+    def _get_job_details(self, job_id: str) -> Optional[Dict]:
+        """Fetch job details from DynamoDB."""
+        try:
+            response = self.jobs_table.get_item(Key={"job_id": job_id})
+            return response.get("Item")
+        except Exception as e:
+            logger.error("Error fetching job details for %s: %s", job_id, str(e))
+            return None
+
+    def _update_job(self, job_id: str, **kwargs):
+        """Update specific attributes of a migration job record."""
+        try:
+            update_expression = "SET updated_at = :updated_at"
+            expression_values = {":updated_at": datetime.utcnow().isoformat()}
+            expression_names = {}
+
+            for key, value in kwargs.items():
+                if value is not None:
+                    # Sanitize key for expression names if needed
+                    safe_key = key.replace("-", "_")  # Example basic sanitization
+                    name_placeholder = f"#{safe_key}"
+                    value_placeholder = f":{safe_key}"
+                    update_expression += f", {name_placeholder} = {value_placeholder}"
+                    expression_values[value_placeholder] = value
+                    expression_names[name_placeholder] = key
+
+            if not expression_names:  # Only update updated_at if no other args
+                # E501 Fix: Break the line
+                self.jobs_table.update_item(
+                    Key={"job_id": job_id},
+                    UpdateExpression=update_expression,
+                    ExpressionAttributeValues=expression_values,
+                )
+            else:
+                self.jobs_table.update_item(
+                    Key={"job_id": job_id},
+                    UpdateExpression=update_expression,
+                    ExpressionAttributeNames=expression_names,
+                    ExpressionAttributeValues=expression_values,
+                )
+            logger.debug("Updated job %s with data: %s", job_id, kwargs)
+
+        except Exception as e:
+            logger.error("Error updating job %s: %s", job_id, str(e))
+
+
+rds_migration_service = RDSMigrationService()

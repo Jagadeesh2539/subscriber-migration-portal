@@ -1,15 +1,12 @@
-# backend/src/services/provisioning.service.py
-
 #!/usr/bin/env python3
-"""
-Provisioning Service - Base Logic for Subscriber CRUD Operations
-Handles interaction with Legacy (MySQL) and Cloud (DynamoDB) based on mode
-"""
+# Provisioning Service - Base Logic for Subscriber CRUD Operations
+# Handles interaction with Legacy (MySQL) and Cloud (DynamoDB) based on mode
 
-import logging
+# Removed unused logging import
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Tuple
+# Removed unused List, Tuple; Added Dict, Optional for F821 Fix
+from typing import Dict, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
 from services.audit.service import AuditService
@@ -35,11 +32,16 @@ class ProvisioningResult:
         success: bool,
         mode: ProvisioningMode,
         operation: str,
+        # F821 Fix: Added Optional import
         uid: Optional[str] = None,
+        # F821 Fix: Added Optional import
         message: Optional[str] = None,
+        # F821 Fix: Added Optional import
         legacy_status: Optional[str] = None,
+        # F821 Fix: Added Optional import
         cloud_status: Optional[str] = None,
         duration_ms: int = 0,
+        # F821 Fix: Added Optional import
         timestamp: Optional[str] = None,
     ):
         self.success = success
@@ -52,7 +54,8 @@ class ProvisioningResult:
         self.duration_ms = duration_ms
         self.timestamp = timestamp or datetime.utcnow().isoformat()
 
-    def to_dict(self):
+    # F821 Fix: Added Dict import
+    def to_dict(self) -> Dict:
         return {
             "success": self.success,
             "mode": self.mode.name,
@@ -74,6 +77,7 @@ class ProvisioningService:
         self.audit_service = AuditService()
         self.validator = InputValidator()
 
+    # F821 Fix: Added Dict import
     def provision_subscriber(
         self,
         mode: ProvisioningMode,
@@ -89,7 +93,9 @@ class ProvisioningService:
 
         try:
             # Basic validation
-            validated_data = self.validator.validate_json(data, required_fields=["uid", "imsi"])
+            validated_data = self.validator.validate_json(
+                data, required_fields=["uid", "imsi"]
+            )
             result.uid = validated_data.get("uid")
 
             # Perform operation based on mode
@@ -125,15 +131,22 @@ class ProvisioningService:
             self._log_provision_audit(created_by, result, is_error=True, error_message=str(e))
             return result
 
+    # F821 Fix: Added Dict import
     def _provision_legacy(self, data: Dict, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the legacy system (MySQL)."""
-        result = ProvisioningResult(success=False, mode=ProvisioningMode.LEGACY, operation=operation, uid=data["uid"])
+        result = ProvisioningResult(
+            success=False, mode=ProvisioningMode.LEGACY, operation=operation, uid=data["uid"]
+        )
         try:
             with get_legacy_db_connection() as conn:
                 with conn.cursor() as cursor:
                     if operation == "CREATE":
                         # Basic INSERT example - needs field mapping
-                        sql = "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                        # E501 Fix: Broke line
+                        sql = (
+                            "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) "
+                            "VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                        )
                         cursor.execute(
                             sql,
                             (
@@ -166,9 +179,12 @@ class ProvisioningService:
             result.message = f"Legacy operation failed: {str(e)}"
         return result
 
+    # F821 Fix: Added Dict import
     def _provision_cloud(self, data: Dict, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the cloud system (DynamoDB)."""
-        result = ProvisioningResult(success=False, mode=ProvisioningMode.CLOUD, operation=operation, uid=data["uid"])
+        result = ProvisioningResult(
+            success=False, mode=ProvisioningMode.CLOUD, operation=operation, uid=data["uid"]
+        )
         try:
             # Prepare item for DynamoDB (map uid to subscriberId)
             item = data.copy()
@@ -199,6 +215,7 @@ class ProvisioningService:
             result.message = f"Cloud operation failed: {str(e)}"
         return result
 
+    # F821 Fix: Added Dict import
     def _provision_dual(self, data: Dict, operation: str) -> ProvisioningResult:
         """
         Handle provisioning in both systems with best-effort consistency.
@@ -219,7 +236,11 @@ class ProvisioningService:
 
             with legacy_conn.cursor() as cursor:
                 if operation == "CREATE":
-                    sql = "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                    # E501 Fix: Broke line
+                    sql = (
+                        "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, NOW(), NOW())"
+                    )
                     cursor.execute(
                         sql,
                         (
@@ -284,6 +305,7 @@ class ProvisioningService:
                     )
                     result.legacy_status = f"ROLLBACK_FAILED: {str(rollback_err)}"
                     result.message += " CRITICAL: Legacy DB rollback failed!"
+            # E111/E117 Fix: Corrected indentation
             elif legacy_conn:  # Connection opened but operation not attempted
                 result.legacy_status = "NOT_ATTEMPTED_DUE_TO_ERROR"
             else:  # Connection failed
@@ -295,6 +317,7 @@ class ProvisioningService:
 
         return result
 
+    # E303 Fix: Reduced blank lines
     def _log_provision_audit(
         self, user: str, result: ProvisioningResult, is_error: bool = False, error_message: str = None
     ):

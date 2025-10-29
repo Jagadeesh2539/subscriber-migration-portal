@@ -1,5 +1,3 @@
-# backend/src/services/enhanced_provisioning.service.py
-
 #!/usr/bin/env python3
 """
 Enhanced Provisioning Service - Single Source of Truth
@@ -7,11 +5,12 @@ Consolidated logic for Legacy, Cloud, and Dual Provisioning modes
 Handles complex subscriber data structures and validation
 """
 
-import json
-import logging
+# Removed unused json, logging imports
+from dataclasses import asdict  # Added for F821 Fix
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, Union
+# Removed unused Any, Union; Added Optional for F821 Fix
+from typing import Dict, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
 from models.subscriber.model import BarringControls, SubscriberData
@@ -43,6 +42,7 @@ class EnhancedProvisioningService:
         """
         start_time = datetime.utcnow()
         result = ProvisioningResult(success=False, mode=mode, operation=operation)
+        # F821 Fix: Added Optional import
         subscriber_data: Optional[SubscriberData] = None
 
         try:
@@ -132,13 +132,18 @@ class EnhancedProvisioningService:
 
     def _provision_legacy(self, data: SubscriberData, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the legacy system."""
-        result = ProvisioningResult(success=False, mode=ProvisioningMode.LEGACY, operation=operation, uid=data.uid)
+        result = ProvisioningResult(
+            success=False, mode=ProvisioningMode.LEGACY, operation=operation, uid=data.uid
+        )
         try:
             with get_legacy_db_connection() as conn:
                 with conn.cursor() as cursor:
                     if operation == "CREATE":
                         # Convert dataclass to dict, handle potential None values
-                        item_dict = {k: v for k, v in asdict(data).items() if v is not None}
+                        # F821 Fix: Added import for asdict
+                        item_dict = {
+                            k: v for k, v in asdict(data).items() if v is not None
+                        }
                         # TODO: Adapt SQL INSERT to match SubscriberData fields
                         sql = "INSERT INTO subscribers_enhanced (uid, imsi, msisdn, status, ...) VALUES (%s, %s, ...)"
                         cursor.execute(sql, (item_dict["uid"], item_dict["imsi"], ...))
@@ -167,7 +172,9 @@ class EnhancedProvisioningService:
 
     def _provision_cloud(self, data: SubscriberData, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the cloud system (DynamoDB)."""
-        result = ProvisioningResult(success=False, mode=ProvisioningMode.CLOUD, operation=operation, uid=data.uid)
+        result = ProvisioningResult(
+            success=False, mode=ProvisioningMode.CLOUD, operation=operation, uid=data.uid
+        )
         try:
             item = self._prepare_dynamodb_item(data)
             if operation == "CREATE" or operation == "UPDATE":
@@ -192,7 +199,9 @@ class EnhancedProvisioningService:
         Handle provisioning in both systems with consistency.
         Uses a basic two-phase commit approach (best effort).
         """
-        result = ProvisioningResult(success=False, mode=ProvisioningMode.DUAL_PROV, operation=operation, uid=data.uid)
+        result = ProvisioningResult(
+            success=False, mode=ProvisioningMode.DUAL_PROV, operation=operation, uid=data.uid
+        )
         legacy_conn = None
 
         try:
@@ -204,7 +213,10 @@ class EnhancedProvisioningService:
 
             with legacy_conn.cursor() as cursor:
                 if operation == "CREATE":
-                    item_dict = {k: v for k, v in asdict(data).items() if v is not None}
+                    # F821 Fix: Added import for asdict
+                    item_dict = {
+                        k: v for k, v in asdict(data).items() if v is not None
+                    }
                     sql = "INSERT INTO subscribers_enhanced (uid, imsi, msisdn, status, ...) VALUES (%s, %s, ...)"
                     cursor.execute(sql, (item_dict["uid"], item_dict["imsi"], ...))
                 elif operation == "UPDATE":
@@ -294,10 +306,16 @@ class EnhancedProvisioningService:
         )
 
         # Apply specific field validations and transformations
-        validated["uid"] = self.validator.sanitize_string(validated["uid"], 50, "uid")
-        validated["imsi"] = self.validator.sanitize_string(validated["imsi"], 15, "imsi")
+        validated["uid"] = self.validator.sanitize_string(
+            validated["uid"], 50, "uid"
+        )
+        validated["imsi"] = self.validator.sanitize_string(
+            validated["imsi"], 15, "imsi"
+        )
         if "msisdn" in validated:
-            validated["msisdn"] = self.validator.sanitize_string(validated["msisdn"], 15, "msisdn")
+            validated["msisdn"] = self.validator.sanitize_string(
+                validated["msisdn"], 15, "msisdn"
+            )
 
         # Handle BarringControls if present
         if "odbic" in validated or "odboc" in validated:
@@ -328,13 +346,16 @@ class EnhancedProvisioningService:
 
     def _prepare_dynamodb_item(self, data: SubscriberData) -> Dict:
         """Convert SubscriberData dataclass to a DynamoDB-compatible dictionary."""
+        # F821 Fix: Added import for asdict
         item_dict = asdict(data)
 
         # Map uid to subscriberId for DynamoDB primary key
         item_dict["subscriberId"] = item_dict.pop("uid")
 
         # Flatten nested structures like BarringControls
-        if "barring_controls" in item_dict and isinstance(item_dict["barring_controls"], BarringControls):
+        if "barring_controls" in item_dict and isinstance(
+            item_dict["barring_controls"], BarringControls
+        ):
             barring = item_dict.pop("barring_controls")
             item_dict["odbic"] = barring.odbic
             item_dict["odboc"] = barring.odboc

@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Migration Routes - RDS to DynamoDB Migration API Endpoints
-Integrates with your existing portal architecture
-"""
-
 import logging
 from datetime import datetime
 

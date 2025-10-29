@@ -1,11 +1,3 @@
-# backend/src/controllers/migration.controller.py
-
-#!/usr/bin/env python3
-"""
-Migration Controller - RDS to DynamoDB Migration Operations
-Handles: Create, Monitor, and Manage migration jobs with Step Functions integration
-"""
-
 from datetime import datetime
 
 from flask import g, make_response, request

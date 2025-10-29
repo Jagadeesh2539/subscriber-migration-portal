@@ -1,24 +1,19 @@
-# backend/src/services/csv_migration.service.py
-
 #!/usr/bin/env python3
-"""
-CSV Migration Service - Handles bulk data migration from CSV files
-Supports: Legacy -> Cloud, Cloud -> Legacy, External -> Cloud
-"""
+# CSV Migration Service - Handles bulk data migration from CSV files
+# Supports: Legacy -> Cloud, Cloud -> Legacy, External -> Cloud
 
 import csv
 import io
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List, Optional  # Added Optional
 
 from config.database import get_dynamodb_table
 from services.audit.service import AuditService
 from utils.logger import get_logger
-from utils.validation import InputValidator
+# Added ValidationError back
+from utils.validation import InputValidator, ValidationError
 
 logger = get_logger(__name__)
 
@@ -277,6 +272,9 @@ class CSVMigrationService:
                 if value is not None:
                     placeholder = f":{key}"
                     update_expression += f", #{key} = {placeholder}"
+                    # Ensure value is JSON serializable (e.g., handle sets if they appear)
+                    if isinstance(value, set):
+                        value = list(value)
                     expression_values[placeholder] = value
                     expression_names[f"#{key}"] = key
 
@@ -295,16 +293,15 @@ class CSVMigrationService:
     def _update_job_progress(self, job_id: str, **kwargs):
         """
         Update the progress counters for a migration job.
-        Uses UpdateItem with Add action for atomic increments.
+        Uses UpdateItem SET action for absolute counts.
         """
         try:
             update_expression = "SET updated_at = :updated_at"
             expression_values = {":updated_at": datetime.utcnow().isoformat()}
             expression_names = {}
 
-            # Handle atomic increments/decrements if needed, otherwise SET
             set_actions = []
-            add_actions = []
+            # F841 Fix: Removed unused add_actions = []
 
             for key, value in kwargs.items():
                 if value is not None:
@@ -312,31 +309,15 @@ class CSVMigrationService:
                     attr_name_placeholder = f"#{key}"
                     expression_names[attr_name_placeholder] = key
 
-                    # Determine if it's a counter to ADD or a value to SET
-                    if key in [
-                        "processed_records",
-                        "successful_records",
-                        "failed_records",
-                    ]:
-                        # Use ADD for counters if value represents an increment
-                        # If the value is the absolute count, use SET
-                        # Assuming kwargs provides absolute counts here based on previous usage
-                        set_actions.append(f"{attr_name_placeholder} = {placeholder}")
-                        expression_values[placeholder] = int(value)
-                    elif key == "total_records":
-                        set_actions.append(f"{attr_name_placeholder} = {placeholder}")
+                    # Use SET for all progress counters assuming absolute values
+                    set_actions.append(f"{attr_name_placeholder} = {placeholder}")
+                    if key in ["total_records", "processed_records", "successful_records", "failed_records"]:
                         expression_values[placeholder] = int(value)
                     else:
-                        # For other fields like error_log, start_time, end_time - use SET
-                        set_actions.append(f"{attr_name_placeholder} = {placeholder}")
-                        expression_values[placeholder] = value
+                        expression_values[placeholder] = value  # For non-numeric like error_log
 
             if set_actions:
                 update_expression += ", " + ", ".join(set_actions)
-
-            # If ADD actions were used, append them
-            # if add_actions:
-            #     update_expression += " ADD " + ", ".join(add_actions)
 
             self.jobs_table.update_item(
                 Key={"job_id": job_id},
