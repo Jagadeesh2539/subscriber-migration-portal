@@ -1,3 +1,5 @@
+# backend/src/controllers/migration.controller.py
+
 #!/usr/bin/env python3
 """
 Migration Controller - RDS to DynamoDB Migration Operations
@@ -5,9 +7,8 @@ Handles: Create, Monitor, and Manage migration jobs with Step Functions integrat
 """
 
 from datetime import datetime
-from typing import Any, Dict
 
-from flask import g, request
+from flask import g, make_response, request
 from services.audit.service import AuditService
 from services.rds_migration.service import RDSMigrationService
 from utils.logger import get_logger
@@ -264,8 +265,6 @@ class MigrationController:
             )
 
             # Return file download response
-            from flask import make_response
-
             response = make_response(result["content"])
 
             # Set appropriate content type and filename
