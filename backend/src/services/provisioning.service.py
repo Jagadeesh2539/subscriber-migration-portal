@@ -2,10 +2,9 @@
 # Provisioning Service - Base Logic for Subscriber CRUD Operations
 # Handles interaction with Legacy (MySQL) and Cloud (DynamoDB) based on mode
 
-# Removed unused logging import
 from datetime import datetime
 from enum import Enum
-# Removed unused List, Tuple; Added Dict, Optional for F821 Fix
+# F401/F811/F821 Fix: Corrected typing imports
 from typing import Dict, Optional
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
@@ -32,16 +31,16 @@ class ProvisioningResult:
         success: bool,
         mode: ProvisioningMode,
         operation: str,
-        # F821 Fix: Added Optional import
+        # F821 Fix: Ensured Optional is imported
         uid: Optional[str] = None,
-        # F821 Fix: Added Optional import
+        # F821 Fix: Ensured Optional is imported
         message: Optional[str] = None,
-        # F821 Fix: Added Optional import
+        # F821 Fix: Ensured Optional is imported
         legacy_status: Optional[str] = None,
-        # F821 Fix: Added Optional import
+        # F821 Fix: Ensured Optional is imported
         cloud_status: Optional[str] = None,
         duration_ms: int = 0,
-        # F821 Fix: Added Optional import
+        # F821 Fix: Ensured Optional is imported
         timestamp: Optional[str] = None,
     ):
         self.success = success
@@ -54,7 +53,6 @@ class ProvisioningResult:
         self.duration_ms = duration_ms
         self.timestamp = timestamp or datetime.utcnow().isoformat()
 
-    # F821 Fix: Added Dict import
     def to_dict(self) -> Dict:
         return {
             "success": self.success,
@@ -77,7 +75,6 @@ class ProvisioningService:
         self.audit_service = AuditService()
         self.validator = InputValidator()
 
-    # F821 Fix: Added Dict import
     def provision_subscriber(
         self,
         mode: ProvisioningMode,
@@ -108,7 +105,9 @@ class ProvisioningService:
             else:
                 raise ValueError(f"Unsupported provisioning mode: {mode}")
 
-            result.duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            result.duration_ms = int(
+                (datetime.utcnow() - start_time).total_seconds() * 1000
+            )
             result.timestamp = start_time.isoformat()
 
             # Audit logging
@@ -126,12 +125,15 @@ class ProvisioningService:
             )
             result.success = False
             result.message = f"Provisioning failed: {str(e)}"
-            result.duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            result.duration_ms = int(
+                (datetime.utcnow() - start_time).total_seconds() * 1000
+            )
             result.timestamp = start_time.isoformat()
-            self._log_provision_audit(created_by, result, is_error=True, error_message=str(e))
+            self._log_provision_audit(
+                created_by, result, is_error=True, error_message=str(e)
+            )
             return result
 
-    # F821 Fix: Added Dict import
     def _provision_legacy(self, data: Dict, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the legacy system (MySQL)."""
         result = ProvisioningResult(
@@ -142,7 +144,7 @@ class ProvisioningService:
                 with conn.cursor() as cursor:
                     if operation == "CREATE":
                         # Basic INSERT example - needs field mapping
-                        # E501 Fix: Broke line
+                        # E501 Fix: Broke the long SQL string
                         sql = (
                             "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) "
                             "VALUES (%s, %s, %s, %s, NOW(), NOW())"
@@ -179,7 +181,6 @@ class ProvisioningService:
             result.message = f"Legacy operation failed: {str(e)}"
         return result
 
-    # F821 Fix: Added Dict import
     def _provision_cloud(self, data: Dict, operation: str) -> ProvisioningResult:
         """Handle provisioning only in the cloud system (DynamoDB)."""
         result = ProvisioningResult(
@@ -215,7 +216,6 @@ class ProvisioningService:
             result.message = f"Cloud operation failed: {str(e)}"
         return result
 
-    # F821 Fix: Added Dict import
     def _provision_dual(self, data: Dict, operation: str) -> ProvisioningResult:
         """
         Handle provisioning in both systems with best-effort consistency.
@@ -236,7 +236,7 @@ class ProvisioningService:
 
             with legacy_conn.cursor() as cursor:
                 if operation == "CREATE":
-                    # E501 Fix: Broke line
+                    # E501 Fix: Broke the long SQL string
                     sql = (
                         "INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at) "
                         "VALUES (%s, %s, %s, %s, NOW(), NOW())"
@@ -305,7 +305,6 @@ class ProvisioningService:
                     )
                     result.legacy_status = f"ROLLBACK_FAILED: {str(rollback_err)}"
                     result.message += " CRITICAL: Legacy DB rollback failed!"
-            # E111/E117 Fix: Corrected indentation
             elif legacy_conn:  # Connection opened but operation not attempted
                 result.legacy_status = "NOT_ATTEMPTED_DUE_TO_ERROR"
             else:  # Connection failed
@@ -317,7 +316,6 @@ class ProvisioningService:
 
         return result
 
-    # E303 Fix: Reduced blank lines
     def _log_provision_audit(
         self, user: str, result: ProvisioningResult, is_error: bool = False, error_message: str = None
     ):
@@ -340,7 +338,9 @@ class ProvisioningService:
         elif result.message:
             details["message"] = result.message
 
-        self.audit_service.log_action(action=action, resource="subscriber", user=user, details=details, status=status)
+        self.audit_service.log_action(
+            action=action, resource="subscriber", user=user, details=details, status=status
+        )
 
 
 # Instantiate service
