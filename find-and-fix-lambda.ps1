@@ -75,40 +75,47 @@ try {
     Write-Host "`n🔧 Updating Lambda function: $functionName" -ForegroundColor Green
     
     # Check if lambda-package.zip exists
-    if (!(Test-Path "lambda-package.zip")) {
+    if (!(Test-Path "backend\lambda-package.zip")) {
         Write-Host "📦 Creating Lambda package..." -ForegroundColor Yellow
         
         # Clean up previous builds
-        if (Test-Path "lambda-package") { Remove-Item -Recurse -Force "lambda-package" }
-        if (Test-Path "lambda-package.zip") { Remove-Item -Force "lambda-package.zip" }
+        if (Test-Path "backend\lambda-package") { Remove-Item -Recurse -Force "backend\lambda-package" }
+        if (Test-Path "backend\lambda-package.zip") { Remove-Item -Force "backend\lambda-package.zip" }
         
         # Create package directory
-        New-Item -ItemType Directory -Name "lambda-package" -Force | Out-Null
+        New-Item -ItemType Directory -Path "backend\lambda-package" -Force | Out-Null
         
         # Copy application files
-        Copy-Item "app.py" "lambda-package/"
-        Get-ChildItem "*.py" | Copy-Item -Destination "lambda-package/" -ErrorAction SilentlyContinue
+        Copy-Item "backend\app.py" "backend\lambda-package\"
+        Get-ChildItem "backend\*.py" | Copy-Item -Destination "backend\lambda-package\" -ErrorAction SilentlyContinue
         
         # Install dependencies
         Write-Host "📥 Installing Python dependencies..." -ForegroundColor Yellow
-        pip install -r requirements.txt -t lambda-package/
+        Set-Location "backend"
+        pip install -r requirements.txt -t lambda-package\
         
         # Create ZIP
         Write-Host "🗜️ Creating ZIP package..." -ForegroundColor Yellow
         Set-Location "lambda-package"
-        & 7z a -tzip "..\lambda-package.zip" "*" -r | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        
+        # Try 7zip first, fallback to PowerShell compression
+        try {
+            & 7z a -tzip "..\lambda-package.zip" "*" -r | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7zip failed" }
+        } catch {
             # Fallback to PowerShell compression
             Set-Location ..
             Compress-Archive -Path "lambda-package\*" -DestinationPath "lambda-package.zip" -Force
-        } else {
-            Set-Location ..
         }
+        
+        Set-Location ..
+        Set-Location ..
     }
     
     # Update Lambda function code
     Write-Host "🚀 Updating Lambda function code..." -ForegroundColor Green
-    aws lambda update-function-code --region ap-south-1 --function-name "$functionName" --zip-file fileb://lambda-package.zip
+    Set-Location "backend"
+    $updateResult = aws lambda update-function-code --region ap-south-1 --function-name "$functionName" --zip-file fileb://lambda-package.zip
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "⏳ Waiting for update to complete..." -ForegroundColor Yellow
@@ -124,7 +131,8 @@ try {
         aws lambda invoke --region ap-south-1 --function-name "$functionName" --payload "{}" response1.json
         
         Write-Host "Response:" -ForegroundColor White
-        Get-Content response1.json | ConvertFrom-Json | ConvertTo-Json -Depth 4
+        $response1 = Get-Content response1.json | ConvertFrom-Json
+        $response1 | ConvertTo-Json -Depth 4
         
         # Test health check
         Write-Host "`nTesting health check..." -ForegroundColor Cyan
@@ -134,31 +142,36 @@ try {
             headers = @{
                 "Content-Type" = "application/json"
             }
-        } | ConvertTo-Json -Depth 3
+        } | ConvertTo-Json -Depth 3 -Compress
         
-        [System.IO.File]::WriteAllText("health-payload.json", $healthPayload)
+        $healthPayload | Out-File -FilePath "health-payload.json" -Encoding utf8
         aws lambda invoke --region ap-south-1 --function-name "$functionName" --payload file://health-payload.json response2.json
         
         Write-Host "Response:" -ForegroundColor White
-        Get-Content response2.json | ConvertFrom-Json | ConvertTo-Json -Depth 4
+        $response2 = Get-Content response2.json | ConvertFrom-Json
+        $response2 | ConvertTo-Json -Depth 4
         
         # Clean up
         Remove-Item -Force response1.json, response2.json, health-payload.json -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force lambda-package -ErrorAction SilentlyContinue
         Remove-Item -Force lambda-package.zip -ErrorAction SilentlyContinue
         
+        Set-Location ..
+        
         Write-Host "`n✅ Lambda function updated successfully!" -ForegroundColor Green
         Write-Host "🔍 The KeyError: 'headers' issue has been fixed." -ForegroundColor Green
         
         # Show function info
-        $functionInfo = aws lambda get-function --region ap-south-1 --function-name "$functionName" --query 'Configuration.{Handler:Handler,Runtime:Runtime,LastModified:LastModified}' --output json | ConvertFrom-Json
         Write-Host "`n📋 Function Details:" -ForegroundColor Yellow
+        $functionInfo = aws lambda get-function --region ap-south-1 --function-name "$functionName" --query 'Configuration.{Handler:Handler,Runtime:Runtime,LastModified:LastModified}' --output json | ConvertFrom-Json
         Write-Host "  • Handler: $($functionInfo.Handler)" -ForegroundColor White
         Write-Host "  • Runtime: $($functionInfo.Runtime)" -ForegroundColor White
         Write-Host "  • Last Modified: $($functionInfo.LastModified)" -ForegroundColor White
         
     } else {
+        Set-Location ..
         Write-Host "❌ Failed to update Lambda function" -ForegroundColor Red
+        Write-Host "Error details: $updateResult" -ForegroundColor Red
     }
     
 } catch {
