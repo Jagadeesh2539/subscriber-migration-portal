@@ -131,8 +131,8 @@ def get_migration_status(job_id):
         },
         "execution_status": "RUNNING",
         "error_summary": [],
-        "cursor": {"last_id": 7500}
-    }
+            "cursor": {"last_id": 7500}
+        }
     """
     return MigrationController.get_migration_status(job_id)
 
