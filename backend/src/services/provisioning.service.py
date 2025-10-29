@@ -713,6 +713,8 @@ class ProvisioningService:
         finally:
             connection.close()
     
+# ... all existing content ...
+
     def _log_provisioning_operation(self, operation: str, uid: str, 
                                    mode: ProvisioningMode, result: ProvisioningResult):
         """Log provisioning operation for audit"""
@@ -727,11 +729,12 @@ class ProvisioningService:
                     'success': result.success,
                     'operations': result.operations_performed,
                     'errors': result.errors,
-                    'rollback_performed': result.rollback_performed
+                    'rollback_performed': result.rollback_performed,
                 }
             )
         except Exception as e:
             logger.error(f"Failed to log provisioning operation: {str(e)}")
+
 
 # Export service instance
 provisioning_service = ProvisioningService()
