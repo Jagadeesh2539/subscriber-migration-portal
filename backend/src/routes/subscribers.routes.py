@@ -7,6 +7,7 @@ Handles all subscriber-related HTTP routes with dual database support
 from flask import Blueprint
 from middleware.auth import require_auth
 from middleware.rate_limiter import rate_limit
+
 from controllers.subscribers.controller import SubscriberController
 
 # Create blueprint

@@ -4,36 +4,36 @@ Subscriber Migration Portal - SECURITY HARDENED Production Backend
 Addresses: Authentication, Input Validation, Secrets Management, Error Handling
 """
 
-import os
+import csv
+import hashlib
+import html
+import io
 import json
 import logging
+import os
+import re
+import secrets
 import traceback
 import uuid
-import csv
-import io
-import re
-import hashlib
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Any, Union
-from functools import wraps
 from decimal import Decimal
-import secrets
-import html
+from functools import wraps
+from typing import Any, Dict, List, Optional, Union
 
 import boto3
 import jwt
 import pymysql
-from flask import Flask, request, jsonify, g, make_response
+from botocore.exceptions import ClientError
+from cryptography.fernet import Fernet
+from flask import Flask, g, jsonify, make_response, request
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_talisman import Talisman
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
-from werkzeug.exceptions import BadRequest, Unauthorized, Forbidden
-from botocore.exceptions import ClientError
 from serverless_wsgi import handle_request
-from cryptography.fernet import Fernet
+from werkzeug.exceptions import BadRequest, Forbidden, Unauthorized
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 # Configure secure logging
 class SecureFormatter(logging.Formatter):

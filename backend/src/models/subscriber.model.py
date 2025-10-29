@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Subscriber Model - Enhanced with planId, barring controls, addons, services
+Enhanced Subscriber Model - Rich Data Structure
 Supports rich subscriber data structure for RDS and DynamoDB
 """
 
-from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional, Any, Union
+import json
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from decimal import Decimal
-import json
+from typing import Any, Dict, List, Optional, Union
+
 
 @dataclass
 class BarringControls:

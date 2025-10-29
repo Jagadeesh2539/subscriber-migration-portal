@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-CSV Migration Service - Handles CSV-based subscriber migration
-Implements automatic identifier detection and Migration ID tracking as per specs
+CSV Migration Service - Handles CSV file upload, validation, and processing
+Supports batch operations with detailed reporting and error handling
 """
 
 import csv
 import io
-import uuid
 import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Tuple
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
+from services.audit.service import AuditService
 from utils.logger import get_logger
 from utils.validation import InputValidator
-from services.audit.service import AuditService
 
 logger = get_logger(__name__)
 

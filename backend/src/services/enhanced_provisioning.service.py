@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Enhanced Provisioning Service - Rich subscriber data with dual provisioning
-Supports planId, barring controls, addons, services with atomic operations
+Enhanced Provisioning Service - Rich subscriber provisioning with plan support
+Supports planId, barring controls, addons, and services provisioning
 """
 
 import json
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
 from decimal import Decimal
+from typing import Any, Dict, List, Optional, Union
 
 from config.database import get_dynamodb_table, get_legacy_db_connection
-from models.subscriber.model import SubscriberData, BarringControls
+from models.subscriber.model import BarringControls, SubscriberData
+from services.audit.service import AuditService
 from services.provisioning.service import ProvisioningMode, ProvisioningResult
 from utils.logger import get_logger
 from utils.validation import InputValidator
-from services.audit.service import AuditService
 
 logger = get_logger(__name__)
 

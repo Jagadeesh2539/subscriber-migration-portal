@@ -7,16 +7,16 @@ Handles: Create, Read, Update, Delete operations across Cloud (DynamoDB) and Leg
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
-from flask import request, jsonify, g
 from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
-from services.subscribers.service import SubscriberService
+from flask import g, jsonify, make_response, request
 from services.audit.service import AuditService
-from utils.validation import InputValidator, ValidationError
-from utils.response import create_response, create_error_response
+from services.subscribers.service import SubscriberService
 from utils.logger import get_logger
 from utils.pagination import paginate_results
+from utils.response import create_error_response, create_response
+from utils.validation import InputValidator, ValidationError
 
 logger = get_logger(__name__)
 subscriber_service = SubscriberService()

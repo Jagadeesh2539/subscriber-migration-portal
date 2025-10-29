@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Migration Controller - RDS to DynamoDB Migration Management
-Handles: Job creation, monitoring, control, and validation
+Migration Controller - RDS to DynamoDB Migration Operations
+Handles: Create, Monitor, and Manage migration jobs with Step Functions integration
 """
 
 import json
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from flask import request, jsonify, g
+from typing import Any, Dict, List, Optional
 
-from services.rds_migration.service import RDSMigrationService
+from flask import g, jsonify, request
 from services.audit.service import AuditService
-from utils.validation import InputValidator, ValidationError
-from utils.response import create_response, create_error_response
+from services.rds_migration.service import RDSMigrationService
 from utils.logger import get_logger
+from utils.response import create_error_response, create_response
+from utils.validation import InputValidator, ValidationError
 
 logger = get_logger(__name__)
 migration_service = RDSMigrationService()
