@@ -11,7 +11,6 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from flask import g, jsonify, make_response, request
-
 from services.audit.service import AuditService
 from services.subscribers.service import SubscriberService
 from utils.logger import get_logger
