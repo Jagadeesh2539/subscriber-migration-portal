@@ -195,7 +195,7 @@ class EnhancedRDSMigrationService:
                        barr_all, odbic, odboc, addons, services,
                        apn, service_profile, roaming_allowed, data_limit,
                        created_at, updated_at
-                FROM subscribers 
+                FROM subscribers
                 WHERE uid = %s AND status != 'DELETED'
                 """
 

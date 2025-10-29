@@ -423,7 +423,7 @@ class ProvisioningService:
 
                 # Insert new subscriber
                 insert_query = """
-                INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at, 
+                INSERT INTO subscribers (uid, imsi, msisdn, status, created_at, updated_at,
                                        apn, service_profile, roaming_allowed)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
