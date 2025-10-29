@@ -4,11 +4,10 @@ Subscriber Routes - API Endpoints for Subscriber Management
 Handles all subscriber-related HTTP routes with dual database support
 """
 
+from controllers.subscribers.controller import SubscriberController
 from flask import Blueprint
 from middleware.auth import require_auth
 from middleware.rate_limiter import rate_limit
-
-from controllers.subscribers.controller import SubscriberController
 
 # Create blueprint
 subscriber_bp = Blueprint('subscribers', __name__, url_prefix='/api/subscribers')

@@ -7,16 +7,12 @@ Integrates with your existing portal architecture
 import logging
 from datetime import datetime
 
+from controllers.migration.controller import MigrationController
 from flask import Blueprint, request
 from middleware.auth import require_auth
 from middleware.rate_limiter import rate_limit
 
-from controllers.migration.controller import MigrationController
-
 logger = logging.getLogger(__name__)
-
-# Create blueprint
-migration_bp = Blueprint('migration', __name__, url_prefix='/api/migration')
 
 # RDS to DynamoDB Migration Routes
 @migration_bp.route('/rds-to-dynamo', methods=['POST'])
