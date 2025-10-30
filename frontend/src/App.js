@@ -1,69 +1,216 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { ErrorBoundary } from 'react-error-boundary';
+import { Toaster } from 'react-hot-toast';
 import {
   AppBar, Toolbar, Typography, Button, Container, Box, Drawer, List, ListItem, ListItemIcon, ListItemText,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress, Divider,
-  Badge, Avatar, Menu, MenuItem, Tooltip, useTheme, useMediaQuery
+  Badge, Avatar, Menu, MenuItem, Tooltip, useTheme, useMediaQuery, Skeleton,
+  ThemeProvider, createTheme, CssBaseline, Alert, Fade, LinearProgress
 } from '@mui/material';
 import {
   People, CloudUpload, Analytics as AnalyticsIcon, Settings, Logout, Menu as MenuIcon, Dashboard as DashboardIcon,
-  Storage, NotificationsActive, AccountBox, Help, Close
+  Storage, NotificationsActive, AccountBox, Help, Close, Brightness4, Brightness7, Refresh
 } from '@mui/icons-material';
 
-// Components (existing and new routes)
-import Login from './auth/Login';
-import SubscriberProvision from './provisioning/SubscriberProvision';
-import BulkMigration from './migration/BulkMigration';
+// Enhanced imports with lazy loading
+const Login = React.lazy(() => import('./auth/Login'));
+const SubscriberProvision = React.lazy(() => import('./provisioning/SubscriberProvision'));
+const BulkMigration = React.lazy(() => import('./migration/BulkMigration'));
 
-// Enterprise Dashboard Components (placeholders - will be created as needed)
-const Dashboard = () => (
+// API and hooks
+import { queryConfig } from './api/apiClient';
+import { useDashboardStats, useSystemHealth, usePrefetchQueries } from './hooks/useApiQueries';
+
+// Enhanced theme configuration
+const createAppTheme = (mode) => createTheme({
+  palette: {
+    mode,
+    primary: {
+      main: '#1976d2',
+      light: '#42a5f5',
+      dark: '#1565c0',
+    },
+    secondary: {
+      main: '#dc004e',
+    },
+    background: {
+      default: mode === 'light' ? '#f5f5f5' : '#121212',
+      paper: mode === 'light' ? '#ffffff' : '#1e1e1e',
+    },
+  },
+  typography: {
+    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+    h6: {
+      fontWeight: 600,
+    },
+  },
+  components: {
+    MuiAppBar: {
+      styleOverrides: {
+        root: {
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        },
+      },
+    },
+    MuiDrawer: {
+      styleOverrides: {
+        paper: {
+          borderRight: '1px solid rgba(0, 0, 0, 0.12)',
+        },
+      },
+    },
+  },
+});
+
+// Create Query Client with enhanced configuration
+const queryClient = new QueryClient(queryConfig);
+
+// Error Fallback Component
+const ErrorFallback = ({ error, resetErrorBoundary }) => {
+  return (
+    <Container maxWidth="sm" sx={{ mt: 8, textAlign: 'center' }}>
+      <Box sx={{ p: 4, border: '1px solid #f44336', borderRadius: 2, bgcolor: 'error.light', color: 'error.contrastText' }}>
+        <Typography variant="h5" gutterBottom>🚨 Application Error</Typography>
+        <Typography variant="body1" gutterBottom>{error.message}</Typography>
+        <Button variant="contained" onClick={resetErrorBoundary} sx={{ mt: 2 }}>
+          <Refresh sx={{ mr: 1 }} /> Try Again
+        </Button>
+      </Box>
+    </Container>
+  );
+};
+
+// Loading Skeleton Component
+const LoadingSkeleton = () => (
   <Box sx={{ p: 3 }}>
-    <Typography variant="h4" gutterBottom>📊 Enterprise Dashboard</Typography>
-    <Typography>System metrics, subscriber stats, and operational insights will be displayed here.</Typography>
+    <Skeleton variant="text" width="60%" height={40} />
+    <Skeleton variant="rectangular" width="100%" height={200} sx={{ my: 2 }} />
+    <Skeleton variant="text" width="80%" />
+    <Skeleton variant="text" width="40%" />
   </Box>
 );
 
+// Enhanced Dashboard with real data
+const Dashboard = () => {
+  const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats();
+  const { data: health, isLoading: healthLoading } = useSystemHealth();
+  
+  if (statsLoading || healthLoading) return <LoadingSkeleton />;
+  
+  if (statsError) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">Failed to load dashboard data: {statsError.message}</Alert>
+      </Box>
+    );
+  }
+  
+  return (
+    <Box sx={{ p: 3 }}>
+      <Typography variant="h4" gutterBottom>📊 Enterprise Dashboard</Typography>
+      
+      {health && (
+        <Alert 
+          severity={health.status === 'healthy' ? 'success' : 'warning'} 
+          sx={{ mb: 3 }}
+        >
+          System Status: {health.status?.toUpperCase()} | Last Updated: {new Date(health.lastUpdated).toLocaleString()}
+        </Alert>
+      )}
+      
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 2, mb: 3 }}>
+        <Box sx={{ p: 2, bgcolor: 'primary.light', color: 'primary.contrastText', borderRadius: 2 }}>
+          <Typography variant="h6">Total Subscribers</Typography>
+          <Typography variant="h4">{stats?.totalSubscribers?.toLocaleString() || 0}</Typography>
+        </Box>
+        <Box sx={{ p: 2, bgcolor: 'secondary.light', color: 'secondary.contrastText', borderRadius: 2 }}>
+          <Typography variant="h6">Cloud Subscribers</Typography>
+          <Typography variant="h4">{stats?.cloudSubscribers?.toLocaleString() || 0}</Typography>
+        </Box>
+        <Box sx={{ p: 2, bgcolor: 'success.light', color: 'success.contrastText', borderRadius: 2 }}>
+          <Typography variant="h6">Provisioning Mode</Typography>
+          <Typography variant="h4">{stats?.provisioningMode?.toUpperCase() || 'CLOUD'}</Typography>
+        </Box>
+      </Box>
+      
+      <Typography variant="body1" color="text.secondary">
+        Real-time system metrics, subscriber statistics, and operational insights.
+      </Typography>
+    </Box>
+  );
+};
+
+// Enhanced placeholder components with consistent styling
 const BulkOperations = () => (
   <Box sx={{ p: 3 }}>
     <Typography variant="h4" gutterBottom>⚡ Bulk Operations</Typography>
-    <Typography>Advanced bulk operations for subscriber management will be displayed here.</Typography>
+    <Alert severity="info" sx={{ mb: 2 }}>
+      Advanced bulk operations for subscriber management coming soon.
+    </Alert>
+    <Typography>Features include: batch updates, mass imports, data validation, and progress tracking.</Typography>
   </Box>
 );
 
 const Analytics = () => (
   <Box sx={{ p: 3 }}>
     <Typography variant="h4" gutterBottom>📈 Analytics & Reporting</Typography>
-    <Typography>Advanced analytics, charts, and reports will be displayed here.</Typography>
+    <Alert severity="info" sx={{ mb: 2 }}>
+      Advanced analytics dashboard with interactive charts coming soon.
+    </Alert>
+    <Typography>Features include: performance metrics, usage analytics, trend analysis, and custom reports.</Typography>
   </Box>
 );
 
-const SystemMonitoring = () => (
-  <Box sx={{ p: 3 }}>
-    <Typography variant="h4" gutterBottom>🔍 System Monitoring</Typography>
-    <Typography>Real-time system health, performance metrics, and alerts will be displayed here.</Typography>
-  </Box>
-);
+const SystemMonitoring = () => {
+  const { data: systemStatus, isLoading } = useSystemHealth();
+  
+  if (isLoading) return <LoadingSkeleton />;
+  
+  return (
+    <Box sx={{ p: 3 }}>
+      <Typography variant="h4" gutterBottom>🔍 System Monitoring</Typography>
+      {systemStatus && (
+        <Alert severity={systemStatus.status === 'healthy' ? 'success' : 'warning'} sx={{ mb: 2 }}>
+          Current Status: {systemStatus.status?.toUpperCase()}
+        </Alert>
+      )}
+      <Typography>Real-time system health, performance metrics, alerts, and infrastructure monitoring.</Typography>
+    </Box>
+  );
+};
 
 const UserManagement = () => (
   <Box sx={{ p: 3 }}>
     <Typography variant="h4" gutterBottom>👥 User Management</Typography>
-    <Typography>User roles, permissions, and access control will be displayed here.</Typography>
+    <Alert severity="info" sx={{ mb: 2 }}>
+      Comprehensive user and role management system coming soon.
+    </Alert>
+    <Typography>Features include: user roles, permissions, access control, audit trails, and SSO integration.</Typography>
   </Box>
 );
 
 const SystemSettings = () => (
   <Box sx={{ p: 3 }}>
     <Typography variant="h4" gutterBottom>⚙️ System Settings</Typography>
-    <Typography>Configuration, provisioning modes, and system preferences will be displayed here.</Typography>
+    <Alert severity="info" sx={{ mb: 2 }}>
+      Advanced system configuration panel coming soon.
+    </Alert>
+    <Typography>Features include: provisioning modes, API settings, security policies, and integration configs.</Typography>
   </Box>
 );
 
-// Logout Confirmation Modal
+// Enhanced Confirmation Modal
 const LogoutConfirmModal = ({ open, handleClose, handleConfirm }) => (
-  <Dialog open={open} onClose={handleClose}>
+  <Dialog open={open} onClose={handleClose} maxWidth="xs" fullWidth>
     <DialogTitle>🚪 Confirm Logout</DialogTitle>
     <DialogContent dividers>
       <Typography>Are you sure you want to log out of the Enterprise Portal?</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+        You will need to log in again to access your account.
+      </Typography>
     </DialogContent>
     <DialogActions>
       <Button onClick={handleClose}>Cancel</Button>
@@ -72,7 +219,7 @@ const LogoutConfirmModal = ({ open, handleClose, handleConfirm }) => (
   </Dialog>
 );
 
-// Enterprise Navigation Menu Configuration
+// Enhanced Navigation Configuration with permissions
 const navigationConfig = [
   { path: '/dashboard', label: 'Dashboard', icon: <DashboardIcon />, roles: ['admin', 'operator', 'guest'] },
   { path: '/provision', label: 'Provisioning', icon: <People />, roles: ['admin', 'operator'] },
@@ -84,8 +231,8 @@ const navigationConfig = [
   { path: '/settings', label: 'Settings', icon: <Settings />, roles: ['admin'] },
 ];
 
-// User Profile Menu
-const UserProfileMenu = ({ auth, anchorEl, onClose, onLogout }) => (
+// Enhanced User Profile Menu
+const UserProfileMenu = ({ auth, anchorEl, onClose, onLogout, onThemeToggle, darkMode }) => (
   <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={onClose}>
     <MenuItem disabled>
       <Box>
@@ -94,6 +241,12 @@ const UserProfileMenu = ({ auth, anchorEl, onClose, onLogout }) => (
       </Box>
     </MenuItem>
     <Divider />
+    <MenuItem onClick={onThemeToggle}>
+      <ListItemIcon>
+        {darkMode ? <Brightness7 fontSize="small" /> : <Brightness4 fontSize="small" />}
+      </ListItemIcon>
+      <ListItemText>{darkMode ? 'Light Mode' : 'Dark Mode'}</ListItemText>
+    </MenuItem>
     <MenuItem onClick={onLogout}>
       <ListItemIcon><Logout fontSize="small" /></ListItemIcon>
       <ListItemText>Logout</ListItemText>
@@ -101,42 +254,64 @@ const UserProfileMenu = ({ auth, anchorEl, onClose, onLogout }) => (
   </Menu>
 );
 
+// Main App Component
 function App() {
   const [auth, setAuth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [profileMenuAnchor, setProfileMenuAnchor] = useState(null);
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    return saved ? JSON.parse(saved) : false;
+  });
   
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const location = useLocation();
   const navigate = useNavigate();
+  const { prefetchDashboard, prefetchSubscribers } = usePrefetchQueries();
   
   const drawerWidth = 280;
+  const appTheme = createAppTheme(darkMode ? 'dark' : 'light');
 
+  // Enhanced authentication check
   useEffect(() => {
     const token = localStorage.getItem('token');
     const user = localStorage.getItem('user');
+    
     if (token && user) {
       try {
-        setAuth(JSON.parse(user));
+        const userData = JSON.parse(user);
+        setAuth(userData);
+        
+        // Prefetch dashboard data for better UX
+        prefetchDashboard();
+        prefetchSubscribers();
       } catch (e) {
+        console.error('Invalid user data:', e);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
       }
     }
     setLoading(false);
-  }, []);
+  }, [prefetchDashboard, prefetchSubscribers]);
 
-  // Auto-close drawer on mobile after navigation (Fixed: added missing dependency)
+  // Auto-close drawer on mobile after navigation
   useEffect(() => {
     if (isMobile && drawerOpen) {
       setDrawerOpen(false);
     }
   }, [location.pathname, isMobile, drawerOpen]);
 
+  // Save dark mode preference
+  useEffect(() => {
+    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+  }, [darkMode]);
+
   const toggleDrawer = () => setDrawerOpen(!drawerOpen);
+  const toggleTheme = () => setDarkMode(!darkMode);
+  
   const handleLogoutClick = () => {
     setProfileMenuAnchor(null);
     setIsLogoutModalOpen(true);
@@ -145,6 +320,7 @@ function App() {
   const handleConfirmLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    queryClient.clear(); // Clear React Query cache
     setAuth(null);
     setIsLogoutModalOpen(false);
     navigate('/login');
@@ -155,31 +331,59 @@ function App() {
     !auth || item.roles.includes(auth.role)
   );
 
+  // Enhanced loading screen
   if (loading) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
-        <CircularProgress size={60} />
-        <Typography variant="h6" sx={{ ml: 2 }}>Loading Enterprise Portal...</Typography>
-      </Box>
+      <ThemeProvider theme={appTheme}>
+        <CssBaseline />
+        <Box sx={{ 
+          display: 'flex', 
+          flexDirection: 'column',
+          justifyContent: 'center', 
+          alignItems: 'center', 
+          minHeight: '100vh',
+          gap: 2
+        }}>
+          <CircularProgress size={60} />
+          <Typography variant="h6">Loading Enterprise Portal...</Typography>
+          <LinearProgress sx={{ width: '200px' }} />
+        </Box>
+      </ThemeProvider>
     );
   }
 
-  // Login page (no layout)
+  // Login page with enhanced styling
   if (!auth) {
     return (
-      <Container maxWidth="sm" sx={{ mt: 8 }}>
-        <Routes>
-          <Route path="/login" element={<Login setAuth={setAuth} />} />
-          <Route path="*" element={<Navigate to="/login" />} />
-        </Routes>
-      </Container>
+      <ThemeProvider theme={appTheme}>
+        <CssBaseline />
+        <Container maxWidth="sm" sx={{ mt: 8 }}>
+          <Suspense fallback={
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+              <CircularProgress />
+            </Box>
+          }>
+            <Routes>
+              <Route path="/login" element={<Login setAuth={setAuth} />} />
+              <Route path="*" element={<Navigate to="/login" />} />
+            </Routes>
+          </Suspense>
+        </Container>
+      </ThemeProvider>
     );
   }
 
-  // Enterprise Layout with Sidebar
+  // Enhanced drawer component
   const drawer = (
-    <Box sx={{ height: '100%', bgcolor: '#f5f5f5' }}>
-      <Box sx={{ p: 2, bgcolor: '#1976d2', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <Box sx={{ height: '100%', bgcolor: 'background.paper' }}>
+      <Box sx={{ 
+        p: 2, 
+        bgcolor: 'primary.main', 
+        color: 'primary.contrastText', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'space-between' 
+      }}>
         <Typography variant="h6" fontWeight="bold">Portal Menu</Typography>
         {isMobile && (
           <IconButton color="inherit" onClick={toggleDrawer}>
@@ -195,12 +399,13 @@ function App() {
             button 
             onClick={() => navigate(item.path)}
             sx={{
-              bgcolor: location.pathname === item.path ? '#e3f2fd' : 'transparent',
-              borderRight: location.pathname === item.path ? '4px solid #1976d2' : 'none',
-              '&:hover': { bgcolor: '#f0f0f0' }
+              bgcolor: location.pathname === item.path ? 'action.selected' : 'transparent',
+              borderRight: location.pathname === item.path ? '4px solid' : 'none',
+              borderRightColor: 'primary.main',
+              '&:hover': { bgcolor: 'action.hover' }
             }}
           >
-            <ListItemIcon sx={{ color: location.pathname === item.path ? '#1976d2' : 'inherit' }}>
+            <ListItemIcon sx={{ color: location.pathname === item.path ? 'primary.main' : 'inherit' }}>
               {item.icon}
             </ListItemIcon>
             <ListItemText 
@@ -208,7 +413,7 @@ function App() {
               sx={{ 
                 '& .MuiTypography-root': { 
                   fontWeight: location.pathname === item.path ? 'bold' : 'normal',
-                  color: location.pathname === item.path ? '#1976d2' : 'inherit'
+                  color: location.pathname === item.path ? 'primary.main' : 'inherit'
                 } 
               }} 
             />
@@ -218,147 +423,185 @@ function App() {
       <Divider sx={{ mt: 2 }} />
       <Box sx={{ p: 2, textAlign: 'center' }}>
         <Typography variant="caption" color="text.secondary">
-          🏢 Enterprise Portal v2.0.0
+          🏢 Enterprise Portal v3.0.0
         </Typography>
       </Box>
     </Box>
   );
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      {/* Top AppBar */}
-      <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1, bgcolor: '#1976d2' }}>
-        <Toolbar>
-          <IconButton color="inherit" edge="start" onClick={toggleDrawer} sx={{ mr: 2 }}>
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-            🏢 Subscriber Migration Portal - Enterprise
-          </Typography>
-          
-          {/* Notifications (placeholder) */}
-          <Tooltip title="Notifications">
-            <IconButton color="inherit">
-              <Badge badgeContent={0} color="error">
-                <NotificationsActive />
-              </Badge>
-            </IconButton>
-          </Tooltip>
-          
-          {/* Help */}
-          <Tooltip title="Help & Support">
-            <IconButton color="inherit">
-              <Help />
-            </IconButton>
-          </Tooltip>
-          
-          {/* User Profile */}
-          <Tooltip title="User Profile">
-            <IconButton 
-              color="inherit" 
-              onClick={(e) => setProfileMenuAnchor(e.currentTarget)}
-              sx={{ ml: 1 }}
+    <ThemeProvider theme={appTheme}>
+      <CssBaseline />
+      <ErrorBoundary FallbackComponent={ErrorFallback} onReset={() => window.location.reload()}>
+        <QueryClientProvider client={queryClient}>
+          <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+            {/* Enhanced AppBar */}
+            <AppBar position="fixed" sx={{ zIndex: theme.zIndex.drawer + 1 }}>
+              <Toolbar>
+                <IconButton color="inherit" edge="start" onClick={toggleDrawer} sx={{ mr: 2 }}>
+                  <MenuIcon />
+                </IconButton>
+                <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
+                  🏢 Subscriber Migration Portal - Enterprise
+                </Typography>
+                
+                {/* Theme Toggle */}
+                <Tooltip title={`Switch to ${darkMode ? 'light' : 'dark'} mode`}>
+                  <IconButton color="inherit" onClick={toggleTheme}>
+                    {darkMode ? <Brightness7 /> : <Brightness4 />}
+                  </IconButton>
+                </Tooltip>
+                
+                {/* Notifications */}
+                <Tooltip title="Notifications">
+                  <IconButton color="inherit">
+                    <Badge badgeContent={0} color="error">
+                      <NotificationsActive />
+                    </Badge>
+                  </IconButton>
+                </Tooltip>
+                
+                {/* Help */}
+                <Tooltip title="Help & Support">
+                  <IconButton color="inherit">
+                    <Help />
+                  </IconButton>
+                </Tooltip>
+                
+                {/* User Profile */}
+                <Tooltip title="User Profile">
+                  <IconButton 
+                    color="inherit" 
+                    onClick={(e) => setProfileMenuAnchor(e.currentTarget)}
+                    sx={{ ml: 1 }}
+                  >
+                    <Avatar sx={{ width: 32, height: 32, bgcolor: 'secondary.main' }}>
+                      {auth.username?.charAt(0)?.toUpperCase()}
+                    </Avatar>
+                  </IconButton>
+                </Tooltip>
+              </Toolbar>
+            </AppBar>
+
+            {/* Enhanced Navigation Drawer */}
+            <Drawer
+              variant={isMobile ? 'temporary' : 'persistent'}
+              open={drawerOpen}
+              onClose={() => setDrawerOpen(false)}
+              sx={{
+                width: drawerWidth,
+                flexShrink: 0,
+                '& .MuiDrawer-paper': {
+                  width: drawerWidth,
+                  boxSizing: 'border-box',
+                  top: isMobile ? 0 : '64px',
+                  height: isMobile ? '100vh' : 'calc(100vh - 64px)',
+                },
+              }}
             >
-              <Avatar sx={{ width: 32, height: 32, bgcolor: '#42a5f5' }}>
-                {auth.username?.charAt(0)?.toUpperCase()}
-              </Avatar>
-            </IconButton>
-          </Tooltip>
-        </Toolbar>
-      </AppBar>
+              {drawer}
+            </Drawer>
 
-      {/* Navigation Drawer */}
-      <Drawer
-        variant={isMobile ? 'temporary' : 'persistent'}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        sx={{
-          width: drawerWidth,
-          flexShrink: 0,
-          '& .MuiDrawer-paper': {
-            width: drawerWidth,
-            boxSizing: 'border-box',
-            top: isMobile ? 0 : '64px',
-            height: isMobile ? '100vh' : 'calc(100vh - 64px)',
-            borderRight: '1px solid #e0e0e0'
-          }
-        }}
-      >
-        {drawer}
-      </Drawer>
+            {/* Main Content with enhanced transitions */}
+            <Box component="main" sx={{ 
+              flexGrow: 1, 
+              transition: theme.transitions.create(['margin'], {
+                easing: theme.transitions.easing.sharp,
+                duration: theme.transitions.duration.leavingScreen,
+              }),
+              marginLeft: !isMobile && drawerOpen ? 0 : `-${drawerWidth}px`,
+              ...((!isMobile && drawerOpen) && {
+                transition: theme.transitions.create(['margin'], {
+                  easing: theme.transitions.easing.easeOut,
+                  duration: theme.transitions.duration.enteringScreen,
+                }),
+                marginLeft: 0,
+              }),
+            }}>
+              <Toolbar /> {/* Spacer for fixed AppBar */}
+              
+              <Container maxWidth="xl" sx={{ py: 3 }}>
+                <Fade in={true} timeout={300}>
+                  <div>
+                    <Suspense fallback={<LoadingSkeleton />}>
+                      <Routes>
+                        {/* Dashboard - Default route */}
+                        <Route path="/dashboard" element={<Dashboard />} />
+                        
+                        {/* Core Features */}
+                        <Route path="/provision" element={<SubscriberProvision />} />
+                        <Route path="/migration" element={<BulkMigration />} />
+                        
+                        {/* Enterprise Features */}
+                        <Route path="/bulk-ops" element={<BulkOperations />} />
+                        <Route path="/analytics" element={<Analytics />} />
+                        <Route path="/monitoring" element={<SystemMonitoring />} />
+                        
+                        {/* Admin Features */}
+                        <Route path="/users" element={<UserManagement />} />
+                        <Route path="/settings" element={<SystemSettings />} />
+                        
+                        {/* Default redirect */}
+                        <Route path="/" element={<Navigate to="/dashboard" />} />
+                        
+                        {/* Enhanced 404 Handler */}
+                        <Route path="*" element={
+                          <Box sx={{ textAlign: 'center', mt: 10 }}>
+                            <Typography variant="h4" color="error" gutterBottom>
+                              🚫 404 - Page Not Found
+                            </Typography>
+                            <Typography variant="body1" color="text.secondary" gutterBottom>
+                              The requested page could not be found in the Enterprise Portal.
+                            </Typography>
+                            <Button variant="contained" onClick={() => navigate('/dashboard')} sx={{ mt: 2 }}>
+                              🏠 Return to Dashboard
+                            </Button>
+                          </Box>
+                        } />
+                      </Routes>
+                    </Suspense>
+                  </div>
+                </Fade>
+              </Container>
+            </Box>
 
-      {/* Main Content */}
-      <Box component="main" sx={{ 
-        flexGrow: 1, 
-        transition: theme.transitions.create(['margin'], {
-          easing: theme.transitions.easing.sharp,
-          duration: theme.transitions.duration.leavingScreen,
-        }),
-        marginLeft: !isMobile && drawerOpen ? 0 : `-${drawerWidth}px`,
-        ...((!isMobile && drawerOpen) && {
-          transition: theme.transitions.create(['margin'], {
-            easing: theme.transitions.easing.easeOut,
-            duration: theme.transitions.duration.enteringScreen,
-          }),
-          marginLeft: 0,
-        }),
-      }}>
-        <Toolbar /> {/* Spacer for fixed AppBar */}
-        
-        <Container maxWidth="xl" sx={{ py: 3 }}>
-          <Routes>
-            {/* Dashboard - Default route */}
-            <Route path="/dashboard" element={<Dashboard />} />
+            {/* Enhanced User Profile Menu */}
+            <UserProfileMenu 
+              auth={auth}
+              anchorEl={profileMenuAnchor}
+              onClose={() => setProfileMenuAnchor(null)}
+              onLogout={handleLogoutClick}
+              onThemeToggle={toggleTheme}
+              darkMode={darkMode}
+            />
             
-            {/* Core Features */}
-            <Route path="/provision" element={<SubscriberProvision />} />
-            <Route path="/migration" element={<BulkMigration />} />
+            {/* Logout Confirmation Modal */}
+            <LogoutConfirmModal
+              open={isLogoutModalOpen}
+              handleClose={() => setIsLogoutModalOpen(false)}
+              handleConfirm={handleConfirmLogout}
+            />
             
-            {/* Enterprise Features */}
-            <Route path="/bulk-ops" element={<BulkOperations />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/monitoring" element={<SystemMonitoring />} />
+            {/* Toast Notifications */}
+            <Toaster 
+              position="top-right"
+              toastOptions={{
+                duration: 4000,
+                style: {
+                  background: darkMode ? '#333' : '#fff',
+                  color: darkMode ? '#fff' : '#333',
+                },
+              }}
+            />
             
-            {/* Admin Features */}
-            <Route path="/users" element={<UserManagement />} />
-            <Route path="/settings" element={<SystemSettings />} />
-            
-            {/* Default redirect to dashboard */}
-            <Route path="/" element={<Navigate to="/dashboard" />} />
-            
-            {/* 404 Handler */}
-            <Route path="*" element={
-              <Box sx={{ textAlign: 'center', mt: 10 }}>
-                <Typography variant="h4" color="error" gutterBottom>
-                  🚫 404 - Page Not Found
-                </Typography>
-                <Typography variant="body1" color="text.secondary" gutterBottom>
-                  The requested page could not be found in the Enterprise Portal.
-                </Typography>
-                <Button variant="contained" onClick={() => navigate('/dashboard')} sx={{ mt: 2 }}>
-                  🏠 Return to Dashboard
-                </Button>
-              </Box>
-            } />
-          </Routes>
-        </Container>
-      </Box>
-
-      {/* User Profile Menu */}
-      <UserProfileMenu 
-        auth={auth}
-        anchorEl={profileMenuAnchor}
-        onClose={() => setProfileMenuAnchor(null)}
-        onLogout={handleLogoutClick}
-      />
-      
-      {/* Logout Confirmation Modal */}
-      <LogoutConfirmModal
-        open={isLogoutModalOpen}
-        handleClose={() => setIsLogoutModalOpen(false)}
-        handleConfirm={handleConfirmLogout}
-      />
-    </Box>
+            {/* React Query DevTools (development only) */}
+            {process.env.NODE_ENV === 'development' && (
+              <ReactQueryDevtools initialIsOpen={false} />
+            )}
+          </Box>
+        </QueryClientProvider>
+      </ErrorBoundary>
+    </ThemeProvider>
   );
 }
 
