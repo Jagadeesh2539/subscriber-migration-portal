@@ -1,15 +1,15 @@
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
 
-// Enhanced API Configuration
+// Enhanced API Configuration for AWS Serverless Backend
 const API_CONFIG = {
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:5000/api',
-  timeout: 30000, // 30 seconds
+  baseURL: process.env.REACT_APP_API_URL || 'https://your-api-gateway-url',
+  timeout: 30000, // 30 seconds (AWS Lambda timeout)
   retryAttempts: 3,
   retryDelay: 1000,
 };
 
-// Create axios instance with enhanced configuration
+// Create axios instance with enhanced configuration for AWS API Gateway
 const apiClient = axios.create({
   baseURL: API_CONFIG.baseURL,
   timeout: API_CONFIG.timeout,
@@ -27,9 +27,15 @@ apiClient.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
     
+    // Add stage prefix if needed (for multi-stage API Gateway)
+    const stage = process.env.REACT_APP_STAGE;
+    if (stage && !config.url.startsWith('/')) {
+      // API Gateway URLs already include stage, no need to modify
+    }
+    
     // Log API calls in development
     if (process.env.NODE_ENV === 'development') {
-      console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`, {
+      console.log(`🚀 AWS API Request: ${config.method?.toUpperCase()} ${config.url}`, {
         data: config.data,
         params: config.params,
       });
@@ -48,7 +54,7 @@ apiClient.interceptors.response.use(
   (response) => {
     // Log successful responses in development
     if (process.env.NODE_ENV === 'development') {
-      console.log(`✅ API Response: ${response.status}`, response.data);
+      console.log(`✅ AWS API Response: ${response.status}`, response.data);
     }
     
     return response;
@@ -70,19 +76,32 @@ apiClient.interceptors.response.use(
       return Promise.reject(error);
     }
     
-    // Handle 403 Forbidden
+    // Handle 403 Forbidden (Lambda Authorizer denial)
     if (error.response?.status === 403) {
       toast.error('Access denied. You don\'t have permission for this action.');
     }
     
-    // Handle 429 Too Many Requests
+    // Handle 429 Too Many Requests (API Gateway throttling)
     if (error.response?.status === 429) {
       toast.error('Too many requests. Please wait before trying again.');
     }
     
-    // Handle 500+ Server Errors
+    // Handle 500+ Server Errors (Lambda function errors)
     if (error.response?.status >= 500) {
       toast.error('Server error. Our team has been notified.');
+    }
+    
+    // Handle AWS API Gateway specific errors
+    if (error.response?.status === 502) {
+      toast.error('Service temporarily unavailable. Please try again.');
+    }
+    
+    if (error.response?.status === 503) {
+      toast.error('Service unavailable. Please try again later.');
+    }
+    
+    if (error.response?.status === 504) {
+      toast.error('Request timeout. Please try again.');
     }
     
     // Handle network errors
@@ -92,7 +111,7 @@ apiClient.interceptors.response.use(
     
     // Log error details in development
     if (process.env.NODE_ENV === 'development') {
-      console.error('❌ API Error:', {
+      console.error('❌ AWS API Error:', {
         status: error.response?.status,
         message: error.message,
         data: error.response?.data,
@@ -104,32 +123,39 @@ apiClient.interceptors.response.use(
   }
 );
 
-// Enhanced API service functions with better error handling
+// Enhanced API service functions for AWS serverless backend
 export const apiService = {
-  // Authentication
+  // Authentication - No change needed, Lambda handles this
   auth: {
     login: (credentials) => apiClient.post('/auth/login', credentials),
     logout: () => apiClient.post('/auth/logout'),
-    refreshToken: () => apiClient.post('/auth/refresh'),
     validateToken: () => apiClient.get('/auth/validate'),
   },
   
-  // Dashboard and Statistics
+  // Dashboard and Statistics - Optimized for DynamoDB
   dashboard: {
     getStats: () => apiClient.get('/dashboard/stats'),
-    getSystemHealth: () => apiClient.get('/dashboard/health'),
+    getSystemHealth: () => apiClient.get('/health'),
     getRecentActivity: (limit = 10) => apiClient.get(`/dashboard/activity?limit=${limit}`),
   },
   
-  // Subscriber Management
+  // Subscriber Management - DynamoDB optimized with pagination
   subscribers: {
-    getAll: (params = {}) => apiClient.get('/subscribers', { params }),
+    getAll: (params = {}) => {
+      // Convert pagination for DynamoDB
+      const dynamoParams = {
+        limit: params.limit || 50,
+        last_key: params.lastKey,
+        ...params
+      };
+      return apiClient.get('/subscribers', { params: dynamoParams });
+    },
     getById: (id) => apiClient.get(`/subscribers/${id}`),
     create: (data) => apiClient.post('/subscribers', data),
     update: (id, data) => apiClient.put(`/subscribers/${id}`, data),
     delete: (id) => apiClient.delete(`/subscribers/${id}`),
     search: (query, filters = {}) => apiClient.get('/subscribers/search', {
-      params: { q: query, ...filters }
+      params: { search: query, ...filters }
     }),
     bulkUpdate: (data) => apiClient.post('/subscribers/bulk-update', data),
     export: (format = 'csv', filters = {}) => apiClient.get('/subscribers/export', {
@@ -138,9 +164,17 @@ export const apiService = {
     }),
   },
   
-  // Migration Operations
+  // Migration Operations - S3 and DynamoDB integration
   migration: {
-    getJobs: (params = {}) => apiClient.get('/migration/jobs', { params }),
+    getJobs: (params = {}) => {
+      // Handle DynamoDB pagination
+      const dynamoParams = {
+        limit: params.limit || 50,
+        last_key: params.lastKey,
+        ...params
+      };
+      return apiClient.get('/migration/jobs', { params: dynamoParams });
+    },
     getJobById: (id) => apiClient.get(`/migration/jobs/${id}`),
     createJob: (data) => apiClient.post('/migration/jobs', data),
     updateJob: (id, data) => apiClient.put(`/migration/jobs/${id}`, data),
@@ -155,11 +189,12 @@ export const apiService = {
           'Content-Type': 'multipart/form-data',
         },
         onUploadProgress: onProgress,
+        timeout: 120000, // Extended timeout for file uploads
       });
     },
   },
   
-  // Analytics and Reporting
+  // Analytics and Reporting - CloudWatch integration
   analytics: {
     getMetrics: (timeRange = '7d') => apiClient.get(`/analytics/metrics?range=${timeRange}`),
     getPerformanceData: (params = {}) => apiClient.get('/analytics/performance', { params }),
@@ -170,7 +205,7 @@ export const apiService = {
     }),
   },
   
-  // System Monitoring
+  // System Monitoring - CloudWatch and AWS health
   monitoring: {
     getSystemStatus: () => apiClient.get('/monitoring/status'),
     getAlerts: (params = {}) => apiClient.get('/monitoring/alerts', { params }),
@@ -180,7 +215,7 @@ export const apiService = {
     }),
   },
   
-  // User Management
+  // User Management - AWS Secrets Manager integration
   users: {
     getAll: (params = {}) => apiClient.get('/users', { params }),
     getById: (id) => apiClient.get(`/users/${id}`),
@@ -191,7 +226,7 @@ export const apiService = {
     changePassword: (data) => apiClient.post('/users/change-password', data),
   },
   
-  // System Settings
+  // System Settings - DynamoDB configuration
   settings: {
     getAll: () => apiClient.get('/settings'),
     update: (data) => apiClient.put('/settings', data),
@@ -199,9 +234,17 @@ export const apiService = {
     setProvisioningMode: (mode) => apiClient.put('/settings/provisioning-mode', { mode }),
   },
   
-  // Audit Logs
+  // Audit Logs - DynamoDB with TTL
   audit: {
-    getLogs: (params = {}) => apiClient.get('/audit/logs', { params }),
+    getLogs: (params = {}) => {
+      // Handle DynamoDB pagination
+      const dynamoParams = {
+        limit: params.limit || 50,
+        last_key: params.lastKey,
+        ...params
+      };
+      return apiClient.get('/audit/logs', { params: dynamoParams });
+    },
     getLogById: (id) => apiClient.get(`/audit/logs/${id}`),
     export: (filters = {}) => apiClient.get('/audit/export', {
       params: filters,
@@ -210,15 +253,15 @@ export const apiService = {
   },
 };
 
-// Utility functions for handling API responses
+// Utility functions for handling AWS API responses
 export const apiUtils = {
-  // Extract error message from API response
+  // Extract error message from AWS API response
   getErrorMessage: (error) => {
-    if (error.response?.data?.message) {
-      return error.response.data.message;
-    }
     if (error.response?.data?.error) {
       return error.response.data.error;
+    }
+    if (error.response?.data?.message) {
+      return error.response.data.message;
     }
     if (error.message) {
       return error.message;
@@ -228,7 +271,7 @@ export const apiUtils = {
   
   // Check if error is due to network issues
   isNetworkError: (error) => {
-    return !error.response && error.code === 'NETWORK_ERROR';
+    return !error.response && (error.code === 'NETWORK_ERROR' || error.code === 'ECONNABORTED');
   },
   
   // Check if error is due to authentication issues
@@ -236,9 +279,19 @@ export const apiUtils = {
     return error.response?.status === 401;
   },
   
-  // Check if error is due to permission issues
+  // Check if error is due to permission issues (Lambda Authorizer)
   isPermissionError: (error) => {
     return error.response?.status === 403;
+  },
+  
+  // Check if error is AWS API Gateway throttling
+  isThrottlingError: (error) => {
+    return error.response?.status === 429;
+  },
+  
+  // Check if error is Lambda function timeout
+  isTimeoutError: (error) => {
+    return error.response?.status === 504 || error.code === 'ECONNABORTED';
   },
   
   // Format file size for display
@@ -261,9 +314,22 @@ export const apiUtils = {
     document.body.removeChild(link);
     window.URL.revokeObjectURL(url);
   },
+  
+  // Handle DynamoDB pagination
+  parsePaginationResponse: (response) => {
+    const data = response.data.data || response.data;
+    return {
+      items: data.subscribers || data.items || [],
+      pagination: data.pagination || {
+        hasMore: false,
+        lastKey: null,
+        count: 0
+      }
+    };
+  },
 };
 
-// React Query configuration
+// React Query configuration optimized for AWS Lambda
 export const queryConfig = {
   defaultOptions: {
     queries: {
@@ -274,17 +340,23 @@ export const queryConfig = {
         if (error.response?.status >= 400 && error.response?.status < 500) {
           return false;
         }
-        // Retry up to 3 times for other errors
+        // Retry on 5xx errors and network issues (up to 3 times)
         return failureCount < 3;
       },
+      retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000), // Exponential backoff
       refetchOnWindowFocus: false,
       refetchOnReconnect: true,
     },
     mutations: {
       retry: 1,
+      retryDelay: 1000,
       onError: (error) => {
         const message = apiUtils.getErrorMessage(error);
-        toast.error(message);
+        
+        // Don't show toast for auth errors (handled by interceptor)
+        if (!apiUtils.isAuthError(error)) {
+          toast.error(message);
+        }
       },
     },
   },
