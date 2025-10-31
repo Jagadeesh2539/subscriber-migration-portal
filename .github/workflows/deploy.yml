@@ -244,37 +244,58 @@ jobs:
           set -euo pipefail
           if [ -f database/rds_schema_update.sql ]; then
             echo "🔍 Found schema file: database/rds_schema_update.sql"
+
             cat > run_sql.py << 'PYEOF'
-import os, json, boto3, pymysql, sys
-secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
-host = os.environ["LEGACY_DB_HOST"]
-sql_file = "database/rds_schema_update.sql"
-sm = boto3.client("secretsmanager")
-sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
-user = sec.get("username") or sec.get("user")
-pwd = sec.get("password") or sec.get("pass")
-db  = sec.get("dbname") or sec.get("database") or ""
-conn = pymysql.connect(host=host, user=user, password=pwd, database=db, autocommit=True, connect_timeout=30)
-with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
-  sql = f.read()
-  for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]:
-    try:
-      cur.execute(stmt)
-      print(f"✅ Executed: {stmt[:60]}...")
-    except Exception as e:
-      err_msg = str(e).lower()
-      if "already exists" in err_msg:
-        print(f"⚠️ Ignoring 'already exists': {stmt[:60]}...")
-      else:
-        print(f"❌ Error executing '{stmt[:60]}...': {e}")
-        raise
-print('🎉 Legacy schema initialization completed successfully')
+            import os, json, boto3, pymysql, sys
+
+            secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
+            host = os.environ["LEGACY_DB_HOST"]
+            sql_file = "database/rds_schema_update.sql"
+
+            sm = boto3.client("secretsmanager")
+            sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
+
+            user = sec.get("username") or sec.get("user")
+            pwd = sec.get("password") or sec.get("pass")
+            db  = sec.get("dbname") or sec.get("database") or ""
+
+            conn = pymysql.connect(
+                host=host,
+                user=user,
+                password=pwd,
+                database=db,
+                autocommit=True,
+                connect_timeout=30
+            )
+
+            with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
+                sql = f.read()
+                statements = [
+                    s.strip() for s in sql.split(';')
+                    if s.strip() and not s.strip().startswith('--')
+                ]
+                for stmt in statements:
+                    try:
+                        cur.execute(stmt)
+                        print(f"✅ Executed: {stmt[:60]}...")
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if "already exists" in err_msg:
+                            print(f"⚠️ Ignoring 'already exists': {stmt[:60]}...")
+                        else:
+                            print(f"❌ Error executing '{stmt[:60]}...': {e}")
+                            raise
+
+            print('🎉 Legacy schema initialization completed successfully')
 PYEOF
+
             python run_sql.py
+
           else
-            echo "❌ ERROR: Schema file NOT FOUND at database/rds_schema_update.sql"; exit 1
+            echo "❌ ERROR: Schema file NOT FOUND at database/rds_schema_update.sql"
+            exit 1
           fi
-  
+
   frontend-deploy:
     name: 🌐 Frontend Deploy
     runs-on: ubuntu-latest
@@ -329,7 +350,7 @@ import time
 import sys
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import boto3
 class ComprehensiveSmokeTests:
@@ -337,93 +358,218 @@ class ComprehensiveSmokeTests:
         self.base_url = base_url.rstrip('/')
         self.stack_name = stack_name
         self.token = None
+        self.test_subscriber_uid = f"TEST_{uuid.uuid4().hex[:8].upper()}"
         self.results = []
         try:
             self.sfn_client = boto3.client('stepfunctions')
             self.cf_client = boto3.client('cloudformation')
-        except Exception:
+        except:
             self.sfn_client = None
             self.cf_client = None
-    def log(self, name, ok, msg, dur):
-        print(("✅" if ok else "❌"), name+":", msg, f"({dur:.2f}s)")
-        self.results.append(ok)
-    def health(self):
-        t=time.time()
+    def log_result(self, test_name, success, message, duration=0):
+        status = "✅" if success else "❌"
+        print(f"{status} {test_name}: {message} ({duration:.2f}s)")
+        self.results.append({'test': test_name, 'success': success, 'duration': duration})
+    def test_health_endpoint(self):
+        start_time = time.time()
         try:
-            r=requests.get(f"{self.base_url}/health", timeout=10)
-            self.log("API Health", r.status_code==200, f"HTTP {r.status_code}", time.time()-t)
-            return r.status_code==200
+            response = requests.get(f"{self.base_url}/health", timeout=10)
+            duration = time.time() - start_time
+            if response.status_code == 200:
+                self.log_result("API Health Check", True, f"API responding (HTTP {response.status_code})", duration)
+                return True
+            self.log_result("API Health Check", False, f"Unexpected response: {response.status_code}", duration)
+            return False
         except Exception as e:
-            self.log("API Health", False, str(e), time.time()-t); return False
-    def auth(self):
-        t=time.time()
+            duration = time.time() - start_time
+            self.log_result("API Health Check", False, f"Error: {str(e)}", duration)
+            return False
+    def test_authentication(self):
+        start_time = time.time()
         try:
-            r=requests.post(f"{self.base_url}/auth/login", json={"username":"admin","password":"SecureAdmin123!"}, timeout=10)
-            ok=r.status_code==200 and r.json().get('data',{}).get('token')
-            if ok: self.token=r.json()['data']['token']
-            self.log("Authentication", bool(ok), f"HTTP {r.status_code}", time.time()-t)
-            return bool(ok)
+            response = requests.post(
+                f"{self.base_url}/auth/login",
+                json={"username": "admin", "password": "SecureAdmin123!"},
+                timeout=10
+            )
+            duration = time.time() - start_time
+            if response.status_code == 200:
+                data = response.json()
+                token = data.get('data', {}).get('token')
+                if token:
+                    self.token = token
+                    self.log_result("Authentication", True, "Login successful", duration)
+                    return True
+            self.log_result("Authentication", False, f"Login failed: {response.status_code}", duration)
+            return False
         except Exception as e:
-            self.log("Authentication", False, str(e), time.time()-t); return False
-    def stepfuncs(self):
-        if not self.cf_client: self.log("Step Functions", False, "No CF client", 0); return False
-        t=time.time()
+            duration = time.time() - start_time
+            self.log_result("Authentication", False, f"Error: {str(e)}", duration)
+            return False
+    def test_step_functions_deployed(self):
+        if not self.cf_client:
+            self.log_result("Step Functions Check", False, "CloudFormation client not available", 0)
+            return False
+        start_time = time.time()
         try:
-            outs={o['OutputKey']:o['OutputValue'] for o in self.cf_client.describe_stacks(StackName=self.stack_name)['Stacks'][0].get('Outputs',[])}
-            keys=['MigrationWorkflowArn','AuditWorkflowArn','ExportWorkflowArn']
-            ok=all(k in outs for k in keys)
-            if self.sfn_client:
-                for k in keys:
-                    if k in outs:
+            response = self.cf_client.describe_stacks(StackName=self.stack_name)
+            outputs = {output['OutputKey']: output['OutputValue'] for output in response['Stacks'][0].get('Outputs', [])}
+            workflows = ['MigrationWorkflowArn', 'AuditWorkflowArn', 'ExportWorkflowArn']
+            deployed_workflows = []
+            for workflow in workflows:
+                if workflow in outputs:
+                    deployed_workflows.append(workflow)
+                    if self.sfn_client:
                         try:
-                            d=self.sfn_client.describe_state_machine(stateMachineArn=outs[k]); print("  ",k, d.get('status','UNKNOWN'))
+                            sf_response = self.sfn_client.describe_state_machine(
+                                stateMachineArn=outputs[workflow]
+                            )
+                            if sf_response['status'] == 'ACTIVE':
+                                print(f"  ✅ {workflow}: ACTIVE")
+                            else:
+                                print(f"  ⚠️ {workflow}: {sf_response['status']}")
                         except Exception as e:
-                            print("  ",k, "ERR", e)
-            self.log("Step Functions", ok, f"Have {sum(1 for k in keys if k in outs)}/3", time.time()-t)
-            return ok
+                            print(f"  ❌ {workflow}: Error - {str(e)}")
+            duration = time.time() - start_time
+            if len(deployed_workflows) >= 3:
+                self.log_result("Step Functions Deployment", True, f"All {len(deployed_workflows)} workflows deployed", duration)
+                return True
+            else:
+                self.log_result("Step Functions Deployment", False, f"Only {len(deployed_workflows)}/3 workflows deployed", duration)
+                return False
         except Exception as e:
-            self.log("Step Functions", False, str(e), time.time()-t); return False
-    def settings(self):
-        if not self.token: self.log("Settings", False, "No token", 0); return False
-        t=time.time(); h={"Authorization":f"Bearer {self.token}"}
+            duration = time.time() - start_time
+            self.log_result("Step Functions Deployment", False, f"Error: {str(e)}", duration)
+            return False
+    def test_job_orchestration_endpoints(self):
+        if not self.token:
+            self.log_result("Job Orchestration", False, "No token available", 0)
+            return False
+        headers = {"Authorization": f"Bearer {self.token}"}
+        start_time = time.time()
         try:
-            r=requests.get(f"{self.base_url}/settings/provisioning-mode", headers=h, timeout=10)
-            ok=r.status_code==200 and (r.json().get('data',{}).get('mode') or r.json().get('mode')) in ['CLOUD','LEGACY','DUAL_PROV']
-            self.log("Settings", ok, f"HTTP {r.status_code}", time.time()-t)
-            return ok
+            upload_response = requests.post(
+                f"{self.base_url}/migration/upload",
+                json={"fileName": "test.csv", "fileType": "text/csv"},
+                headers=headers,
+                timeout=15
+            )
+            duration = time.time() - start_time
+            if upload_response.status_code == 200:
+                upload_data = upload_response.json()
+                if upload_data.get('data', {}).get('uploadUrl'):
+                    self.log_result("Job Orchestration - Upload", True, "Upload URL generated", duration)
+                    test_job_data = {
+                        "jobType": "AUDIT",
+                        "auditType": "CONSISTENCY_CHECK", 
+                        "filters": {"status": "ACTIVE"}
+                    }
+                    start_time = time.time()
+                    job_response = requests.post(
+                        f"{self.base_url}/audit/jobs",
+                        json=test_job_data,
+                        headers=headers,
+                        timeout=15
+                    )
+                    duration = time.time() - start_time
+                    if job_response.status_code == 201:
+                        job_data = job_response.json()
+                        job_id = job_data.get('data', {}).get('jobId')
+                        if job_id:
+                            self.log_result("Job Orchestration - Create", True, f"Job created: {job_id}", duration)
+                            time.sleep(2)
+                            start_time = time.time()
+                            status_response = requests.get(
+                                f"{self.base_url}/jobs/{job_id}",
+                                headers=headers,
+                                timeout=10
+                            )
+                            duration = time.time() - start_time
+                            if status_response.status_code == 200:
+                                self.log_result("Job Orchestration - Status", True, "Job status retrieved", duration)
+                                return True
+                            else:
+                                self.log_result("Job Orchestration - Status", False, f"Status check failed: {status_response.status_code}", duration)
+                        else:
+                            self.log_result("Job Orchestration - Create", False, "No job ID returned", duration)
+                    else:
+                        self.log_result("Job Orchestration - Create", False, f"Job creation failed: {job_response.status_code}", duration)
+                else:
+                    self.log_result("Job Orchestration - Upload", False, "No upload URL returned", duration)
+            else:
+                self.log_result("Job Orchestration - Upload", False, f"Upload endpoint failed: {upload_response.status_code}", duration)
+            return False
         except Exception as e:
-            self.log("Settings", False, str(e), time.time()-t); return False
-    def jobs(self):
-        if not self.token: self.log("Jobs", False, "No token", 0); return False
-        h={"Authorization":f"Bearer {self.token}"}; t=time.time()
+            duration = time.time() - start_time
+            self.log_result("Job Orchestration", False, f"Error: {str(e)}", duration)
+            return False
+    def test_settings_provisioning_mode(self):
+        if not self.token:
+            self.log_result("Settings - Get Mode", False, "No token available", 0)
+            return False
+        headers = {"Authorization": f"Bearer {self.token}"}
+        start_time = time.time()
         try:
-            u=requests.post(f"{self.base_url}/migration/upload", json={"fileName":"test.csv","fileType":"text/csv"}, headers=h, timeout=15)
-            ok=u.status_code==200 and u.json().get('data',{}).get('uploadUrl');
-            if not ok: self.log("Jobs Upload", False, f"HTTP {u.status_code}", time.time()-t); return False
-            t=time.time(); j=requests.post(f"{self.base_url}/audit/jobs", json={"jobType":"AUDIT","auditType":"CONSISTENCY_CHECK","filters":{"status":"ACTIVE"}}, headers=h, timeout=15)
-            if j.status_code!=201 or not j.json().get('data',{}).get('jobId'):
-                self.log("Jobs Create", False, f"HTTP {j.status_code}", time.time()-t); return False
-            job_id=j.json()['data']['jobId']; self.log("Jobs Create", True, job_id, time.time()-t)
-            time.sleep(2); t=time.time(); s=requests.get(f"{self.base_url}/jobs/{job_id}", headers=h, timeout=10)
-            self.log("Jobs Status", s.status_code==200, f"HTTP {s.status_code}", time.time()-t)
-            return s.status_code==200
+            response = requests.get(f"{self.base_url}/settings/provisioning-mode", headers=headers, timeout=10)
+            duration = time.time() - start_time
+            if response.status_code == 200:
+                data = response.json()
+                mode = data.get('data', {}).get('mode') or data.get('mode')
+                if mode in ['CLOUD', 'LEGACY', 'DUAL_PROV']:
+                    self.log_result("Settings - Get Mode", True, f"Current mode: {mode}", duration)
+                    return True
+                else:
+                    self.log_result("Settings - Get Mode", False, f"Invalid mode: {mode}", duration)
+                    return False
+            else:
+                self.log_result("Settings - Get Mode", False, f"GET failed: {response.status_code}", duration)
+                return False
         except Exception as e:
-            self.log("Jobs", False, str(e), time.time()-t); return False
-    def run(self):
-        print("🧪 Testing", self.base_url, "at", datetime.now())
-        for _ in range(24):
+            duration = time.time() - start_time
+            self.log_result("Settings - Get Mode", False, f"Error: {str(e)}", duration)
+            return False
+    def run_all_tests(self):
+        print(f"🧪 Starting comprehensive smoke tests for: {self.base_url}")
+        print(f"🕰️ Test started at: {datetime.now()}")
+        print("⏳ Waiting for API to be ready...")
+        for i in range(24):
             try:
-                if requests.get(f"{self.base_url}/health", timeout=5).status_code==200: break
-            except Exception: pass
+                response = requests.get(f"{self.base_url}/health", timeout=5)
+                if response.status_code == 200:
+                    break
+            except:
+                pass
+            print(f"⏳ Retrying... ({i+1}/24)")
             time.sleep(10)
-        tests=[self.health(), self.auth(), self.stepfuncs(), self.settings(), self.jobs()]
-        ok=sum(tests); total=len(tests)
-        print(f"📊 Results: {ok}/{total}")
-        return ok>=total*0.8
-if __name__=="__main__":
-    base=os.environ.get('API_ENDPOINT'); stack=os.environ.get('STACK_NAME')
-    if not base: print("❌ API_ENDPOINT not set"); sys.exit(1)
-    sys.exit(0 if ComprehensiveSmokeTests(base, stack).run() else 1)
+        test_results = []
+        test_results.append(self.test_health_endpoint())
+        test_results.append(self.test_authentication())
+        test_results.append(self.test_step_functions_deployed())
+        test_results.append(self.test_settings_provisioning_mode())
+        test_results.append(self.test_job_orchestration_endpoints())
+        passed = sum(test_results)
+        total = len(test_results)
+        print(f"\n📊 Comprehensive Test Results: {passed}/{total} tests passed")
+        print(f"🕰️ Test completed at: {datetime.now()}")
+        if passed >= total * 0.8:
+            print("🎉 Smoke tests passed with acceptable rate!")
+            return True
+        else:
+            print(f"❌ Too many test failures: {total - passed} failures")
+            return False
+
+def main():
+    base_url = os.environ.get('API_ENDPOINT')
+    stack_name = os.environ.get('STACK_NAME')
+    if not base_url:
+        print("❌ API_ENDPOINT environment variable not set")
+        return False
+    tests = ComprehensiveSmokeTests(base_url, stack_name)
+    return tests.run_all_tests()
+
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)
 PYEOF
           python comprehensive_smoke_tests.py
 
@@ -442,16 +588,12 @@ PYEOF
           set -euo pipefail
           STACK="${{ env.STACK_NAME }}"
           echo "🔍 Running post-deployment infrastructure validation..."
-          
-          # Check stack status
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text)
           if [[ "$STACK_STATUS" != "CREATE_COMPLETE" && "$STACK_STATUS" != "UPDATE_COMPLETE" ]]; then
             echo "❌ Stack not in healthy state: $STACK_STATUS"
             exit 1
           fi
           echo "✅ CloudFormation stack healthy: $STACK_STATUS"
-          
-          # Check Step Functions
           for sf in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::StepFunctions::StateMachine`].PhysicalResourceId' --output text); do
             STATUS=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query 'status' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
@@ -461,8 +603,6 @@ PYEOF
             NAME=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query 'name' --output text)
             echo "✅ Step Function $NAME is ACTIVE"
           done
-          
-          # Check DynamoDB tables
           for table in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::DynamoDB::Table`].PhysicalResourceId' --output text); do
             STATUS=$(aws dynamodb describe-table --table-name "$table" --query 'Table.TableStatus' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
@@ -471,8 +611,6 @@ PYEOF
             fi
             echo "✅ DynamoDB table $table is ACTIVE"
           done
-          
-          # Check RDS instance
           RDS_ID=$(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::RDS::DBInstance`].PhysicalResourceId' --output text)
           if [[ -n "$RDS_ID" ]]; then
             RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier "$RDS_ID" --query 'DBInstances[0].DBInstanceStatus' --output text)
@@ -482,8 +620,6 @@ PYEOF
             fi
             echo "✅ RDS instance $RDS_ID is available"
           fi
-          
-          # Check Lambda functions
           for func in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' --output text); do
             STATE=$(aws lambda get-function --function-name "$func" --query 'Configuration.State' --output text)
             if [[ "$STATE" != "Active" ]]; then
@@ -492,7 +628,6 @@ PYEOF
             fi
             echo "✅ Lambda function $func is Active"
           done
-          
           echo "🎉 All infrastructure components validated successfully!"
 
   notify-completion:
@@ -511,7 +646,6 @@ PYEOF
           echo "Deployment Status: ${{ needs.post-deployment-checks.result }}"
           echo "Timestamp: $(date)"
           echo ""
-          
           if [[ "${{ needs.post-deployment-checks.result }}" == "success" ]]; then
             echo "✅ Production deployment completed successfully!"
             echo "🎉 Your application is live and fully operational!"
