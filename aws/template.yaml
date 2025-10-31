@@ -35,15 +35,11 @@ Globals:
       MaxAge: "'600'"
 
 Resources:
-  # ======================
-  # STORAGE RESOURCES
-  # ======================
   UploadsBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub '${AWS::StackName}-uploads-${BucketSuffix}'
-      VersioningConfiguration:
-        Status: Enabled
+      VersioningConfiguration: { Status: Enabled }
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -53,12 +49,39 @@ Resources:
         Rules:
           - Id: DeleteIncompleteMultipartUploads
             Status: Enabled
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 1
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
           - Id: DeleteOldUploads
             Status: Enabled
             ExpirationInDays: 30
     DeletionPolicy: Delete
+
+  # Legacy RDS resources (Secret + Instance) to surface outputs for Option A
+  LegacyDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-legacy-db-${BucketSuffix}'
+      Description: 'Credentials for Legacy RDS MySQL'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\\'
+
+  LegacyDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy-${BucketSuffix}'
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      PubliclyAccessible: true
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
+      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
+      DeletionProtection: false
+      BackupRetentionPeriod: 1
+      StorageType: gp2
 
   SubscribersTable:
     Type: AWS::DynamoDB::Table
@@ -66,28 +89,18 @@ Resources:
       TableName: !Sub '${AWS::StackName}-subscribers-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: uid
-          AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-        - AttributeName: plan_id
-          AttributeType: S
+        - { AttributeName: uid, AttributeType: S }
+        - { AttributeName: status, AttributeType: S }
+        - { AttributeName: plan_id, AttributeType: S }
       KeySchema:
-        - AttributeName: uid
-          KeyType: HASH
+        - { AttributeName: uid, KeyType: HASH }
       GlobalSecondaryIndexes:
         - IndexName: status-index
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+          KeySchema: [ { AttributeName: status, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
         - IndexName: plan-index
-          KeySchema:
-            - AttributeName: plan_id
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
+          KeySchema: [ { AttributeName: plan_id, KeyType: HASH } ]
+          Projection: { ProjectionType: ALL }
     DeletionPolicy: Delete
 
   SettingsTable:
@@ -95,12 +108,8 @@ Resources:
     Properties:
       TableName: !Sub '${AWS::StackName}-settings-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: sk
-          AttributeType: S
-      KeySchema:
-        - AttributeName: sk
-          KeyType: HASH
+      AttributeDefinitions: [ { AttributeName: sk, AttributeType: S } ]
+      KeySchema: [ { AttributeName: sk, KeyType: HASH } ]
     DeletionPolicy: Delete
 
   MigrationJobsTable:
@@ -109,29 +118,18 @@ Resources:
       TableName: !Sub '${AWS::StackName}-jobs-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: job_id
-          AttributeType: S
-        - AttributeName: job_type
-          AttributeType: S
-        - AttributeName: created_at
-          AttributeType: S
-      KeySchema:
-        - AttributeName: job_id
-          KeyType: HASH
+        - { AttributeName: job_id, AttributeType: S }
+        - { AttributeName: job_type, AttributeType: S }
+        - { AttributeName: created_at, AttributeType: S }
+      KeySchema: [ { AttributeName: job_id, KeyType: HASH } ]
       GlobalSecondaryIndexes:
         - IndexName: job-type-index
           KeySchema:
-            - AttributeName: job_type
-              KeyType: HASH
-            - AttributeName: created_at
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
+            - { AttributeName: job_type, KeyType: HASH }
+            - { AttributeName: created_at, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
     DeletionPolicy: Delete
 
-  # ======================
-  # IAM ROLES (no inline policies to avoid cycles)
-  # ======================
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -140,8 +138,7 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Service: states.amazonaws.com
+            Principal: { Service: states.amazonaws.com }
             Action: sts:AssumeRole
 
   LambdaBasicRole:
@@ -152,13 +149,9 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
+            Principal: { Service: lambda.amazonaws.com }
             Action: sts:AssumeRole
 
-  # ======================
-  # LAMBDA FUNCTIONS
-  # ======================
   OrchestratorFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -172,41 +165,13 @@ Resources:
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
       Events:
-        UploadRequest:
-          Type: Api
-          Properties:
-            Path: /migration/upload
-            Method: POST
-        CreateMigrationJob:
-          Type: Api
-          Properties:
-            Path: /migration/jobs
-            Method: POST
-        CreateAuditJob:
-          Type: Api
-          Properties:
-            Path: /audit/jobs
-            Method: POST
-        CreateExportJob:
-          Type: Api
-          Properties:
-            Path: /export/jobs
-            Method: POST
-        GetJobStatus:
-          Type: Api
-          Properties:
-            Path: "/jobs/{id}"
-            Method: GET
-        CancelJob:
-          Type: Api
-          Properties:
-            Path: "/jobs/{id}/cancel"
-            Method: POST
-        ListJobs:
-          Type: Api
-          Properties:
-            Path: /jobs
-            Method: GET
+        UploadRequest: { Type: Api, Properties: { Path: /migration/upload, Method: POST } }
+        CreateMigrationJob: { Type: Api, Properties: { Path: /migration/jobs, Method: POST } }
+        CreateAuditJob: { Type: Api, Properties: { Path: /audit/jobs, Method: POST } }
+        CreateExportJob: { Type: Api, Properties: { Path: /export/jobs, Method: POST } }
+        GetJobStatus: { Type: Api, Properties: { Path: "/jobs/{id}", Method: GET } }
+        CancelJob: { Type: Api, Properties: { Path: "/jobs/{id}/cancel", Method: POST } }
+        ListJobs: { Type: Api, Properties: { Path: /jobs, Method: GET } }
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -215,9 +180,7 @@ Resources:
       Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: validate_job.lambda_handler
-      Environment:
-        Variables:
-          UPLOADS_BUCKET: !Ref UploadsBucket
+      Environment: { Variables: { UPLOADS_BUCKET: !Ref UploadsBucket } }
 
   ProcessFileFunction:
     Type: AWS::Serverless::Function
@@ -269,20 +232,10 @@ Resources:
       Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/settings/
       Handler: handler.lambda_handler
-      Environment:
-        Variables:
-          SETTINGS_TABLE: !Ref SettingsTable
+      Environment: { Variables: { SETTINGS_TABLE: !Ref SettingsTable } }
       Events:
-        GetMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: GET
-        PutMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: PUT
+        GetMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: GET } }
+        PutMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: PUT } }
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -297,11 +250,7 @@ Resources:
           SETTINGS_TABLE: !Ref SettingsTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
       Events:
-        HealthCheck:
-          Type: Api
-          Properties:
-            Path: /health
-            Method: GET
+        HealthCheck: { Type: Api, Properties: { Path: /health, Method: GET } }
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -310,71 +259,20 @@ Resources:
       Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/auth/
       Handler: handler.lambda_handler
-      Environment:
-        Variables:
-          JWT_SECRET: !Ref JwtSecret
+      Environment: { Variables: { JWT_SECRET: !Ref JwtSecret } }
       Events:
-        Login:
-          Type: Api
-          Properties:
-            Path: /auth/login
-            Method: POST
-        VerifyToken:
-          Type: Api
-          Properties:
-            Path: /auth/verify
-            Method: POST
-        RefreshToken:
-          Type: Api
-          Properties:
-            Path: /auth/refresh
-            Method: POST
+        Login: { Type: Api, Properties: { Path: /auth/login, Method: POST } }
+        VerifyToken: { Type: Api, Properties: { Path: /auth/verify, Method: POST } }
+        RefreshToken: { Type: Api, Properties: { Path: /auth/refresh, Method: POST } }
 
-  # ======================
-  # STEP FUNCTIONS
-  # ======================
   MigrationWorkflow:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: !Sub '${AWS::StackName}-migration-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {
-          "Comment": "Migration Workflow with validation and processing",
-          "StartAt": "ValidateJob",
-          "TimeoutSeconds": 3600,
-          "States": {
-            "ValidateJob": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ValidateJobFunction.Arn}",
-                "Payload.$": "$"
-              },
-              "ResultPath": "$.validation",
-              "Next": "ProcessMigration",
-              "Retry": [
-                {
-                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 3
-                }
-              ]
-            },
-            "ProcessMigration": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ProcessFileFunction.Arn}",
-                "Payload.$": "$"
-              },
-              "End": true
-            }
-          }
-        }
-    DependsOn:
-      - ValidateJobFunction
-      - ProcessFileFunction
+        {"StartAt":"Validate","States":{"Validate":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ValidateJobFunction.Arn}","Payload.$":"$"},"Next":"Process"},"Process":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessFileFunction.Arn}","Payload.$":"$"},"End":true}}}
+    DependsOn: [ ValidateJobFunction, ProcessFileFunction ]
 
   AuditWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -382,24 +280,8 @@ Resources:
       StateMachineName: !Sub '${AWS::StackName}-audit-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {
-          "Comment": "Audit Workflow for consistency checks",
-          "StartAt": "ProcessAudit",
-          "TimeoutSeconds": 1800,
-          "States": {
-            "ProcessAudit": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ProcessAuditFunction.Arn}",
-                "Payload.$": "$"
-              },
-              "End": true
-            }
-          }
-        }
-    DependsOn:
-      - ProcessAuditFunction
+        {"StartAt":"Audit","States":{"Audit":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessAuditFunction.Arn}","Payload.$":"$"},"End":true}}}
+    DependsOn: [ ProcessAuditFunction ]
 
   ExportWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -407,93 +289,55 @@ Resources:
       StateMachineName: !Sub '${AWS::StackName}-export-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {
-          "Comment": "Export Workflow for data extraction",
-          "StartAt": "ProcessExport", 
-          "TimeoutSeconds": 2400,
-          "States": {
-            "ProcessExport": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ProcessExportFunction.Arn}",
-                "Payload.$": "$"
-              },
-              "End": true
-            }
-          }
-        }
-    DependsOn:
-      - ProcessExportFunction
+        {"StartAt":"Export","States":{"Export":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessExportFunction.Arn}","Payload.$":"$"},"End":true}}}
+    DependsOn: [ ProcessExportFunction ]
 
-  # ======================
-  # IAM POLICIES (attached after all resources exist)
-  # ======================
   StepFunctionInvokeLambdaPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub '${AWS::StackName}-stepfunctions-lambda-${BucketSuffix}'
-      Roles: 
-        - !Ref StepFunctionExecutionRole
+      Roles: [ !Ref StepFunctionExecutionRole ]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Action: 
-              - 'lambda:InvokeFunction'
+            Action: [ 'lambda:InvokeFunction' ]
             Resource:
               - !GetAtt ValidateJobFunction.Arn
               - !GetAtt ProcessFileFunction.Arn
               - !GetAtt ProcessAuditFunction.Arn
               - !GetAtt ProcessExportFunction.Arn
-    DependsOn:
-      - ValidateJobFunction
-      - ProcessFileFunction
-      - ProcessAuditFunction
-      - ProcessExportFunction
+    DependsOn: [ ValidateJobFunction, ProcessFileFunction, ProcessAuditFunction, ProcessExportFunction ]
 
   StepFunctionDynamoPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub '${AWS::StackName}-stepfunctions-dynamo-${BucketSuffix}'
-      Roles:
-        - !Ref StepFunctionExecutionRole
+      Roles: [ !Ref StepFunctionExecutionRole ]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Action:
-              - 'dynamodb:GetItem'
-              - 'dynamodb:PutItem'
-              - 'dynamodb:UpdateItem'
+            Action: [ 'dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem' ]
             Resource: !GetAtt MigrationJobsTable.Arn
           - Effect: Allow
-            Action:
-              - 'logs:CreateLogGroup'
-              - 'logs:CreateLogStream'
-              - 'logs:PutLogEvents'
+            Action: [ 'logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents' ]
             Resource: '*'
-    DependsOn:
-      - MigrationJobsTable
+    DependsOn: [ MigrationJobsTable ]
 
   LambdaBasicExecutionPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: !Sub '${AWS::StackName}-lambda-execution-${BucketSuffix}'
-      Roles:
-        - !Ref LambdaBasicRole
+      Roles: [ !Ref LambdaBasicRole ]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Action:
-              - 'logs:CreateLogGroup'
-              - 'logs:CreateLogStream'
-              - 'logs:PutLogEvents'
+            Action: [ 'logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents' ]
             Resource: '*'
           - Effect: Allow
-            Action:
-              - 'dynamodb:*'
+            Action: [ 'dynamodb:*' ]
             Resource:
               - !GetAtt SubscribersTable.Arn
               - !Sub '${SubscribersTable.Arn}/index/*'
@@ -501,25 +345,15 @@ Resources:
               - !Sub '${MigrationJobsTable.Arn}/index/*'
               - !GetAtt SettingsTable.Arn
           - Effect: Allow
-            Action:
-              - 's3:*'
+            Action: [ 's3:*' ]
             Resource:
               - !GetAtt UploadsBucket.Arn
               - !Sub '${UploadsBucket.Arn}/*'
           - Effect: Allow
-            Action:
-              - 'states:StartExecution'
-              - 'states:DescribeExecution'
-              - 'states:StopExecution'
-              - 'cloudformation:DescribeStacks'
+            Action: [ 'states:StartExecution','states:DescribeExecution','states:StopExecution','cloudformation:DescribeStacks' ]
             Resource: '*'
-    DependsOn:
-      - SubscribersTable
-      - MigrationJobsTable
-      - SettingsTable
-      - UploadsBucket
+    DependsOn: [ SubscribersTable, MigrationJobsTable, SettingsTable, UploadsBucket ]
 
-  # S3 Notification Permission
   ProcessFileFunctionPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -528,42 +362,48 @@ Resources:
       Principal: s3.amazonaws.com
       SourceAccount: !Ref AWS::AccountId
       SourceArn: !GetAtt UploadsBucket.Arn
-    DependsOn:
-      - ProcessFileFunction
-      - UploadsBucket
+    DependsOn: [ ProcessFileFunction, UploadsBucket ]
 
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
-    
+
   UploadsBucketName:
     Description: S3 bucket for file uploads
     Value: !Ref UploadsBucket
-    
+
   MigrationJobsTableName:
     Description: DynamoDB table for job tracking
     Value: !Ref MigrationJobsTable
-    
+
   SubscribersTableName:
     Description: DynamoDB Subscribers table name
     Value: !Ref SubscribersTable
-    
+
   SettingsTableName:
     Description: DynamoDB Settings table name
     Value: !Ref SettingsTable
-    
+
   MigrationWorkflowArn:
     Description: Migration Step Function ARN
     Value: !Ref MigrationWorkflow
-    
+
   AuditWorkflowArn:
     Description: Audit Step Function ARN
     Value: !Ref AuditWorkflow
-    
+
   ExportWorkflowArn:
     Description: Export Step Function ARN
     Value: !Ref ExportWorkflow
+
+  LegacyDbSecretArn:
+    Description: Secret ARN for Legacy RDS credentials
+    Value: !Ref LegacyDbSecret
+
+  LegacyDbHost:
+    Description: Legacy RDS endpoint hostname
+    Value: !GetAtt LegacyDB.Endpoint.Address
 
   StackName:
     Description: CloudFormation stack name
