@@ -26,8 +26,8 @@ env:
   STACK_NAME: subscriber-migration-portal-prod
   BUCKET_SUFFIX: '20251031'
   STAGE: prod
-  WORKFLOW_SIGNATURE: 'ci-fix-yaml-no-heredoc-2025-10-31T17:20Z'
-  EFFECTIVE_STAGE: ${{ inputs.stage || env.STAGE }}
+  WORKFLOW_SIGNATURE: 'ci-final-fix-2025-10-31T17:33Z'
+  EFFECTIVE_STAGE: ${{ inputs.stage || 'prod' }}
   EFFECTIVE_MODE:  ${{ inputs.mode || 'deploy' }}
 
 concurrency:
@@ -45,6 +45,8 @@ jobs:
           echo "Using workflow signature: $WORKFLOW_SIGNATURE"
           echo "Ref: $GITHUB_REF / SHA: $GITHUB_SHA"
           echo "Actor: $GITHUB_ACTOR"
+          echo "Stage: $EFFECTIVE_STAGE"
+          echo "Mode:  $EFFECTIVE_MODE"
 
       - name: 01 Checkout repository
         uses: actions/checkout@v4
@@ -62,14 +64,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: 04 Preflight
+      - name: 04 Preflight check
         run: |
-          echo "Stage: $EFFECTIVE_STAGE"
-          echo "Mode:  $EFFECTIVE_MODE"
           if [ "$EFFECTIVE_MODE" = "dry-run" ]; then
-            echo "Dry run selected; exiting before deploy."
+            echo "✅ Dry run selected; workflow validated, exiting before deploy."
             exit 0
           fi
+          echo "✅ Full deployment mode selected"
 
       - name: 05 Setup SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -102,8 +103,9 @@ jobs:
           if [ "$EFFECTIVE_STAGE" != "" ] && [ "$EFFECTIVE_STAGE" != "prod" ]; then
             STACK="subscriber-migration-portal-$EFFECTIVE_STAGE"
           fi
+          
           for DBC in $DB_CLASSES; do
-            echo "Attempting deploy with DbInstanceClass=$DBC in $AWS_REGION"
+            echo "🚀 Attempting deploy with DbInstanceClass=$DBC in $AWS_REGION"
             if sam deploy \
               --stack-name "$STACK" \
               --region "$AWS_REGION" \
@@ -122,6 +124,7 @@ jobs:
               exit 0
             else
               echo "⚠️ Deploy failed with $DBC, trying next..."
+              # Clean up failed stack if it exists
               if aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" >/dev/null 2>&1; then
                 STATUS=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].StackStatus" --output text || true)
                 echo "Stack status: $STATUS"
@@ -129,27 +132,35 @@ jobs:
                   echo "🗑️ Deleting bad stack $STACK"
                   aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "$STACK"
                   aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
+                  
+                  # Force-empty S3 bucket to avoid blocking next attempt
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
-                  echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
+                  echo "🧹 Force-empty S3 bucket: $UPB"
+                  
+                  # Delete object versions
                   while true; do
-                    VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
+                    VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" 2>/dev/null || echo '{"Objects":[]}')
                     COUNT=$(echo "$VERS" | jq '.Objects | length')
                     if [ "$COUNT" = "0" ]; then break; fi
                     echo "$VERS" > /tmp/vers.json
-                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/vers.json --region "$AWS_REGION" || true
+                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/vers.json --region "$AWS_REGION" 2>/dev/null || true
                   done
+                  
+                  # Delete delete-markers
                   while true; do
-                    MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
+                    MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" 2>/dev/null || echo '{"Objects":[]}')
                     COUNT2=$(echo "$MKRS" | jq '.Objects | length')
                     if [ "$COUNT2" = "0" ]; then break; fi
                     echo "$MKRS" > /tmp/mkrs.json
-                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/mkrs.json --region "$AWS_REGION" || true
+                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/mkrs.json --region "$AWS_REGION" 2>/dev/null || true
                   done
-                  aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" || true
+                  
+                  aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" 2>/dev/null || true
                 fi
               fi
             fi
           done
+          
           echo "❌ All DB instance classes failed"
           echo "===== DEPLOY END (FAILED) ====="
           exit 1
@@ -159,27 +170,33 @@ jobs:
         id: cfn-outputs
         run: |
           set -euo pipefail
+          echo "===== EXPORT OUTPUTS START ====="
           STACK="$STACK_NAME"
           if [ "$EFFECTIVE_STAGE" != "" ] && [ "$EFFECTIVE_STAGE" != "prod" ]; then
             STACK="subscriber-migration-portal-$EFFECTIVE_STAGE"
           fi
+          
           OUT=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
           echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
+          
           python - <<'PY'
 import os, json
-outs=json.loads(os.environ['CFN_OUTPUTS'])
-m={o['OutputKey']:o['OutputValue'] for o in outs}
-with open(os.environ['GITHUB_ENV'],'a') as f:
-  for k in ['ApiEndpoint','LegacyDbSecretArn','LegacyDbHost','SchemaInitFunctionName','UploadsBucketName']:
-    f.write(f"{k}={m.get(k,'')}\n")
+outs = json.loads(os.environ['CFN_OUTPUTS'])
+m = {o['OutputKey']: o['OutputValue'] for o in outs}
+with open(os.environ['GITHUB_ENV'], 'a') as f:
+    for k in ['ApiEndpoint', 'LegacyDbSecretArn', 'LegacyDbHost', 'SchemaInitFunctionName', 'UploadsBucketName']:
+        f.write(f"{k}={m.get(k, '')}\n")
 print('✅ Outputs exported')
 PY
+          echo "===== EXPORT OUTPUTS END ====="
 
       - name: 10 Initialize MySQL schema (Lambda in VPC)
         if: steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
           echo "===== SCHEMA INIT (LAMBDA) START ====="
+          echo "🔧 Initializing schema via Lambda: $SCHEMA_INIT_FUNCTION_NAME"
+          
           aws lambda invoke \
             --region "$AWS_REGION" \
             --function-name "$SCHEMA_INIT_FUNCTION_NAME" \
@@ -188,16 +205,18 @@ PY
             --query 'LogResult' \
             --output text \
             out.json | base64 -d || true
+          
+          echo "Lambda output:"
+          cat out.json || echo "No output file"
           echo
-          cat out.json || true
-          echo
-          OK=$(jq -r '.success // false' out.json 2>/dev/null || echo false)
-          if [ "$OK" != "true" ]; then
-            echo "❗ Lambda schema init reported errors; running direct fallback"
-          else
-            echo "✅ Lambda schema initialization completed"
+          
+          OK=$(jq -r '.success // false' out.json 2>/dev/null || echo "false")
+          if [ "$OK" = "true" ]; then
+            echo "✅ Lambda schema initialization completed successfully"
             echo "===== SCHEMA INIT (LAMBDA) END (SUCCESS) ====="
             exit 0
+          else
+            echo "⚠️ Lambda schema init reported errors or returned false; running direct fallback"
           fi
 
       - name: 11 Initialize MySQL schema (Direct runner fallback)
@@ -209,52 +228,88 @@ PY
         run: |
           set -euo pipefail
           echo "===== SCHEMA INIT (DIRECT) START ====="
-          python - <<'PY'
+          
+          if [ -f database/rds_schema_update.sql ]; then
+            python - <<'PY'
 import os, json, boto3, pymysql, sys
-region = os.environ.get('AWS_REGION','us-west-2')
-secret_arn = os.environ.get('LEGACY_DB_SECRET_ARN','')
-host = os.environ.get('LEGACY_DB_HOST','')
+
+# Get environment variables
+region = os.environ.get('AWS_REGION', 'us-west-2')
+secret_arn = os.environ.get('LEGACY_DB_SECRET_ARN', '')
+host = os.environ.get('LEGACY_DB_HOST', '')
 sql_file = 'database/rds_schema_update.sql'
+
+# Validate inputs
 if not secret_arn or not host:
     print('❌ Missing LegacyDbSecretArn/LegacyDbHost from outputs', file=sys.stderr)
     sys.exit(1)
+
 if not os.path.exists(sql_file):
     print('❌ No schema file found', file=sys.stderr)
     sys.exit(1)
+
+# Get database credentials from Secrets Manager
 sm = boto3.client('secretsmanager', region_name=region)
 sec = json.loads(sm.get_secret_value(SecretId=secret_arn)['SecretString'])
 user = sec.get('username') or sec.get('user')
-pwd  = sec.get('password') or sec.get('pass')
-db   = sec.get('dbname') or sec.get('database') or ''
+pwd = sec.get('password') or sec.get('pass')  # Fixed: use 'pwd' not '***'
+db = sec.get('dbname') or sec.get('database') or ''
+
 if not (user and pwd):
     print('❌ Secret missing username/password', file=sys.stderr)
     sys.exit(1)
-conn = pymysql.connect(host=host, user=user, password=pwd, database=db, autocommit=True, connect_timeout=30, charset='utf8mb4')
+
+# Connect to database
+conn = pymysql.connect(
+    host=host,
+    user=user,
+    password=pwd,  # Fixed: proper password variable
+    database=db,
+    autocommit=True,
+    connect_timeout=30,
+    charset='utf8mb4'
+)
+
+# Execute SQL statements
 executed = skipped = errors = 0
 with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
     sql = f.read()
     stmts = [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
+    
     for stmt in stmts:
         try:
             cur.execute(stmt)
             executed += 1
-            print(f'Executed: {stmt[:80]}...')
+            print(f'Executed: {stmt[:50]}...')
         except Exception as e:
             msg = str(e).lower()
             if 'already exists' in msg or 'duplicate' in msg or 'exists' in msg:
                 skipped += 1
-                print(f'Skip exists: {stmt[:80]}...')
+                print(f'Skip exists: {stmt[:50]}...')
             else:
                 errors += 1
-                print(f'Error executing {stmt[:80]}...: {e}', file=sys.stderr)
-print(f'✅ Schema init completed: executed={executed}, skipped={skipped}, errors={errors}')
-if errors:
+                print(f'Error executing {stmt[:50]}...: {e}', file=sys.stderr)
+
+print(f'✅ Legacy schema initialization completed: executed={executed}, skipped={skipped}, errors={errors}')
+if errors > 0:
     sys.exit(1)
 PY
+          else
+            echo "❌ No schema file found"
+            exit 1
+          fi
+          
           echo "===== SCHEMA INIT (DIRECT) END ====="
 
-      - name: 12 Notify failure
-        if: failure()
+      - name: 12 Summary
+        if: always()
         run: |
-          echo "❌ Deploy failed for $GITHUB_REF"
-          echo "Check logs for steps 08-11 for details."
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+            echo "🎉 Deployment completed successfully!"
+            echo "📍 Stack: $STACK_NAME (or stage variant)"
+            echo "🌐 Region: $AWS_REGION"
+            echo "🔧 DB Class: ${{ steps.deploy.outputs.db_class || 'unknown' }}"
+          else
+            echo "❌ Deployment failed"
+            echo "Check logs for steps 08-11 for details"
+          fi
