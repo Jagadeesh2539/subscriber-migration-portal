@@ -25,6 +25,12 @@ Globals:
       Variables:
         STAGE: !Ref Stage
         CORS_ORIGINS: !Ref CorsOrigins
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+      AllowOrigin: !Sub "'${CorsOrigins}'"
+      MaxAge: "'600'"
 
 Resources:
   # ======================
@@ -233,16 +239,179 @@ Resources:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: !Sub '${AWS::StackName}-migration-workflow'
-      DefinitionS3Location:
-        Bucket: !Ref UploadsBucket
-        Key: stepfunctions/migration-workflow.json
-      DefinitionSubstitutions:
-        ValidateJobLambdaArn: !GetAtt ValidateJobFunction.Arn
-        ProcessMigrationLambdaArn: !GetAtt ProcessFileFunction.Arn
-        ProcessBulkDeleteLambdaArn: !GetAtt ProcessFileFunction.Arn
-        ProcessAuditLambdaArn: !GetAtt ProcessAuditFunction.Arn
-        MergeExportLambdaArn: !GetAtt ProcessExportFunction.Arn
-        MigrationJobsTable: !Ref MigrationJobsTable
+      DefinitionString: !Sub |
+        {
+          "Comment": "Subscriber Migration Workflow - Handles bulk migration jobs with automatic retries and rollbacks",
+          "StartAt": "ValidateJob",
+          "TimeoutSeconds": 3600,
+          "States": {
+            "ValidateJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ValidateJobFunction.Arn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "inputFileKey.$": "$.inputFileKey",
+                  "jobType.$": "$.jobType",
+                  "filters.$": "$.filters"
+                }
+              },
+              "ResultPath": "$.validation",
+              "Next": "CheckValidation",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "JobFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "CheckValidation": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.validation.Payload.valid",
+                  "BooleanEquals": true,
+                  "Next": "UpdateJobStatus"
+                }
+              ],
+              "Default": "ValidationFailed"
+            },
+            "ValidationFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, error_message = :error, updated_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "FAILED"},
+                  ":error": {"S.$": "$.validation.Payload.error"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "End": true
+            },
+            "UpdateJobStatus": {
+              "Type": "Task", 
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "RUNNING"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "ResultPath": null,
+              "Next": "ProcessMigration"
+            },
+            "ProcessMigration": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessFileFunction.Arn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "inputFileKey.$": "$.inputFileKey", 
+                  "filters.$": "$.filters",
+                  "batchSize": 100
+                }
+              },
+              "ResultPath": "$.result",
+              "Next": "ProcessingComplete",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ProcessingFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "ProcessingComplete": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "COMPLETED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "End": true
+            },
+            "ProcessingFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem", 
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "FAILED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
+                  ":error": {"S.$": "$.error.Cause"}
+                }
+              },
+              "End": true
+            },
+            "JobFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "FAILED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
+                  ":error": {"S.$": "$.error.Cause"}
+                }
+              },
+              "End": true
+            }
+          }
+        }
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       LoggingConfiguration:
         Level: ERROR
@@ -255,13 +424,99 @@ Resources:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: !Sub '${AWS::StackName}-audit-workflow'
-      DefinitionS3Location:
-        Bucket: !Ref UploadsBucket
-        Key: stepfunctions/audit-workflow.json
-      DefinitionSubstitutions:
-        ProcessAuditLambdaArn: !GetAtt ProcessAuditFunction.Arn
-        GenerateAuditReportLambdaArn: !GetAtt ProcessExportFunction.Arn
-        MigrationJobsTable: !Ref MigrationJobsTable
+      DefinitionString: !Sub |
+        {
+          "Comment": "Subscriber Audit Workflow - System-generated audits with consistency checks",
+          "StartAt": "InitializeAudit",
+          "TimeoutSeconds": 1800,
+          "States": {
+            "InitializeAudit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "RUNNING"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "ResultPath": null,
+              "Next": "ProcessAudit"
+            },
+            "ProcessAudit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke", 
+              "Parameters": {
+                "FunctionName": "${ProcessAuditFunction.Arn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "filters.$": "$.filters",
+                  "auditType.$": "$.auditType"
+                }
+              },
+              "ResultPath": "$.result",
+              "Next": "ProcessingComplete",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 3,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "AuditFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "ProcessingComplete": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "COMPLETED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "End": true
+            },
+            "AuditFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "FAILED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
+                  ":error": {"S.$": "$.error.Cause"}
+                }
+              },
+              "End": true
+            }
+          }
+        }
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       LoggingConfiguration:
         Level: ERROR
@@ -274,14 +529,99 @@ Resources:
     Type: AWS::StepFunctions::StateMachine
     Properties:
       StateMachineName: !Sub '${AWS::StackName}-export-workflow'
-      DefinitionS3Location:
-        Bucket: !Ref UploadsBucket
-        Key: stepfunctions/export-workflow.json
-      DefinitionSubstitutions:
-        ProcessExportLambdaArn: !GetAtt ProcessExportFunction.Arn
-        ProcessComparisonExportLambdaArn: !GetAtt ProcessExportFunction.Arn
-        MergeExportLambdaArn: !GetAtt ProcessExportFunction.Arn
-        MigrationJobsTable: !Ref MigrationJobsTable
+      DefinitionString: !Sub |
+        {
+          "Comment": "Subscriber Export Workflow - System-generated exports with data merging",
+          "StartAt": "InitializeExport",
+          "TimeoutSeconds": 2400,
+          "States": {
+            "InitializeExport": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "RUNNING"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "ResultPath": null,
+              "Next": "ProcessExport"
+            },
+            "ProcessExport": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessExportFunction.Arn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "filters.$": "$.filters",
+                  "format.$": "$.format"
+                }
+              },
+              "ResultPath": "$.result",
+              "Next": "ProcessingComplete",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ExportFailed",
+                  "ResultPath": "$.error"
+                }
+              ]
+            },
+            "ProcessingComplete": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "COMPLETED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
+                }
+              },
+              "End": true
+            },
+            "ExportFailed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:updateItem",
+              "Parameters": {
+                "TableName": "${MigrationJobsTable}",
+                "Key": {
+                  "job_id": {
+                    "S.$": "$.jobId"
+                  }
+                },
+                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
+                "ExpressionAttributeValues": {
+                  ":status": {"S": "FAILED"},
+                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
+                  ":error": {"S.$": "$.error.Cause"}
+                }
+              },
+              "End": true
+            }
+          }
+        }
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       LoggingConfiguration:
         Level: ERROR
@@ -330,60 +670,41 @@ Resources:
                 - !Ref AuditWorkflow
                 - !Ref ExportWorkflow
       Events:
-        # Upload endpoints
         UploadRequest:
           Type: Api
           Properties:
             Path: /migration/upload
             Method: POST
-            Auth:
-              Authorizer: NONE
-        
-        # Job creation endpoints
         CreateMigrationJob:
           Type: Api
           Properties:
             Path: /migration/jobs
             Method: POST
-            Auth:
-              Authorizer: NONE
         CreateAuditJob:
           Type: Api
           Properties:
             Path: /audit/jobs
             Method: POST
-            Auth:
-              Authorizer: NONE
         CreateExportJob:
           Type: Api
           Properties:
             Path: /export/jobs
             Method: POST
-            Auth:
-              Authorizer: NONE
-        
-        # Job management endpoints
         GetJobStatus:
           Type: Api
           Properties:
             Path: /jobs/{id}
             Method: GET
-            Auth:
-              Authorizer: NONE
         CancelJob:
           Type: Api
           Properties:
             Path: /jobs/{id}/cancel
             Method: POST
-            Auth:
-              Authorizer: NONE
         ListJobs:
           Type: Api
           Properties:
             Path: /jobs
             Method: GET
-            Auth:
-              Authorizer: NONE
 
   # Job Processing Functions
   ValidateJobFunction:
@@ -424,17 +745,6 @@ Resources:
               Action:
                 - secretsmanager:GetSecretValue
               Resource: !Ref LegacyDbSecret
-      Events:
-        FileUpload:
-          Type: S3
-          Properties:
-            Bucket: !Ref UploadsBucket
-            Events: s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
@@ -506,15 +816,11 @@ Resources:
           Properties:
             Path: /settings/provisioning-mode
             Method: GET
-            Auth:
-              Authorizer: NONE
         PutMode:
           Type: Api
           Properties:
             Path: /settings/provisioning-mode
             Method: PUT
-            Auth:
-              Authorizer: NONE
 
   # Cloud Subscribers Function (DynamoDB)
   CloudSubscribersFunction:
@@ -534,36 +840,26 @@ Resources:
           Properties:
             Path: /cloud/subscribers
             Method: GET
-            Auth:
-              Authorizer: NONE
         CreateCloudSubscriber:
           Type: Api
           Properties:
             Path: /cloud/subscribers
             Method: POST
-            Auth:
-              Authorizer: NONE
         GetCloudSubscriber:
           Type: Api
           Properties:
             Path: /cloud/subscribers/{uid}
             Method: GET
-            Auth:
-              Authorizer: NONE
         UpdateCloudSubscriber:
           Type: Api
           Properties:
             Path: /cloud/subscribers/{uid}
             Method: PUT
-            Auth:
-              Authorizer: NONE
         DeleteCloudSubscriber:
           Type: Api
           Properties:
             Path: /cloud/subscribers/{uid}
             Method: DELETE
-            Auth:
-              Authorizer: NONE
 
   # Legacy Subscribers Function (RDS MySQL)
   LegacySubscribersFunction:
@@ -592,36 +888,26 @@ Resources:
           Properties:
             Path: /legacy/subscribers
             Method: GET
-            Auth:
-              Authorizer: NONE
         CreateLegacySubscriber:
           Type: Api
           Properties:
             Path: /legacy/subscribers
             Method: POST
-            Auth:
-              Authorizer: NONE
         GetLegacySubscriber:
           Type: Api
           Properties:
             Path: /legacy/subscribers/{uid}
             Method: GET
-            Auth:
-              Authorizer: NONE
         UpdateLegacySubscriber:
           Type: Api
           Properties:
             Path: /legacy/subscribers/{uid}
             Method: PUT
-            Auth:
-              Authorizer: NONE
         DeleteLegacySubscriber:
           Type: Api
           Properties:
             Path: /legacy/subscribers/{uid}
             Method: DELETE
-            Auth:
-              Authorizer: NONE
 
   # Dual Provision Function (Both systems)
   DualSubscribersFunction:
@@ -653,50 +939,36 @@ Resources:
           Properties:
             Path: /dual/subscribers
             Method: GET
-            Auth:
-              Authorizer: NONE
         CreateDualSubscriber:
           Type: Api
           Properties:
             Path: /dual/subscribers
             Method: POST
-            Auth:
-              Authorizer: NONE
         GetDualSubscriber:
           Type: Api
           Properties:
             Path: /dual/subscribers/{uid}
             Method: GET
-            Auth:
-              Authorizer: NONE
         UpdateDualSubscriber:
           Type: Api
           Properties:
             Path: /dual/subscribers/{uid}
             Method: PUT
-            Auth:
-              Authorizer: NONE
         DeleteDualSubscriber:
           Type: Api
           Properties:
             Path: /dual/subscribers/{uid}
             Method: DELETE
-            Auth:
-              Authorizer: NONE
         GetSyncStatus:
           Type: Api
           Properties:
             Path: /dual/sync-status
             Method: GET
-            Auth:
-              Authorizer: NONE
         SyncSubscriber:
           Type: Api
           Properties:
             Path: /dual/subscribers/{uid}/sync
             Method: POST
-            Auth:
-              Authorizer: NONE
 
   # ======================
   # EXISTING FUNCTIONS (Health, Auth, etc.)
@@ -713,8 +985,6 @@ Resources:
           Properties:
             Path: /health
             Method: GET
-            Auth:
-              Authorizer: NONE
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -730,8 +1000,6 @@ Resources:
           Properties:
             Path: /auth/login
             Method: POST
-            Auth:
-              Authorizer: NONE
 
   # S3 Bucket Permission for Lambda
   ProcessFileFunctionPermission:
@@ -783,15 +1051,3 @@ Outputs:
   ExportWorkflowArn:
     Description: Export Step Function ARN
     Value: !Ref ExportWorkflow
-
-  # Job Management API Endpoints
-  JobManagementEndpoints:
-    Description: Job management API endpoints
-    Value: !Sub |
-      Upload: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/migration/upload
-      Migration Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/migration/jobs
-      Audit Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/audit/jobs
-      Export Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/export/jobs
-      Job Status: GET https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs/{id}
-      Cancel Job: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs/{id}/cancel
-      List Jobs: GET https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs
