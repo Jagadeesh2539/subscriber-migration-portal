@@ -1,16 +1,15 @@
+---
 name: 🚀 Prod-Only Deployment with Step Functions Orchestration
-
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
-
+    branches:
+      - main
+  workflow_dispatch: null
 env:
   AWS_DEFAULT_REGION: us-east-1
   STACK_NAME: subscriber-migration-portal-prod
-  NODE_VERSION: '18'
-  PYTHON_VERSION: '3.11'
-
+  NODE_VERSION: "18"
+  PYTHON_VERSION: "3.11"
 jobs:
   validate:
     name: 🔍 Validate Architecture
@@ -23,9 +22,11 @@ jobs:
       - name: Install validation tools
         run: pip install aws-sam-cli boto3 jq
       - name: Validate SAM Template
-        run: |
+        run: >
           set -euo pipefail
+
           cd aws
+
           sam validate --template template.yaml --region ${{ env.AWS_DEFAULT_REGION }}
       - name: Validate Step Functions Definitions
         run: |
@@ -57,7 +58,6 @@ jobs:
             fi
           done
           echo "🎉 All Step Functions definitions are valid!"
-
   deploy-stepfunctions:
     name: 📦 Deploy Step Functions Definitions
     runs-on: ubuntu-latest
@@ -70,11 +70,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
       - name: Setup S3 bucket for Step Functions
-        run: |
+        run: >
           set -euo pipefail
+
           UPLOADS_BUCKET="${{ env.STACK_NAME }}-uploads"
-          
+
+
           # Create bucket if it doesn't exist
+
           if ! aws s3api head-bucket --bucket "$UPLOADS_BUCKET" 2>/dev/null; then
             echo "🚀 Creating S3 bucket: $UPLOADS_BUCKET"
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
@@ -103,15 +106,15 @@ jobs:
         run: |
           set -euo pipefail
           UPLOADS_BUCKET="${{ env.STACK_NAME }}-uploads"
-          
+
           echo "📦 Uploading Step Functions definitions to S3..."
-          
+
           # Create stepfunctions directory in S3
           aws s3api put-object \
             --bucket "$UPLOADS_BUCKET" \
             --key "stepfunctions/" \
             --content-length 0
-          
+
           # Upload each Step Function definition
           for file in aws/stepfunctions/*.json; do
             if [[ -f "$file" ]]; then
@@ -126,13 +129,14 @@ jobs:
               echo "✅ Uploaded: $filename"
             fi
           done
-          
-          echo "🎉 All Step Functions definitions uploaded successfully!"
 
+          echo "🎉 All Step Functions definitions uploaded successfully!"
   deploy:
     name: 🏗️ Deploy Infrastructure with Step Functions
     runs-on: ubuntu-latest
-    needs: [validate, deploy-stepfunctions]
+    needs:
+      - validate
+      - deploy-stepfunctions
     environment: production
     outputs:
       api-endpoint: ${{ steps.out.outputs.api_endpoint }}
@@ -148,14 +152,18 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install tooling
         run: pip install aws-sam-cli boto3 jq
-
       - name: 🔥 Detect and cleanup failed/rollback stacks BEFORE deploy
-        run: |
+        run: >
           set -euo pipefail
+
           STACK="${{ env.STACK_NAME }}"
+
           STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
+
           echo "Status: $STATUS"
+
           is_bad() { case "$1" in ROLLBACK_*|*_ROLLBACK_*|*_FAILED|DELETE_FAILED) return 0;; *) return 1;; esac }
+
           cleanup() {
             echo "🧹 Cleaning resources for $STACK"
             # S3 buckets
@@ -178,22 +186,29 @@ jobs:
             # Secrets
             for s in $(aws secretsmanager list-secrets --query 'SecretList[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}-legacy-db|${STACK}-users" || true); do aws secretsmanager delete-secret --secret-id "$s" --force-delete-without-recovery || true; done
           }
+
           if is_bad "$STATUS"; then
             echo "🗑️ Deleting bad stack $STACK"; aws cloudformation delete-stack --stack-name "$STACK" || true
             aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
             cleanup
           fi
-
       - name: 🚀 Build & Deploy SAM with Step Functions
         id: deploy_step
-        run: |
+        run: >
           set -euo pipefail
+
           cd aws
+
           sam build --template template.yaml
+
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
           BUCKET="sam-deployment-${ACCOUNT_ID}-${{ env.AWS_DEFAULT_REGION }}"
+
           aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$BUCKET"
+
           JWT_SECRET=$(openssl rand -base64 48)
+
           sam deploy \
             --stack-name "${{ env.STACK_NAME }}" \
             --region ${{ env.AWS_DEFAULT_REGION }} \
@@ -202,14 +217,14 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --no-confirm-changeset
-
       - name: 📤 Export API endpoint
         id: out
-        run: |
+        run: >
           set -euo pipefail
-          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
-          echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
 
+          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
+
+          echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
   initialize-legacy-schema:
     name: 🗄️ Initialize Legacy DB Schema
     runs-on: ubuntu-latest
@@ -228,49 +243,72 @@ jobs:
         run: pip install boto3 pymysql
       - name: 🔍 Fetch legacy DB outputs
         id: cf
-        run: |
+        run: >
           set -euo pipefail
+
           STACK="${{ env.STACK_NAME }}"
+
           LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbSecretArn'].OutputValue" --output text)
+
           LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbHost'].OutputValue" --output text)
+
           echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
+
           echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
-      - name: 🗄️ Run schema initializer
-        env:
-          LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
-          LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
-        run: |
-          set -euo pipefail
-          if [ -f database/rds_schema_update.sql ]; then
-            cat > run_sql.py << 'PYEOF'
-            import os, json, boto3, pymysql, sys
-            secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
-            host = os.environ["LEGACY_DB_HOST"]
-            sql_file = "database/rds_schema_update.sql"
-            sm = boto3.client("secretsmanager")
-            sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
-            user = sec.get("username") or sec.get("user"); pwd = sec.get("password") or sec.get("pass")
-            db  = sec.get("dbname") or sec.get("database") or ""
-            conn = pymysql.connect(host=host, user=user, password=pwd, database=db, autocommit=True, connect_timeout=30)
-            with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
-              sql = f.read()
-              for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]:
-                try:
+
+
+          - name: 🗄️ Run schema initializer
+  env:
+    LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
+    LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
+  run: >
+    set -euo pipefail
+
+    if [ -f database/rds_schema_update.sql ]; then
+      cat > run_sql.py << 'PYEOF'
+      import os, json, boto3, pymysql, sys
+
+      secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
+      host = os.environ["LEGACY_DB_HOST"]
+      sql_file = "database/rds_schema_update.sql"
+
+      sm = boto3.client("secretsmanager")
+      sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
+      user = sec.get("username") or sec.get("user")
+      pwd = sec.get("password") or sec.get("pass")
+      db = sec.get("dbname") or sec.get("database") or ""
+
+      conn = pymysql.connect(
+          host=host,
+          user=user,
+          password=pwd,
+          database=db,
+          autocommit=True,
+          connect_timeout=30
+      )
+
+      with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
+          sql = f.read()
+          for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]:
+              try:
                   cur.execute(stmt)
                   print(f"Executed: {stmt[:50]}...")
-                except Exception as e:
+              except Exception as e:
                   if "already exists" not in str(e).lower():
-                    print(f"Error executing {stmt[:50]}...: {e}")
-            print('✅ Legacy schema initialization completed')
-            PYEOF
-            python run_sql.py
-          else
-            echo "❌ No schema file found"; exit 1
+                      print(f"Error executing {stmt[:50]}...: {e}")
 
+      print('✅ Legacy schema initialization completed')
+      PYEOF  # Ensure this is on a new line after the Python code
+
+      python3 run_sql.py
+    else
+      echo "❌ No schema file found"; exit 1
   frontend-deploy:
     name: 🌐 Frontend Deploy
     runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema]
+    needs:
+      - deploy
+      - initialize-legacy-schema
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -282,26 +320,35 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: 📦 Install & Build
-        run: |
+        run: >
           cd frontend
+
           npm ci || (npm cache verify && rm -rf node_modules package-lock.json && npm install --force)
+
           echo "REACT_APP_API_URL=${{ needs.deploy.outputs.api-endpoint }}" > .env.production
+
           echo "REACT_APP_STAGE=prod" >> .env.production
+
           npm run build
       - name: 🚀 Upload to S3 website
-        run: |
+        run: >
           FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
+
           aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
+
           aws s3 sync frontend/build/ s3://$FRONTEND_BUCKET --delete
+
           aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{
             "IndexDocument": {"Suffix": "index.html"},
             "ErrorDocument": {"Key": "index.html"}
           }'
-
   comprehensive-smoke-tests:
     name: 🧪 Comprehensive Smoke Tests with Step Functions Validation
     runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy]
+    needs:
+      - deploy
+      - initialize-legacy-schema
+      - frontend-deploy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
@@ -313,18 +360,28 @@ jobs:
         env:
           API_ENDPOINT: ${{ needs.deploy.outputs.api-endpoint }}
           STACK_NAME: ${{ env.STACK_NAME }}
-        run: |
+        run: >
           set -euo pipefail
+
           cat > comprehensive_smoke_tests.py << 'PYEOF'
+
           import requests
+
           import time
+
           import sys
+
           import os
+
           import json
+
           from datetime import datetime, timedelta
+
           import uuid
+
           import boto3
-          
+
+
           class ComprehensiveSmokeTests:
               def __init__(self, base_url, stack_name):
                   self.base_url = base_url.rstrip('/')
@@ -575,7 +632,7 @@ jobs:
                   else:
                       print(f"❌ Too many test failures: {total - passed} failures")
                       return False
-          
+
           def main():
               base_url = os.environ.get('API_ENDPOINT')
               stack_name = os.environ.get('STACK_NAME')
@@ -585,18 +642,22 @@ jobs:
               
               tests = ComprehensiveSmokeTests(base_url, stack_name)
               return tests.run_all_tests()
-          
+
           if __name__ == "__main__":
               success = main()
               sys.exit(0 if success else 1)
           PYEOF
-          
-          python comprehensive_smoke_tests.py
 
+
+          python comprehensive_smoke_tests.py
   post-deployment-checks:
     name: 🔍 Post-Deployment System Validation
     runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy, comprehensive-smoke-tests]
+    needs:
+      - deploy
+      - initialize-legacy-schema
+      - frontend-deploy
+      - comprehensive-smoke-tests
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -604,20 +665,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
       - name: 🔍 Validate infrastructure state
-        run: |
+        run: >
           set -euo pipefail
+
           STACK="${{ env.STACK_NAME }}"
+
           echo "🔍 Running post-deployment infrastructure validation..."
-          
+
+
           # Check stack status
+
           STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text)
+
           if [[ "$STACK_STATUS" != "CREATE_COMPLETE" && "$STACK_STATUS" != "UPDATE_COMPLETE" ]]; then
             echo "❌ Stack not in healthy state: $STACK_STATUS"
             exit 1
           fi
+
           echo "✅ CloudFormation stack healthy: $STACK_STATUS"
-          
+
+
           # Check Step Functions
+
           for sf in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::StepFunctions::StateMachine`].PhysicalResourceId' --output text); do
             STATUS=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query 'status' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
@@ -627,8 +696,10 @@ jobs:
             NAME=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query 'name' --output text)
             echo "✅ Step Function $NAME is ACTIVE"
           done
-          
+
+
           # Check DynamoDB tables
+
           for table in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::DynamoDB::Table`].PhysicalResourceId' --output text); do
             STATUS=$(aws dynamodb describe-table --table-name "$table" --query 'Table.TableStatus' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
@@ -637,9 +708,12 @@ jobs:
             fi
             echo "✅ DynamoDB table $table is ACTIVE"
           done
-          
+
+
           # Check RDS instance
+
           RDS_ID=$(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::RDS::DBInstance`].PhysicalResourceId' --output text)
+
           if [[ -n "$RDS_ID" ]]; then
             RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier "$RDS_ID" --query 'DBInstances[0].DBInstanceStatus' --output text)
             if [[ "$RDS_STATUS" != "available" ]]; then
@@ -648,8 +722,10 @@ jobs:
             fi
             echo "✅ RDS instance $RDS_ID is available"
           fi
-          
+
+
           # Check Lambda functions
+
           for func in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' --output text); do
             STATE=$(aws lambda get-function --function-name "$func" --query 'Configuration.State' --output text)
             if [[ "$STATE" != "Active" ]]; then
@@ -658,26 +734,39 @@ jobs:
             fi
             echo "✅ Lambda function $func is Active"
           done
-          
-          echo "🎉 All infrastructure components validated successfully!"
 
+
+          echo "🎉 All infrastructure components validated successfully!"
   notify-completion:
     name: 📧 Notify Deployment Completion
     runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy, comprehensive-smoke-tests, post-deployment-checks]
+    needs:
+      - deploy
+      - initialize-legacy-schema
+      - frontend-deploy
+      - comprehensive-smoke-tests
+      - post-deployment-checks
     if: always()
     steps:
       - name: 🎉 Deployment Summary
-        run: |
+        run: >
           set -euo pipefail
+
           echo "🎆 Deployment Summary"
+
           echo "==================="
+
           echo "Stack: ${{ env.STACK_NAME }}"
+
           echo "API Endpoint: ${{ needs.deploy.outputs.api-endpoint }}"
+
           echo "Deployment Status: ${{ needs.post-deployment-checks.result }}"
+
           echo "Timestamp: $(date)"
+
           echo ""
-          
+
+
           if [[ "${{ needs.post-deployment-checks.result }}" == "success" ]]; then
             echo "✅ Production deployment completed successfully!"
             echo "🎉 Your application is live and fully operational!"
@@ -701,7 +790,6 @@ jobs:
             echo "   4. Validate RDS connectivity and schema"
             echo "   5. Check Step Functions execution status"
           fi
-
 permissions:
   contents: read
   id-token: write
