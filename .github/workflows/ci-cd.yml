@@ -20,12 +20,17 @@ env:
   STACK_NAME: subscriber-migration-portal-prod
   BUCKET_SUFFIX: '20251031'
   STAGE: prod
+  WORKFLOW_SIGNATURE: 'ci-fix-no-heredoc-2025-10-31T16:53Z'
 
 jobs:
   build-test-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      - name: Guard – print workflow signature
+        run: |
+          echo "Using workflow signature: $WORKFLOW_SIGNATURE"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
