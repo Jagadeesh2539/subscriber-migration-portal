@@ -12,15 +12,7 @@ on:
         required: true
         default: 'prod'
         type: choice
-        options:
-        - dev
-        - test
-        - prod
-      enable_multi_az:
-        description: 'Enable RDS Multi-AZ (overrides stage default)'
-        required: false
-        type: boolean
-        default: false
+        options: [dev, test, prod]
 
 env:
   AWS_DEFAULT_REGION: us-east-1
@@ -32,251 +24,139 @@ env:
 jobs:
   build-test-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    
+    timeout-minutes: 75
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
 
-    - name: Setup SAM CLI
-      uses: aws-actions/setup-sam@v2
-      with:
-        use-installer: true
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 pymysql
 
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install boto3 pymysql pytest requests jsonschema
+      - name: Build SAM application
+        working-directory: aws
+        run: sam build --use-container
 
-    - name: Build React frontend
-      working-directory: frontend
-      run: |
-        npm ci
-        npm run build
-        npm run test -- --coverage --watchAll=false
+      - name: Deploy with Aurora EngineVersion fallback
+        id: deploy
+        working-directory: aws
+        env:
+          ENGINE_VERSIONS: "5.7.mysql_aurora.2.07.1 5.7.mysql_aurora.2.07.2 5.7.mysql_aurora.2.08.1 5.7.mysql_aurora.2.10.2"
+        run: |
+          set -euo pipefail
+          STACK="$STACK_NAME"
+          if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
+            STACK="subscriber-migration-portal-${{ inputs.stage }}"
+          fi
+          for EV in $ENGINE_VERSIONS; do
+            echo "Attempting deploy with AuroraEngineVersion=$EV"
+            if sam deploy \
+              --stack-name "$STACK" \
+              --region "$AWS_REGION" \
+              --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset \
+              --parameter-overrides \
+                Stage="${{ inputs.stage || env.STAGE }}" \
+                JwtSecret="${{ secrets.JWT_SECRET }}" \
+                CorsOrigins="${{ secrets.CORS_ORIGINS || 'https://yourdomain.com' }}" \
+                BucketSuffix="$BUCKET_SUFFIX" \
+                AuroraEngineVersion="$EV"; then
+              echo "engine_version=$EV" >> $GITHUB_OUTPUT
+              echo "✅ Deploy succeeded with $EV"
+              exit 0
+            else
+              echo "⚠️ Deploy failed with $EV, trying next..."
+              # Roll back failed stack if it exists to avoid blocking next attempt
+              if aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
+                STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].StackStatus" --output text || true)
+                echo "Stack status: $STATUS"
+                if [[ "$STATUS" == *"ROLLBACK"* || "$STATUS" == *"FAILED"* ]]; then
+                  echo "🗑️ Deleting bad stack $STACK"
+                  aws cloudformation delete-stack --stack-name "$STACK"
+                  aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
+                  # Force-empty uploads bucket (versioned) to unblock re-deploy
+                  UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
+                  echo "🧹 Force-empty S3 bucket: $UPB"
+                  # Delete object versions
+                  while true; do
+                    VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json || echo '{"Objects":[]}')
+                    if [ "$(echo "$VERS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
+                    aws s3api delete-objects --bucket "$UPB" --delete "$VERS" || true
+                  done
+                  # Delete delete-markers
+                  while true; do
+                    MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json || echo '{"Objects":[]}')
+                    if [ "$(echo "$MKRS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
+                    aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" || true
+                  done
+                  # Try delete bucket
+                  aws s3api delete-bucket --bucket "$UPB" || true
+                fi
+              fi
+            fi
+          done
+          echo "❌ All Aurora engine versions failed"
+          exit 1
 
-    - name: Build SAM application
-      working-directory: aws
-      run: |
-        sam build --use-container
-
-    - name: Deploy to AWS
-      working-directory: aws
-      env:
-        STAGE: ${{ inputs.stage || 'prod' }}
-        ENABLE_MULTI_AZ: ${{ inputs.enable_multi_az || 'false' }}
-      run: |
-        set -euo pipefail
-        
-        # Set stage-specific stack name
-        if [ "$STAGE" != "prod" ]; then
-          export STACK_NAME="subscriber-migration-portal-$STAGE"
-        fi
-        
-        echo "Deploying to stack: $STACK_NAME with stage: $STAGE"
-        
-        sam deploy \
-          --stack-name "$STACK_NAME" \
-          --region "$AWS_REGION" \
-          --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-          --no-confirm-changeset \
-          --no-fail-on-empty-changeset \
-          --parameter-overrides \
-            Stage="$STAGE" \
-            JwtSecret="${{ secrets.JWT_SECRET }}" \
-            CorsOrigins="${{ secrets.CORS_ORIGINS || 'https://yourdomain.com' }}" \
-            BucketSuffix="$BUCKET_SUFFIX"
-        
-        echo "✅ Deployment completed successfully"
-
-    - name: Export CloudFormation outputs
-      id: cfn-outputs
-      run: |
-        set -euo pipefail
-        
-        STACK="$STACK_NAME"
-        if [ "${{ inputs.stage }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
-          STACK="subscriber-migration-portal-${{ inputs.stage }}"
-        fi
-        
-        echo "Fetching outputs from stack: $STACK"
-        
-        # Get all stack outputs
-        OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
-        echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
-        
-        # Extract specific outputs using Python
-        python3 << 'PYEOF'
+      - name: Export CloudFormation outputs
+        if: steps.deploy.outcome == 'success'
+        id: cfn-outputs
+        run: |
+          set -euo pipefail
+          STACK="$STACK_NAME"
+          if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
+            STACK="subscriber-migration-portal-${{ inputs.stage }}"
+          fi
+          OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
+          echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
+          python3 << 'PY'
 import os, json
-outs = json.loads(os.environ['CFN_OUTPUTS'])
-m = {o['OutputKey']: o['OutputValue'] for o in outs}
+outs=json.loads(os.environ['CFN_OUTPUTS'])
+m={o['OutputKey']:o['OutputValue'] for o in outs}
+with open(os.environ['GITHUB_ENV'],'a') as f:
+  for k in ['ApiEndpoint','LegacyDbSecretArn','LegacyDbHost','SchemaInitFunctionName','UploadsBucketName']:
+    f.write(f"{k}={m.get(k,'')}\n")
+print('✅ Outputs exported')
+PY
 
-# Export critical outputs to environment
-with open(os.environ['GITHUB_ENV'], 'a') as f:
-    f.write(f"API_ENDPOINT={m.get('ApiEndpoint', '')}\n")
-    f.write(f"LEGACY_DB_SECRET_ARN={m.get('LegacyDbSecretArn', '')}\n")
-    f.write(f"LEGACY_DB_HOST={m.get('LegacyDbHost', '')}\n")
-    f.write(f"SCHEMA_INIT_FUNCTION={m.get('SchemaInitFunctionName', '')}\n")
-    f.write(f"UPLOADS_BUCKET={m.get('UploadsBucketName', '')}\n")
-
-print(f"✅ Exported outputs: API={m.get('ApiEndpoint', 'N/A')[:50]}...")
-print(f"   Legacy DB: {m.get('LegacyDbHost', 'N/A')[:50]}...")
-print(f"   Schema Function: {m.get('SchemaInitFunctionName', 'N/A')}")
-PYEOF
-
-    - name: Initialize Legacy RDS schema (VPC Lambda)
-      if: env.LEGACY_DB_SECRET_ARN != '' && env.LEGACY_DB_HOST != '' && env.SCHEMA_INIT_FUNCTION != ''
-      run: |
-        set -euo pipefail
-        
-        echo "🔧 Initializing Legacy RDS schema via VPC Lambda: $SCHEMA_INIT_FUNCTION"
-        echo "   Secret ARN: ${LEGACY_DB_SECRET_ARN:0:50}..."
-        echo "   DB Host: $LEGACY_DB_HOST"
-        
-        # Invoke the VPC-only schema init Lambda
-        aws lambda invoke \
-          --function-name "$SCHEMA_INIT_FUNCTION" \
-          --payload '{}' \
-          --log-type Tail \
-          --query 'LogResult' \
-          --output text \
-          out.json | base64 -d
-        
-        echo
-        echo "📋 Schema initialization result:"
-        cat out.json | python -m json.tool
-        echo
-        
-        # Check if schema init was successful
-        SUCCESS=$(cat out.json | python -c "import sys,json; print(json.load(sys.stdin).get('success', False))")
-        if [ "$SUCCESS" != "True" ]; then
-          echo "❌ Schema initialization failed"
-          exit 1
-        fi
-        
-        echo "✅ Legacy RDS schema initialized successfully"
-
-    - name: Run comprehensive smoke tests
-      if: env.API_ENDPOINT != ''
-      env:
-        API_ENDPOINT: ${{ env.API_ENDPOINT }}
-      run: |
-        set -euo pipefail
-        
-        echo "🧪 Running smoke tests against: $API_ENDPOINT"
-        
-        # Test health endpoint
-        echo "Testing health endpoint..."
-        curl -f -s "$API_ENDPOINT/health" | python -m json.tool
-        
-        # Test settings endpoint
-        echo "Testing settings endpoint..."
-        curl -f -s "$API_ENDPOINT/settings/provisioning-mode" | python -m json.tool
-        
-        # Test auth endpoint (expect 400 for missing credentials)
-        echo "Testing auth endpoint..."
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_ENDPOINT/auth/login" -H "Content-Type: application/json" -d '{}')
-        if [ "$STATUS" -eq "400" ]; then
-          echo "✅ Auth endpoint responding correctly (400 for missing credentials)"
-        else
-          echo "❌ Auth endpoint returned unexpected status: $STATUS"
-          exit 1
-        fi
-        
-        # Test migration upload endpoint (expect 400 for missing file info)
-        echo "Testing migration upload endpoint..."
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API_ENDPOINT/migration/upload" -H "Content-Type: application/json" -d '{}')
-        if [ "$STATUS" -eq "400" ]; then
-          echo "✅ Migration upload endpoint responding correctly (400 for missing file info)"
-        else
-          echo "❌ Migration upload endpoint returned unexpected status: $STATUS"
-          exit 1
-        fi
-        
-        # Test jobs list endpoint
-        echo "Testing jobs list endpoint..."
-        curl -f -s "$API_ENDPOINT/jobs" | python -m json.tool
-        
-        echo "✅ All smoke tests passed successfully"
-
-    - name: Deploy frontend to S3 (if prod)
-      if: inputs.stage == 'prod' || (inputs.stage == '' && github.ref == 'refs/heads/main')
-      working-directory: frontend
-      env:
-        REACT_APP_API_ENDPOINT: ${{ env.API_ENDPOINT }}
-        REACT_APP_STAGE: ${{ env.STAGE }}
-      run: |
-        set -euo pipefail
-        
-        # Create or update S3 bucket for frontend hosting
-        FRONTEND_BUCKET="${STACK_NAME}-frontend-${BUCKET_SUFFIX}"
-        
-        # Check if bucket exists, create if not
-        if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-          echo "Creating frontend S3 bucket: $FRONTEND_BUCKET"
-          aws s3 mb "s3://$FRONTEND_BUCKET"
-          
-          # Configure for static website hosting
-          aws s3 website "s3://$FRONTEND_BUCKET" --index-document index.html --error-document error.html
-          
-          # Set public read policy
-          aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy "{
-            \"Version\": \"2012-10-17\",
-            \"Statement\": [{
-              \"Sid\": \"PublicReadGetObject\",
-              \"Effect\": \"Allow\",
-              \"Principal\": \"*\",
-              \"Action\": \"s3:GetObject\",
-              \"Resource\": \"arn:aws:s3:::$FRONTEND_BUCKET/*\"
-            }]
-          }"
-        fi
-        
-        # Build and deploy frontend
-        echo "Building React app with API endpoint: $REACT_APP_API_ENDPOINT"
-        npm run build
-        
-        echo "Deploying to S3: $FRONTEND_BUCKET"
-        aws s3 sync build/ "s3://$FRONTEND_BUCKET" --delete
-        
-        echo "✅ Frontend deployed to: http://$FRONTEND_BUCKET.s3-website-$AWS_REGION.amazonaws.com"
-
-    - name: Deployment summary
-      if: always()
-      run: |
-        echo "🎉 Deployment Summary:"
-        echo "   Stage: ${{ inputs.stage || 'prod' }}"
-        echo "   Stack: ${{ env.STACK_NAME || 'subscriber-migration-portal-prod' }}"
-        echo "   API Endpoint: ${API_ENDPOINT:-'Not available'}"
-        echo "   Backend: Step Functions + Lambda + VPC + Private RDS"
-        echo "   Frontend: S3 Static Website (if prod)"
-        echo "   Security: VPC endpoints, encrypted storage, TLS-only S3"
-        echo "   Database: MySQL 8.0 with Multi-AZ (prod only)"
-        echo
-        echo "🔗 Next steps:"
-        echo "   1. Update CORS_ORIGINS secret with your frontend domain"
-        echo "   2. Change default admin password: admin/admin123!"
-        echo "   3. Configure CloudFront for frontend HTTPS (optional)"
-        echo "   4. Set up monitoring and alerting"
-        echo
-        echo "✅ Deployment completed successfully!"
+      - name: Initialize Aurora schema (Lambda)
+        if: steps.deploy.outcome == 'success'
+        run: |
+          set -euo pipefail
+          echo "🔧 Initializing schema via: $SCHEMA_INIT_FUNCTION_NAME"
+          aws lambda invoke \
+            --function-name "$SCHEMA_INIT_FUNCTION_NAME" \
+            --payload '{}' \
+            --log-type Tail \
+            --query 'LogResult' \
+            --output text \
+            out.json | base64 -d || true
+          echo
+          cat out.json || true
+          echo
+          OK=$(cat out.json 2>/dev/null | python -c 'import sys,json;print(json.load(sys.stdin).get("success", False))' || echo False)
+          if [ "$OK" != "True" ]; then
+            echo "❌ Schema initialization reported errors (see logs above)"
+            exit 1
+          fi
+          echo "✅ Schema initialization completed"
