@@ -13,25 +13,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
 
-// API service placeholder - will be implemented
-const cloudService = {
-  getSubscribers: async (params) => {
-    // TODO: Implement /cloud/subscribers API call
-    return { data: { subscribers: [], pagination: { hasMore: false, count: 0 } } };
-  },
-  createSubscriber: async (data) => {
-    // TODO: Implement POST /cloud/subscribers
-    return { data };
-  },
-  updateSubscriber: async (uid, data) => {
-    // TODO: Implement PUT /cloud/subscribers/{uid}
-    return { data };
-  },
-  deleteSubscriber: async (uid) => {
-    // TODO: Implement DELETE /cloud/subscribers/{uid}
-    return { success: true };
-  },
-};
+// Real API service
+import { cloudService } from '../api/cloudService';
 
 // Status options matching DynamoDB/RDS ENUM
 const statusOptions = [
@@ -73,7 +56,7 @@ const CloudCrud = () => {
 
   const queryClient = useQueryClient();
 
-  // Query subscribers with filters
+  // Query subscribers with filters using real API
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['cloud-subscribers', filters, paginationModel],
     queryFn: () => cloudService.getSubscribers({
@@ -82,9 +65,10 @@ const CloudCrud = () => {
       limit: paginationModel.pageSize,
     }),
     staleTime: 2 * 60 * 1000, // 2 minutes
+    keepPreviousData: true, // For smooth pagination
   });
 
-  // Mutations
+  // Mutations using real API
   const createMutation = useMutation({
     mutationFn: cloudService.createSubscriber,
     onSuccess: () => {
@@ -188,7 +172,12 @@ const CloudCrud = () => {
       headerName: 'Created',
       width: 140,
       valueFormatter: (params) => {
-        return params.value ? format(new Date(params.value), 'MMM dd, yyyy') : '';
+        if (!params.value) return '';
+        try {
+          return format(new Date(params.value), 'MMM dd, yyyy');
+        } catch {
+          return params.value;
+        }
       },
     },
     {
@@ -267,7 +256,8 @@ const CloudCrud = () => {
   };
 
   const subscribers = data?.data?.subscribers || [];
-  const totalCount = data?.data?.pagination?.count || 0;
+  const totalCount = data?.data?.pagination?.total || 0;
+  const hasMore = data?.data?.pagination?.hasMore || false;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -295,6 +285,13 @@ const CloudCrud = () => {
           </Button>
         </Stack>
       </Stack>
+
+      {/* Performance Info */}
+      {data?.data?.performance?.warning && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          {data.data.performance.warning}
+        </Alert>
+      )}
 
       {/* Filters */}
       <Card sx={{ mb: 3 }}>
@@ -416,6 +413,7 @@ const CloudCrud = () => {
                   size="small"
                   variant="outlined"
                   startIcon={<Edit />}
+                  onClick={() => toast.info('Bulk edit coming soon')}
                 >
                   Bulk Edit
                 </Button>
@@ -424,6 +422,7 @@ const CloudCrud = () => {
                   variant="outlined"
                   color="error"
                   startIcon={<Delete />}
+                  onClick={() => toast.info('Bulk delete coming soon')}
                 >
                   Bulk Delete
                 </Button>
@@ -431,6 +430,7 @@ const CloudCrud = () => {
                   size="small"
                   variant="outlined"
                   startIcon={<Download />}
+                  onClick={() => toast.info('Export coming soon')}
                 >
                   Export Selected
                 </Button>
