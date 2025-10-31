@@ -1,11 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Subscriber Migration Portal - VPC-secured RDS, private subnets, NAT; public API Gateway'
+Description: 'Subscriber Migration Portal - Production VPC with endpoints, private RDS, secure S3'
 
 Parameters:
   Stage:
     Type: String
     Default: 'prod'
+    AllowedValues: ['dev', 'test', 'prod']
   CorsOrigins:
     Type: String
     Default: 'https://yourdomain.com'
@@ -19,6 +20,11 @@ Parameters:
   VpcCidr:
     Type: String
     Default: '10.0.0.0/16'
+    Description: 'CIDR block for VPC'
+
+Conditions:
+  IsProd: !Equals [!Ref Stage, 'prod']
+  IsNotProd: !Not [!Equals [!Ref Stage, 'prod']]
 
 Globals:
   Function:
@@ -39,7 +45,7 @@ Globals:
 
 Resources:
   # ======================
-  # NETWORKING (VPC, Subnets, Routing)
+  # VPC NETWORKING
   # ======================
   VPC:
     Type: AWS::EC2::VPC
@@ -47,12 +53,18 @@ Resources:
       CidrBlock: !Ref VpcCidr
       EnableDnsHostnames: true
       EnableDnsSupport: true
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-vpc' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpc'
+        - Key: Stage
+          Value: !Ref Stage
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-igw' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-igw'
 
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -60,6 +72,7 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
+  # Public Subnets (for NAT Gateway)
   PublicSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
@@ -67,7 +80,11 @@ Resources:
       CidrBlock: 10.0.0.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-a' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-a'
+        - Key: Type
+          Value: Public
 
   PublicSubnetB:
     Type: AWS::EC2::Subnet
@@ -76,8 +93,13 @@ Resources:
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-b' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-b'
+        - Key: Type
+          Value: Public
 
+  # Private Subnets (for RDS and Lambda)
   PrivateSubnetA:
     Type: AWS::EC2::Subnet
     Properties:
@@ -85,7 +107,11 @@ Resources:
       CidrBlock: 10.0.16.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: false
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private-a' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-a'
+        - Key: Type
+          Value: Private
 
   PrivateSubnetB:
     Type: AWS::EC2::Subnet
@@ -94,16 +120,24 @@ Resources:
       CidrBlock: 10.0.17.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: false
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private-b' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-b'
+        - Key: Type
+          Value: Private
 
+  # Route Tables and Routes
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-rt' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public-rt'
 
   PublicRoute:
     Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
@@ -121,24 +155,32 @@ Resources:
       SubnetId: !Ref PublicSubnetB
       RouteTableId: !Ref PublicRouteTable
 
+  # NAT Gateway for private subnet internet access
   EIPNat:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nat-eip'
 
   NatGateway:
     Type: AWS::EC2::NatGateway
     Properties:
       AllocationId: !GetAtt EIPNat.AllocationId
       SubnetId: !Ref PublicSubnetA
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-nat' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-nat'
     DependsOn: VPCGatewayAttachment
 
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-private-rt' }]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private-rt'
 
   PrivateRoute:
     Type: AWS::EC2::Route
@@ -160,65 +202,270 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable
 
   # ======================
+  # VPC ENDPOINTS
+  # ======================
+  
+  # Security Group for VPC Endpoints
+  VpcEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for VPC Endpoints
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSG
+          Description: HTTPS from Lambda SG
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-vpce-sg'
+
+  # Secrets Manager VPC Endpoint
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref VpcEndpointSG
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 'secretsmanager:GetSecretValue'
+              - 'secretsmanager:DescribeSecret'
+            Resource: '*'
+
+  # CloudWatch Logs VPC Endpoint
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref VpcEndpointSG
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+            Resource: '*'
+
+  # Step Functions VPC Endpoint
+  StepFunctionsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.states'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref VpcEndpointSG
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 'states:StartExecution'
+              - 'states:DescribeExecution'
+              - 'states:StopExecution'
+              - 'states:ListExecutions'
+            Resource: '*'
+
+  # Lambda VPC Endpoint
+  LambdaEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.lambda'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref VpcEndpointSG
+      PrivateDnsEnabled: true
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 'lambda:InvokeFunction'
+              - 'lambda:GetFunction'
+            Resource: '*'
+
+  # S3 Gateway Endpoint
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource: '*'
+
+  # ======================
   # SECURITY GROUPS
   # ======================
   LambdaSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Lambda SG - egress only
+      GroupDescription: Lambda Security Group - egress to RDS and AWS services
       VpcId: !Ref VPC
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-lambda-sg' }]
+          Description: All outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-lambda-sg'
 
   RdsSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: RDS SG - allow MySQL 3306 from Lambda SG
+      GroupDescription: RDS Security Group - allow MySQL 3306 from Lambda SG only
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
           SourceSecurityGroupId: !Ref LambdaSG
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-rds-sg' }]
+          Description: MySQL from Lambda SG
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-rds-sg'
 
   # ======================
-  # S3 AND DYNAMODB
+  # S3 BUCKET WITH VPC ENDPOINT POLICY
   # ======================
   UploadsBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub '${AWS::StackName}-uploads-${BucketSuffix}'
-      VersioningConfiguration: { Status: Enabled }
+      VersioningConfiguration:
+        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: DeleteOldUploads
+            Status: Enabled
+            ExpirationInDays: 30
     DeletionPolicy: Delete
 
+  UploadsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Deny non-TLS access
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${UploadsBucket.Arn}'
+              - !Sub '${UploadsBucket.Arn}/*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+          # Allow access only via VPC S3 Gateway Endpoint
+          - Sid: AllowVPCEndpointAccess
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource:
+              - !Sub '${UploadsBucket.Arn}'
+              - !Sub '${UploadsBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceVpce': !Ref S3GatewayEndpoint
+
+  # ======================
+  # DYNAMODB TABLES
+  # ======================
   SubscribersTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub '${AWS::StackName}-subscribers-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - { AttributeName: uid, AttributeType: S }
-        - { AttributeName: status, AttributeType: S }
-        - { AttributeName: plan_id, AttributeType: S }
-      KeySchema: [ { AttributeName: uid, KeyType: HASH } ]
+        - AttributeName: uid
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: plan_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: uid
+          KeyType: HASH
       GlobalSecondaryIndexes:
         - IndexName: status-index
-          KeySchema: [ { AttributeName: status, KeyType: HASH } ]
-          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
         - IndexName: plan-index
-          KeySchema: [ { AttributeName: plan_id, KeyType: HASH } ]
-          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - AttributeName: plan_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
     DeletionPolicy: Delete
 
   SettingsTable:
@@ -226,8 +473,14 @@ Resources:
     Properties:
       TableName: !Sub '${AWS::StackName}-settings-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions: [ { AttributeName: sk, AttributeType: S } ]
-      KeySchema: [ { AttributeName: sk, KeyType: HASH } ]
+      AttributeDefinitions:
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sk
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
     DeletionPolicy: Delete
 
   MigrationJobsTable:
@@ -236,61 +489,97 @@ Resources:
       TableName: !Sub '${AWS::StackName}-jobs-${BucketSuffix}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - { AttributeName: job_id, AttributeType: S }
-        - { AttributeName: job_type, AttributeType: S }
-        - { AttributeName: created_at, AttributeType: S }
-      KeySchema: [ { AttributeName: job_id, KeyType: HASH } ]
+        - AttributeName: job_id
+          AttributeType: S
+        - AttributeName: job_type
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
       GlobalSecondaryIndexes:
         - IndexName: job-type-index
           KeySchema:
-            - { AttributeName: job_type, KeyType: HASH }
-            - { AttributeName: created_at, KeyType: RANGE }
-          Projection: { ProjectionType: ALL }
+            - AttributeName: job_type
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
     DeletionPolicy: Delete
 
   # ======================
-  # SECRETS + RDS (PRIVATE)
+  # RDS (HARDENED)
   # ======================
   LegacyDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub '${AWS::StackName}-legacy-db-${BucketSuffix}'
-      Description: 'Credentials for Legacy RDS MySQL'
+      Description: 'Credentials for Legacy RDS MySQL (private)'
       GenerateSecretString:
         SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
         GenerateStringKey: 'password'
-        PasswordLength: 24
+        PasswordLength: 32
         ExcludeCharacters: '"@/\\'
+      ReplicaRegions: !If
+        - IsProd
+        - - Region: us-west-2
+        - !Ref AWS::NoValue
 
   LegacyDbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupName: !Sub '${AWS::StackName}-rds-subnet-${BucketSuffix}'
-      DBSubnetGroupDescription: RDS subnet group (private)
-      SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
-      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-rds-subnet' }]
+      DBSubnetGroupDescription: RDS subnet group (private subnets only)
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-rds-subnet'
 
   LegacyDB:
     Type: AWS::RDS::DBInstance
     Properties:
       DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy-${BucketSuffix}'
       Engine: mysql
-      EngineVersion: '8.0'
-      DBInstanceClass: db.t4g.micro
-      AllocatedStorage: 20
+      EngineVersion: '8.0.35'
+      DBInstanceClass: !If [IsProd, 'db.t4g.small', 'db.t4g.micro']
+      AllocatedStorage: !If [IsProd, 100, 20]
+      MaxAllocatedStorage: !If [IsProd, 1000, 100]
+      StorageType: gp3
+      StorageEncrypted: true
       PubliclyAccessible: false
-      VPCSecurityGroups: [ !Ref RdsSG ]
+      MultiAZ: !If [IsProd, true, false]
+      VPCSecurityGroups:
+        - !Ref RdsSG
       DBSubnetGroupName: !Ref LegacyDbSubnetGroup
       MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
       DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
-      DeletionProtection: false
-      BackupRetentionPeriod: 1
-      StorageType: gp2
-    DependsOn: [ PrivateSubnetARouteTableAssociation, PrivateSubnetBRouteTableAssociation ]
+      BackupRetentionPeriod: !If [IsProd, 14, 1]
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      DeletionProtection: !If [IsProd, true, false]
+      EnablePerformanceInsights: !If [IsProd, true, false]
+      PerformanceInsightsRetentionPeriod: !If [IsProd, 7, !Ref 'AWS::NoValue']
+      MonitoringInterval: !If [IsProd, 60, 0]
+      EnableCloudwatchLogsExports: !If
+        - IsProd
+        - ['error', 'general', 'slow-query']
+        - !Ref 'AWS::NoValue'
+    DeletionPolicy: !If [IsProd, 'Snapshot', 'Delete']
+    DependsOn:
+      - PrivateSubnetARouteTableAssociation
+      - PrivateSubnetBRouteTableAssociation
 
   # ======================
-  # IAM ROLES + POLICIES
+  # IAM ROLES
   # ======================
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -300,93 +589,54 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: { Service: states.amazonaws.com }
-            Action: sts:AssumeRole
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
 
-  LambdaBasicRole:
+  LambdaVpcRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${AWS::StackName}-lambda-role-${BucketSuffix}'
+      RoleName: !Sub '${AWS::StackName}-lambda-vpc-role-${BucketSuffix}'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
-            Action: sts:AssumeRole
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
 
-  StepFunctionInvokeLambdaPolicy:
-    Type: AWS::IAM::Policy
+  LambdaPublicRole:
+    Type: AWS::IAM::Role
     Properties:
-      PolicyName: !Sub '${AWS::StackName}-stepfunctions-lambda-${BucketSuffix}'
-      Roles: [ !Ref StepFunctionExecutionRole ]
-      PolicyDocument:
+      RoleName: !Sub '${AWS::StackName}-lambda-public-role-${BucketSuffix}'
+      AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Action: [ 'lambda:InvokeFunction' ]
-            Resource:
-              - !GetAtt ValidateJobFunction.Arn
-              - !GetAtt ProcessFileFunction.Arn
-              - !GetAtt ProcessAuditFunction.Arn
-              - !GetAtt ProcessExportFunction.Arn
-
-  StepFunctionDynamoPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub '${AWS::StackName}-stepfunctions-dynamo-${BucketSuffix}'
-      Roles: [ !Ref StepFunctionExecutionRole ]
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: [ 'dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem' ]
-            Resource: !GetAtt MigrationJobsTable.Arn
-          - Effect: Allow
-            Action: [ 'logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents' ]
-            Resource: '*'
-
-  LambdaBasicExecutionPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub '${AWS::StackName}-lambda-execution-${BucketSuffix}'
-      Roles: [ !Ref LambdaBasicRole ]
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: [ 'logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents' ]
-            Resource: '*'
-          - Effect: Allow
-            Action: [ 'dynamodb:*' ]
-            Resource:
-              - !GetAtt SubscribersTable.Arn
-              - !Sub '${SubscribersTable.Arn}/index/*'
-              - !GetAtt MigrationJobsTable.Arn
-              - !Sub '${MigrationJobsTable.Arn}/index/*'
-              - !GetAtt SettingsTable.Arn
-          - Effect: Allow
-            Action: [ 's3:*' ]
-            Resource:
-              - !GetAtt UploadsBucket.Arn
-              - !Sub '${UploadsBucket.Arn}/*'
-          - Effect: Allow
-            Action: [ 'states:StartExecution','states:DescribeExecution','states:StopExecution','cloudformation:DescribeStacks','secretsmanager:GetSecretValue','rds:DescribeDBInstances','ec2:CreateNetworkInterface','ec2:DescribeNetworkInterfaces','ec2:DeleteNetworkInterface','ec2:AssignPrivateIpAddresses','ec2:UnassignPrivateIpAddresses' ]
-            Resource: '*'
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
 
   # ======================
-  # LAMBDAS (migration set in VPC), API remains public
+  # LAMBDA FUNCTIONS
   # ======================
+  
+  # VPC Lambda Functions (Migration workflows)
   OrchestratorFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-orchestrator-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/migration/
       Handler: orchestrator.lambda_handler
       Timeout: 60
       VpcConfig:
-        SecurityGroupIds: [ !Ref LambdaSG ]
-        SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
       Environment:
         Variables:
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
@@ -404,84 +654,133 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-validate-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/migration/
       Handler: validate_job.lambda_handler
       VpcConfig:
-        SecurityGroupIds: [ !Ref LambdaSG ]
-        SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
-      Environment: { Variables: { UPLOADS_BUCKET: !Ref UploadsBucket } }
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Environment:
+        Variables:
+          UPLOADS_BUCKET: !Ref UploadsBucket
 
   ProcessFileFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-process-file-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/migration/
       Handler: process_file.lambda_handler
       Timeout: 900
       MemorySize: 1024
       VpcConfig:
-        SecurityGroupIds: [ !Ref LambdaSG ]
-        SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-process-audit-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/migration/
       Handler: process_audit.lambda_handler
       Timeout: 600
       VpcConfig:
-        SecurityGroupIds: [ !Ref LambdaSG ]
-        SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   ProcessExportFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-process-export-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/migration/
       Handler: process_export.lambda_handler
       Timeout: 600
       VpcConfig:
-        SecurityGroupIds: [ !Ref LambdaSG ]
-        SubnetIds: [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ]
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
-  # Keep these public (no VPC) unless needed inside VPC
+  # VPC-only Schema Init Function
+  SchemaInitFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-schema-init-${BucketSuffix}'
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Handler: schema_init.lambda_handler
+      Timeout: 300
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Environment:
+        Variables:
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+
+  # VPC Lambda Functions (Settings and Auth)
   SettingsFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-settings-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/settings/
       Handler: handler.lambda_handler
-      Environment: { Variables: { SETTINGS_TABLE: !Ref SettingsTable } }
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Environment:
+        Variables:
+          SETTINGS_TABLE: !Ref SettingsTable
       Events:
         GetMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: GET } }
         PutMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: PUT } }
 
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-auth-${BucketSuffix}'
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/auth/
+      Handler: handler.lambda_handler
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSG]
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Environment:
+        Variables:
+          JWT_SECRET: !Ref JwtSecret
+      Events:
+        Login: { Type: Api, Properties: { Path: /auth/login, Method: POST } }
+        VerifyToken: { Type: Api, Properties: { Path: /auth/verify, Method: POST } }
+        RefreshToken: { Type: Api, Properties: { Path: /auth/refresh, Method: POST } }
+
+  # Public Lambda Function (Health - fast ping)
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub '${AWS::StackName}-health-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
+      Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
       Handler: handler.lambda_handler
       Environment:
@@ -492,21 +791,8 @@ Resources:
       Events:
         HealthCheck: { Type: Api, Properties: { Path: /health, Method: GET } }
 
-  AuthFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-auth-${BucketSuffix}'
-      Role: !GetAtt LambdaBasicRole.Arn
-      CodeUri: lambda/auth/
-      Handler: handler.lambda_handler
-      Environment: { Variables: { JWT_SECRET: !Ref JwtSecret } }
-      Events:
-        Login: { Type: Api, Properties: { Path: /auth/login, Method: POST } }
-        VerifyToken: { Type: Api, Properties: { Path: /auth/verify, Method: POST } }
-        RefreshToken: { Type: Api, Properties: { Path: /auth/refresh, Method: POST } }
-
   # ======================
-  # STEP FUNCTIONS (unchanged logic)
+  # STEP FUNCTIONS
   # ======================
   MigrationWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -514,7 +800,48 @@ Resources:
       StateMachineName: !Sub '${AWS::StackName}-migration-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {"StartAt":"Validate","States":{"Validate":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ValidateJobFunction.Arn}","Payload.$":"$"},"Next":"Process"},"Process":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessFileFunction.Arn}","Payload.$":"$"},"End":true}}}
+        {
+          "Comment": "Migration Workflow with validation and processing",
+          "StartAt": "ValidateJob",
+          "TimeoutSeconds": 3600,
+          "States": {
+            "ValidateJob": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ValidateJobFunction.Arn}",
+                "Payload.$": "$"
+              },
+              "ResultPath": "$.validation",
+              "Next": "ProcessMigration",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ]
+            },
+            "ProcessMigration": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessFileFunction.Arn}",
+                "Payload.$": "$"
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ]
+            }
+          }
+        }
 
   AuditWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -522,7 +849,30 @@ Resources:
       StateMachineName: !Sub '${AWS::StackName}-audit-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {"StartAt":"Audit","States":{"Audit":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessAuditFunction.Arn}","Payload.$":"$"},"End":true}}}
+        {
+          "Comment": "Audit Workflow for consistency checks",
+          "StartAt": "ProcessAudit",
+          "TimeoutSeconds": 1800,
+          "States": {
+            "ProcessAudit": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditFunction.Arn}",
+                "Payload.$": "$"
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 3,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ]
+            }
+          }
+        }
 
   ExportWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -530,7 +880,119 @@ Resources:
       StateMachineName: !Sub '${AWS::StackName}-export-${BucketSuffix}'
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub |
-        {"StartAt":"Export","States":{"Export":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessExportFunction.Arn}","Payload.$":"$"},"End":true}}}
+        {
+          "Comment": "Export Workflow for data extraction",
+          "StartAt": "ProcessExport",
+          "TimeoutSeconds": 2400,
+          "States": {
+            "ProcessExport": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessExportFunction.Arn}",
+                "Payload.$": "$"
+              },
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ]
+            }
+          }
+        }
+
+  # ======================
+  # IAM POLICIES
+  # ======================
+  StepFunctionInvokeLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-stepfunctions-lambda-${BucketSuffix}'
+      Roles: [!Ref StepFunctionExecutionRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource:
+              - !GetAtt ValidateJobFunction.Arn
+              - !GetAtt ProcessFileFunction.Arn
+              - !GetAtt ProcessAuditFunction.Arn
+              - !GetAtt ProcessExportFunction.Arn
+
+  StepFunctionDynamoPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-stepfunctions-dynamo-${BucketSuffix}'
+      Roles: [!Ref StepFunctionExecutionRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem']
+            Resource: !GetAtt MigrationJobsTable.Arn
+          - Effect: Allow
+            Action: ['logs:CreateLogGroup', 'logs:CreateLogStream', 'logs:PutLogEvents']
+            Resource: '*'
+
+  LambdaVpcExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-lambda-vpc-execution-${BucketSuffix}'
+      Roles: [!Ref LambdaVpcRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:*'
+            Resource:
+              - !GetAtt SubscribersTable.Arn
+              - !Sub '${SubscribersTable.Arn}/index/*'
+              - !GetAtt MigrationJobsTable.Arn
+              - !Sub '${MigrationJobsTable.Arn}/index/*'
+              - !GetAtt SettingsTable.Arn
+          - Effect: Allow
+            Action: ['s3:*']
+            Resource:
+              - !GetAtt UploadsBucket.Arn
+              - !Sub '${UploadsBucket.Arn}/*'
+          - Effect: Allow
+            Action:
+              - 'states:StartExecution'
+              - 'states:DescribeExecution'
+              - 'states:StopExecution'
+              - 'cloudformation:DescribeStacks'
+              - 'secretsmanager:GetSecretValue'
+              - 'rds:DescribeDBInstances'
+            Resource: '*'
+
+  LambdaPublicExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${AWS::StackName}-lambda-public-execution-${BucketSuffix}'
+      Roles: [!Ref LambdaPublicRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dynamodb:Query'
+              - 'dynamodb:Scan'
+              - 'dynamodb:GetItem'
+            Resource:
+              - !GetAtt SubscribersTable.Arn
+              - !GetAtt MigrationJobsTable.Arn
+              - !GetAtt SettingsTable.Arn
+          - Effect: Allow
+            Action:
+              - 'states:ListStateMachines'
+              - 'states:DescribeStateMachine'
+            Resource: '*'
 
   # S3 Notification Permission
   ProcessFileFunctionPermission:
@@ -544,27 +1006,45 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
+    Description: API Gateway endpoint URL (public)
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
 
   VpcId:
     Description: VPC Id
     Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
 
   PrivateSubnets:
-    Description: Private subnet Ids
-    Value: !Join [ ",", [ !Ref PrivateSubnetA, !Ref PrivateSubnetB ] ]
+    Description: Private subnet Ids (comma-separated)
+    Value: !Join [',', [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnets'
+
+  PublicSubnets:
+    Description: Public subnet Ids (comma-separated)
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnets'
 
   LambdaSecurityGroupId:
-    Description: Lambda SG Id
+    Description: Lambda Security Group Id
     Value: !Ref LambdaSG
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaSG'
 
   RdsSecurityGroupId:
-    Description: RDS SG Id
+    Description: RDS Security Group Id
     Value: !Ref RdsSG
+    Export:
+      Name: !Sub '${AWS::StackName}-RdsSG'
+
+  S3GatewayEndpointId:
+    Description: S3 Gateway VPC Endpoint Id
+    Value: !Ref S3GatewayEndpoint
 
   UploadsBucketName:
-    Description: S3 bucket for file uploads
+    Description: S3 bucket for file uploads (VPC endpoint restricted)
     Value: !Ref UploadsBucket
 
   MigrationJobsTableName:
@@ -594,7 +1074,19 @@ Outputs:
   LegacyDbSecretArn:
     Description: Secret ARN for Legacy RDS credentials
     Value: !Ref LegacyDbSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-LegacyDbSecretArn'
 
   LegacyDbHost:
     Description: Legacy RDS endpoint hostname (private)
     Value: !GetAtt LegacyDB.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-LegacyDbHost'
+
+  StackName:
+    Description: CloudFormation stack name
+    Value: !Ref 'AWS::StackName'
+
+  SchemaInitFunctionName:
+    Description: VPC-only Schema Init Lambda function name
+    Value: !Ref SchemaInitFunction
