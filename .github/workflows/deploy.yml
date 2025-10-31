@@ -34,8 +34,7 @@ jobs:
     needs: validate
     environment: production
     outputs:
-      api-endpoint: ${{ steps.outputs_step.outputs.api_endpoint }}
-      upload-bucket: ${{ steps.outputs_step.outputs.upload_bucket }}
+      api-endpoint: ${{ steps.out.outputs.api_endpoint }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -53,27 +52,133 @@ jobs:
         run: |
           set -euo pipefail
           STACK="${{ env.STACK_NAME }}"
-          echo "🔎 Checking stack status for $STACK"
           STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
-          echo "Current status: $STATUS"
-
-          is_bad() {
-            case "$1" in
-              ROLLBACK_*|*_ROLLBACK_*|*_FAILED|DELETE_FAILED) return 0;;
-              *) return 1;;
-            esac
+          echo "Status: $STATUS"
+          is_bad() { case "$1" in ROLLBACK_*|*_ROLLBACK_*|*_FAILED|DELETE_FAILED) return 0;; *) return 1;; esac }
+          cleanup() {
+            echo "🧹 Cleaning resources for $STACK"
+            # S3 buckets
+            for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|frontend|uploads" || true); do
+              aws s3 rm "s3://$b" --recursive || true; aws s3 rb "s3://$b" --force || true; done
+            # Lambda
+            for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws lambda delete-function --function-name "$f" || true; done
+            # API Gateway
+            for id in $(aws apigateway get-rest-apis --query 'items[?contains(name, `'$STACK'`)].id' --output text || true); do aws apigateway delete-rest-api --rest-api-id "$id" || true; done
+            # DynamoDB by tag
+            for t in $(aws dynamodb list-tables --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws dynamodb delete-table --table-name "$t" || true; done
+            # Logs
+            for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
+            # Secrets (legacy/db/settings naming)
+            for s in $(aws secretsmanager list-secrets --query 'SecretList[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}-legacy-db|${STACK}-users" || true); do aws secretsmanager delete-secret --secret-id "$s" --force-delete-without-recovery || true; done
           }
+          if is_bad "$STATUS"; then
+            echo "🗑️ Deleting bad stack $STACK"; aws cloudformation delete-stack --stack-name "$STACK" || true
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
+            cleanup
+          fi
 
-          cleanup_resources() {
-            echo "🧹 Cleaning associated resources for $STACK"
-            # S3 buckets (uploads + frontend) - empty then delete
-            for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|uploads|frontend" || true); do
-              echo "  🪣 Empty+delete bucket: $b"
-              aws s3 rm "s3://$b" --recursive || true
-              aws s3 rb "s3://$b" --force || true
-            done
-            # Lambda functions
-            for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do
-              echo "  🧨 Delete lambda: $f"; aws lambda delete-function --function-name "$f" || true; done
-            # API Gateway (REST v1)
-            for id in $(aws apigateway get-rest-apis --query 'items[?contains(name, `'
+      - name: 🚀 Build & Deploy SAM
+        id: deploy_step
+        run: |
+          set -euo pipefail
+          cd aws
+          sam build --template template.yaml
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET="sam-deployment-${ACCOUNT_ID}-${{ env.AWS_DEFAULT_REGION }}"
+          aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$BUCKET"
+          JWT_SECRET=$(openssl rand -base64 48)
+          sam deploy \
+            --stack-name "${{ env.STACK_NAME }}" \
+            --region ${{ env.AWS_DEFAULT_REGION }} \
+            --s3-bucket "$BUCKET" \
+            --parameter-overrides Stage=prod JwtSecret="$JWT_SECRET" CorsOrigins="https://yourdomain.com" \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --no-confirm-changeset
+
+      - name: 📤 Export API endpoint
+        id: out
+        run: |
+          set -euo pipefail
+          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
+          echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+
+  initialize-legacy-schema:
+    name: 🗄️ Initialize Legacy DB Schema
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: 📦 Install DB tooling
+        run: pip install boto3 pymysql
+      - name: 🔎 Fetch legacy DB outputs
+        id: cf
+        run: |
+          set -euo pipefail
+          STACK="${{ env.STACK_NAME }}"
+          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbSecretArn'].OutputValue" --output text)
+          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbHost'].OutputValue" --output text)
+          echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
+          echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
+      - name: 🗄️ Run schema initializer (Python or SQL)
+        env:
+          LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
+          LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
+        run: |
+          set -euo pipefail
+          if [ -f backend/setup_legacy_schema.py ]; then
+            python backend/setup_legacy_schema.py --secret-arn "$LEGACY_DB_SECRET_ARN" --host "$LEGACY_DB_HOST"
+          elif [ -f database/rds_schema_update.sql ]; then
+            cat > run_sql.py << 'PYEOF'
+            import os, json, boto3, pymysql, sys
+            secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
+            host = os.environ["LEGACY_DB_HOST"]
+            sql_file = "database/rds_schema_update.sql"
+            sm = boto3.client("secretsmanager")
+            sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
+            user = sec.get("username") or sec.get("user"); pwd = sec.get("password") or sec.get("pass")
+            db  = sec.get("dbname") or sec.get("database") or ""
+            conn = pymysql.connect(host=host, user=user, password=pwd, database=db, autocommit=True)
+            with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
+              sql = f.read()
+              for stmt in [s.strip() for s in sql.split(';') if s.strip()]: cur.execute(stmt)
+            print('Legacy schema updated')
+            PYEOF
+            python run_sql.py
+          else
+            echo "No schema file found"; exit 1
+
+  frontend-deploy:
+    name: 🌐 Frontend Deploy
+    runs-on: ubuntu-latest
+    needs: [deploy, initialize-legacy-schema]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: 📦 Install & Build
+        run: |
+          cd frontend
+          npm ci || (npm cache verify && rm -rf node_modules package-lock.json && npm install --force)
+          echo "REACT_APP_API_URL=${{ needs.deploy.outputs.api-endpoint }}" > .env.production
+          echo "REACT_APP_STAGE=prod" >> .env.production
+          npm run build
+      - name: 🚀 Upload to S3 website
+        run: |
+          FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
+          aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
+          aws s3 sync frontend/build/ s3://$FRONTEND_BUCKET --delete
