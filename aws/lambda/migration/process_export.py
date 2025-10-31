@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import csv
 from io import StringIO
 import uuid
-time
+import time
 
 # Lambda Layer imports
 import sys
