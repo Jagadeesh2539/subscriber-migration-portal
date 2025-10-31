@@ -17,9 +17,9 @@ import {
 
 // Enhanced imports with lazy loading
 const Login = React.lazy(() => import('./auth/Login'));
-const SubscriberProvision = React.lazy(() => import('./provisioning/SubscriberProvision'));
 const BulkMigration = React.lazy(() => import('./migration/BulkMigration'));
 const SettingsPage = React.lazy(() => import('./settings/SettingsPage'));
+const ProvisioningHub = React.lazy(() => import('./provisioning/ProvisioningHub'));
 
 // API and hooks
 import { queryConfig } from './api/apiClient';
@@ -68,7 +68,19 @@ const createAppTheme = (mode) => createTheme({
 });
 
 // Create Query Client with enhanced configuration
-const queryClient = new QueryClient(queryConfig);
+const queryClient = new QueryClient(queryConfig || {
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000,
+      cacheTime: 10 * 60 * 1000,
+      retry: 2,
+      refetchOnWindowFocus: false,
+    },
+    mutations: {
+      retry: 1,
+    },
+  },
+});
 
 // Error Fallback Component
 const ErrorFallback = ({ error, resetErrorBoundary }) => {
@@ -95,7 +107,7 @@ const LoadingSkeleton = () => (
   </Box>
 );
 
-// Enhanced Dashboard with real data and provisioning mode indicator
+// Enhanced Dashboard with provisioning mode
 const Dashboard = ({ provisioningMode }) => {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats();
   const { data: health, isLoading: healthLoading } = useSystemHealth();
@@ -234,8 +246,8 @@ function AppContent() {
         loadProvisioningMode();
         
         // Prefetch dashboard data for better UX
-        prefetchDashboard();
-        prefetchSubscribers();
+        if (prefetchDashboard) prefetchDashboard();
+        if (prefetchSubscribers) prefetchSubscribers();
       } catch (e) {
         console.error('Invalid user data:', e);
         localStorage.removeItem('token');
@@ -305,7 +317,7 @@ function AppContent() {
     );
   }
 
-  // Login page with enhanced styling
+  // Login page
   if (!auth) {
     return (
       <ThemeProvider theme={appTheme}>
@@ -353,21 +365,21 @@ function AppContent() {
             button 
             onClick={() => navigate(item.path)}
             sx={{
-              bgcolor: location.pathname === item.path ? 'action.selected' : 'transparent',
-              borderRight: location.pathname === item.path ? '4px solid' : 'none',
+              bgcolor: location.pathname.startsWith(item.path) ? 'action.selected' : 'transparent',
+              borderRight: location.pathname.startsWith(item.path) ? '4px solid' : 'none',
               borderRightColor: 'primary.main',
               '&:hover': { bgcolor: 'action.hover' }
             }}
           >
-            <ListItemIcon sx={{ color: location.pathname === item.path ? 'primary.main' : 'inherit' }}>
+            <ListItemIcon sx={{ color: location.pathname.startsWith(item.path) ? 'primary.main' : 'inherit' }}>
               {item.icon}
             </ListItemIcon>
             <ListItemText 
               primary={item.label} 
               sx={{ 
                 '& .MuiTypography-root': { 
-                  fontWeight: location.pathname === item.path ? 'bold' : 'normal',
-                  color: location.pathname === item.path ? 'primary.main' : 'inherit'
+                  fontWeight: location.pathname.startsWith(item.path) ? 'bold' : 'normal',
+                  color: location.pathname.startsWith(item.path) ? 'primary.main' : 'inherit'
                 } 
               }} 
             />
@@ -485,8 +497,10 @@ function AppContent() {
                       {/* Dashboard - Default route */}
                       <Route path="/dashboard" element={<Dashboard provisioningMode={provisioningMode} />} />
                       
-                      {/* Core Features */}
-                      <Route path="/provision" element={<SubscriberProvision />} />
+                      {/* Provisioning Hub with nested routes */}
+                      <Route path="/provision/*" element={<ProvisioningHub />} />
+                      
+                      {/* Migration */}
                       <Route path="/migration" element={<BulkMigration />} />
                       
                       {/* Enterprise Features - Placeholder for now */}
@@ -538,7 +552,7 @@ function AppContent() {
           {/* Logout Confirmation Modal */}
           <Dialog open={isLogoutModalOpen} onClose={() => setIsLogoutModalOpen(false)} maxWidth="xs" fullWidth>
             <DialogTitle>🚪 Confirm Logout</DialogTitle>
-            <DialogContent dividers>
+            <DialogContent>
               <Typography>Are you sure you want to log out of the Enterprise Portal?</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 You will need to log in again to access your account.
