@@ -162,16 +162,16 @@ jobs:
             for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|frontend|uploads" || true); do
               aws s3 rm "s3://$b" --recursive || true; aws s3 rb "s3://$b" --force || true; done
             # Step Functions
-            for sf in $(aws stepfunctions list-state-machines --query 'stateMachines[?contains(name, `'$STACK'`)].stateMachineArn' --output text || true); do
+            for sf in $(aws stepfunctions list-state-machines --query "stateMachines[?contains(name, \`$STACK\`)].stateMachineArn" --output text || true); do
               aws stepfunctions delete-state-machine --state-machine-arn "$sf" || true; done
             # Lambda
             for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws lambda delete-function --function-name "$f" || true; done
             # API Gateway
-            for id in $(aws apigateway get-rest-apis --query 'items[?contains(name, `'$STACK'`)].id' --output text || true); do aws apigateway delete-rest-api --rest-api-id "$id" || true; done
+            for id in $(aws apigateway get-rest-apis --query "items[?contains(name, \`$STACK\`)].id" --output text || true); do aws apigateway delete-rest-api --rest-api-id "$id" || true; done
             # DynamoDB by tag
             for t in $(aws dynamodb list-tables --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws dynamodb delete-table --table-name "$t" || true; done
             # RDS instances
-            for db in $(aws rds describe-db-instances --query 'DBInstances[?contains(DBInstanceIdentifier, `'$STACK'`)].DBInstanceIdentifier' --output text || true); do aws rds delete-db-instance --db-instance-identifier "$db" --skip-final-snapshot || true; done
+            for db in $(aws rds describe-db-instances --query "DBInstances[?contains(DBInstanceIdentifier, \`$STACK\`)].DBInstanceIdentifier" --output text || true); do aws rds delete-db-instance --db-instance-identifier "$db" --skip-final-snapshot || true; done
             # Logs
             for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
             for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/stepfunctions/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
@@ -207,7 +207,7 @@ jobs:
         id: out
         run: |
           set -euo pipefail
-          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
+          API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query "Stacks[0].Outputs[?OutputKey==\`ApiEndpoint\`].OutputValue" --output text)
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
 
   initialize-legacy-schema:
@@ -243,7 +243,7 @@ jobs:
           set -euo pipefail
           if [ -f database/rds_schema_update.sql ]; then
             echo "🔍 Found schema file: database/rds_schema_update.sql"
-            python - <<'PY'
+            python - << 'EOF'
 import os, json, boto3, pymysql, sys
 region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
@@ -278,7 +278,7 @@ with conn.cursor() as cur, open(sql_file, "r", encoding="utf-8") as f:
 print(f"✅ Legacy schema initialization completed: executed={executed}, skipped={skipped}, errors={errors}")
 if errors:
     sys.exit(1)
-PY
+EOF
           else
             echo "❌ ERROR: Schema file NOT FOUND at database/rds_schema_update.sql"; exit 1
           fi
@@ -331,7 +331,7 @@ PY
           STACK_NAME: ${{ env.STACK_NAME }}
         run: |
           set -euo pipefail
-          cat > comprehensive_smoke_tests.py << 'PYEOF'
+          cat > comprehensive_smoke_tests.py << 'EOF'
 import requests, time, sys, os, json, uuid
 from datetime import datetime
 import boto3
@@ -427,7 +427,7 @@ if __name__=="__main__":
     base=os.environ.get('API_ENDPOINT'); stack=os.environ.get('STACK_NAME')
     if not base: print("❌ API_ENDPOINT not set"); sys.exit(1)
     sys.exit(0 if ComprehensiveSmokeTests(base, stack).run() else 1)
-PYEOF
+EOF
           python comprehensive_smoke_tests.py
 
   post-deployment-checks:
@@ -455,7 +455,7 @@ PYEOF
           echo "✅ CloudFormation stack healthy: $STACK_STATUS"
           
           # Check Step Functions
-          for sf in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::StepFunctions::StateMachine`].PhysicalResourceId' --output text); do
+          for sf in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType==\`AWS::StepFunctions::StateMachine\`].PhysicalResourceId" --output text); do
             STATUS=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query 'status' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
               echo "❌ Step Function $sf not active: $STATUS"
@@ -466,7 +466,7 @@ PYEOF
           done
           
           # Check DynamoDB tables
-          for table in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::DynamoDB::Table`].PhysicalResourceId' --output text); do
+          for table in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType==\`AWS::DynamoDB::Table\`].PhysicalResourceId" --output text); do
             STATUS=$(aws dynamodb describe-table --table-name "$table" --query 'Table.TableStatus' --output text)
             if [[ "$STATUS" != "ACTIVE" ]]; then
               echo "❌ DynamoDB table $table not active: $STATUS"
@@ -476,7 +476,7 @@ PYEOF
           done
           
           # Check RDS instance
-          RDS_ID=$(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::RDS::DBInstance`].PhysicalResourceId' --output text)
+          RDS_ID=$(aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType==\`AWS::RDS::DBInstance\`].PhysicalResourceId" --output text)
           if [[ -n "$RDS_ID" ]]; then
             RDS_STATUS=$(aws rds describe-db-instances --db-instance-identifier "$RDS_ID" --query 'DBInstances[0].DBInstanceStatus' --output text)
             if [[ "$RDS_STATUS" != "available" ]]; then
@@ -487,7 +487,7 @@ PYEOF
           fi
           
           # Check Lambda functions
-          for func in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' --output text); do
+          for func in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query "StackResources[?ResourceType==\`AWS::Lambda::Function\`].PhysicalResourceId" --output text); do
             STATE=$(aws lambda get-function --function-name "$func" --query 'Configuration.State' --output text)
             if [[ "$STATE" != "Active" ]]; then
               echo "❌ Lambda function $func not active: $STATE"
