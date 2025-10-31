@@ -26,7 +26,7 @@ env:
   STACK_NAME: subscriber-migration-portal-prod
   BUCKET_SUFFIX: '20251031'
   STAGE: prod
-  WORKFLOW_SIGNATURE: 'ci-fix-no-heredoc-2025-10-31T16:53Z'
+  WORKFLOW_SIGNATURE: 'ci-fix-no-heredoc-2025-10-31T17:14Z'
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -127,20 +127,33 @@ jobs:
                   aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
                   echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
+                  # delete object versions
                   while true; do
                     VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    if [ "$(echo "$VERS" | python - <<'PY'
-import sys, json; print(len(json.load(sys.stdin)["Objects"]))
+                    python - <<'PY'
+import os, sys, json
+obj=json.loads(os.environ.get('VERS','{"Objects":[]}')) if 'VERS' in os.environ else json.loads('{"Objects":[]}')
+print(len(obj.get('Objects', [])))
 PY
-)" = "0" ]; then break; fi
+                    COUNT=$(python - <<'PY'
+import json,sys
+obj=json.loads(sys.stdin.read())
+print(len(obj.get('Objects', [])))
+PY
+)
+                    if [ "$COUNT" = "0" ]; then break; fi
                     aws s3api delete-objects --bucket "$UPB" --delete "$VERS" --region "$AWS_REGION" || true
                   done
+                  # delete delete-markers
                   while true; do
                     MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    if [ "$(echo "$MKRS" | python - <<'PY'
-import sys, json; print(len(json.load(sys.stdin)["Objects"]))
+                    COUNT2=$(python - <<'PY'
+import json,sys
+obj=json.loads(sys.stdin.read())
+print(len(obj.get('Objects', [])))
 PY
-)" = "0" ]; then break; fi
+<<< "$MKRS")
+                    if [ "$COUNT2" = "0" ]; then break; fi
                     aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" --region "$AWS_REGION" || true
                   done
                   aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" || true
@@ -189,10 +202,15 @@ PY
           echo
           cat out.json || true
           echo
-          OK=$(cat out.json 2>/dev/null | python - <<'PY'
-import sys, json; print(json.load(sys.stdin).get('success', False))
+          OK=$(python - <<'PY'
+import json
+try:
+  import sys
+  print(json.load(open('out.json')).get('success', False))
+except Exception:
+  print('False')
 PY
- || echo False)
+)
           if [ "$OK" != "True" ]; then
             echo "❗ Lambda schema init reported errors; running direct fallback"
           else
