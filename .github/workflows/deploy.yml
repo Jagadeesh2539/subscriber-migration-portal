@@ -4,6 +4,15 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: false
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
 
 env:
   AWS_DEFAULT_REGION: us-east-1
@@ -243,7 +252,7 @@ jobs:
           set -euo pipefail
           if [ -f database/rds_schema_update.sql ]; then
             echo "🔍 Found schema file: database/rds_schema_update.sql"
-            python - << 'EOF'
+            cat > schema_init.py << 'PYTHON_SCRIPT'
 import os, json, boto3, pymysql, sys
 region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
@@ -278,7 +287,8 @@ with conn.cursor() as cur, open(sql_file, "r", encoding="utf-8") as f:
 print(f"✅ Legacy schema initialization completed: executed={executed}, skipped={skipped}, errors={errors}")
 if errors:
     sys.exit(1)
-EOF
+PYTHON_SCRIPT
+            python schema_init.py
           else
             echo "❌ ERROR: Schema file NOT FOUND at database/rds_schema_update.sql"; exit 1
           fi
@@ -331,7 +341,7 @@ EOF
           STACK_NAME: ${{ env.STACK_NAME }}
         run: |
           set -euo pipefail
-          cat > comprehensive_smoke_tests.py << 'EOF'
+          cat > comprehensive_smoke_tests.py << 'PYTHON_SCRIPT'
 import requests, time, sys, os, json, uuid
 from datetime import datetime
 import boto3
@@ -427,7 +437,7 @@ if __name__=="__main__":
     base=os.environ.get('API_ENDPOINT'); stack=os.environ.get('STACK_NAME')
     if not base: print("❌ API_ENDPOINT not set"); sys.exit(1)
     sys.exit(0 if ComprehensiveSmokeTests(base, stack).run() else 1)
-EOF
+PYTHON_SCRIPT
           python comprehensive_smoke_tests.py
 
   post-deployment-checks:
