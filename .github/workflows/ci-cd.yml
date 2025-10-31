@@ -24,7 +24,7 @@ env:
 jobs:
   build-test-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -95,14 +95,22 @@ jobs:
                   aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
                   echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
+                  # delete object versions
                   while true; do
                     VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    if [ "$(echo "$VERS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
+                    if [ "$(echo "$VERS" | python - <<'PY'
+import sys, json; print(len(json.load(sys.stdin)["Objects"]))
+PY
+)" = "0" ]; then break; fi
                     aws s3api delete-objects --bucket "$UPB" --delete "$VERS" --region "$AWS_REGION" || true
                   done
+                  # delete delete-markers
                   while true; do
                     MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    if [ "$(echo "$MKRS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
+                    if [ "$(echo "$MKRS" | python - <<'PY'
+import sys, json; print(len(json.load(sys.stdin)["Objects"]))
+PY
+)" = "0" ]; then break; fi
                     aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" --region "$AWS_REGION" || true
                   done
                   aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" || true
@@ -124,7 +132,7 @@ jobs:
           fi
           OUT=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
           echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
-          python3 << 'PY'
+          python - <<'PY'
 import os, json
 outs=json.loads(os.environ['CFN_OUTPUTS'])
 m={o['OutputKey']:o['OutputValue'] for o in outs}
@@ -134,11 +142,11 @@ with open(os.environ['GITHUB_ENV'],'a') as f:
 print('✅ Outputs exported')
 PY
 
-      - name: Initialize MySQL schema (Lambda)
+      - name: Initialize MySQL schema (Lambda in VPC)
         if: steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
-          echo "🔧 Initializing schema via: $SCHEMA_INIT_FUNCTION_NAME in $AWS_REGION"
+          echo "🔧 Initializing schema via Lambda: $SCHEMA_INIT_FUNCTION_NAME in $AWS_REGION"
           aws lambda invoke \
             --region "$AWS_REGION" \
             --function-name "$SCHEMA_INIT_FUNCTION_NAME" \
@@ -150,9 +158,64 @@ PY
           echo
           cat out.json || true
           echo
-          OK=$(cat out.json 2>/dev/null | python -c 'import sys,json;print(json.load(sys.stdin).get("success", False))' || echo False)
+          OK=$(cat out.json 2>/dev/null | python - <<'PY'
+import sys, json; print(json.load(sys.stdin).get('success', False))
+PY
+ || echo False)
           if [ "$OK" != "True" ]; then
-            echo "❌ Schema initialization reported errors (see logs above)"
-            exit 1
+            echo "❗ Lambda schema init reported errors; running direct fallback"
+          else
+            echo "✅ Lambda schema initialization completed"
+            exit 0
           fi
-          echo "✅ Schema initialization completed"
+
+      - name: Initialize MySQL schema (Direct runner fallback)
+        if: steps.deploy.outcome == 'success'
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          LEGACY_DB_SECRET_ARN: ${{ env.LegacyDbSecretArn }}
+          LEGACY_DB_HOST: ${{ env.LegacyDbHost }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import os, json, boto3, pymysql, sys
+region = os.environ.get('AWS_REGION','us-west-2')
+secret_arn = os.environ.get('LEGACY_DB_SECRET_ARN','')
+host = os.environ.get('LEGACY_DB_HOST','')
+sql_file = 'database/rds_schema_update.sql'
+if not secret_arn or not host:
+    print('❌ Missing LegacyDbSecretArn/LegacyDbHost from outputs', file=sys.stderr)
+    sys.exit(1)
+if not os.path.exists(sql_file):
+    print('❌ No schema file found', file=sys.stderr)
+    sys.exit(1)
+sm = boto3.client('secretsmanager', region_name=region)
+sec = json.loads(sm.get_secret_value(SecretId=secret_arn)['SecretString'])
+user = sec.get('username') or sec.get('user')
+pwd  = sec.get('password') or sec.get('pass')
+db   = sec.get('dbname') or sec.get('database') or ''
+if not (user and pwd):
+    print('❌ Secret missing username/password', file=sys.stderr)
+    sys.exit(1)
+conn = pymysql.connect(host=host, user=user, password=pwd, database=db, autocommit=True, connect_timeout=30, charset='utf8mb4')
+executed = skipped = errors = 0
+with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
+    sql = f.read()
+    stmts = [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
+    for stmt in stmts:
+        try:
+            cur.execute(stmt)
+            executed += 1
+            print(f'Executed: {stmt[:80]}...')
+        except Exception as e:
+            msg = str(e).lower()
+            if 'already exists' in msg or 'duplicate' in msg or 'exists' in msg:
+                skipped += 1
+                print(f'Skip exists: {stmt[:80]}...')
+            else:
+                errors += 1
+                print(f'Error executing {stmt[:80]}...: {e}', file=sys.stderr)
+print(f'✅ Schema init completed: executed={executed}, skipped={skipped}, errors={errors}')
+if errors:
+    sys.exit(1)
+PY
