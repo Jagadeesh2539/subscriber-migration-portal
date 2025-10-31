@@ -9,7 +9,7 @@
 
 ## 📋 Overview
 
-**Production-ready enterprise solution** with **100% automated CI/CD pipeline** for migrating and managing subscriber data using **pure AWS serverless services**. Zero Flask dependencies, complete GitHub Actions automation from code to production.
+**Production-ready enterprise solution** with **100% automated CI/CD pipeline** for migrating and managing subscriber data using **pure AWS serverless services**. Zero Flask dependencies, complete GitHub Actions automation from code to productionw.
 
 ### 🏗️ Complete Automation Architecture
 
