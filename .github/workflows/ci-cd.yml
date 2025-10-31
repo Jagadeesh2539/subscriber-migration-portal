@@ -13,6 +13,12 @@ on:
         default: 'prod'
         type: choice
         options: [dev, test, prod]
+      mode:
+        description: 'Mode: deploy or dry-run'
+        required: true
+        default: 'deploy'
+        type: choice
+        options: [deploy, dry-run]
 
 env:
   AWS_DEFAULT_REGION: us-west-2
@@ -22,52 +28,72 @@ env:
   STAGE: prod
   WORKFLOW_SIGNATURE: 'ci-fix-no-heredoc-2025-10-31T16:53Z'
 
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test-deploy:
+    name: CI/CD – Subscriber Migration Portal
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Guard – print workflow signature
+      - name: 00 Guard – print workflow signature
         run: |
           echo "Using workflow signature: $WORKFLOW_SIGNATURE"
+          echo "Ref: $GITHUB_REF / SHA: $GITHUB_SHA"
+          echo "Actor: $GITHUB_ACTOR"
 
-      - name: Checkout repository
+      - name: 01 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 02 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Configure AWS credentials
+      - name: 03 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup SAM CLI
+      - name: 04 Preflight
+        run: |
+          echo "Stage: ${{ inputs.stage || env.STAGE }}"
+          echo "Mode:  ${{ inputs.mode || 'deploy' }}"
+          if [ "${{ inputs.mode || 'deploy' }}" = "dry-run" ]; then
+            echo "Dry run selected; exiting before deploy."
+            exit 0
+          fi
+
+      - name: 05 Setup SAM CLI
         uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
 
-      - name: Install Python dependencies
+      - name: 06 Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install boto3 pymysql
 
-      - name: Build SAM application
+      - name: 07 Build SAM application
         working-directory: aws
-        run: sam build --use-container
+        run: |
+          echo "===== BUILD START ====="
+          sam build --use-container
+          echo "===== BUILD END ====="
 
-      - name: Deploy with DB instance-class fallback (t3.micro → t2.micro)
+      - name: 08 Deploy with DB instance-class fallback (t3.micro → t2.micro)
         id: deploy
         working-directory: aws
         env:
           DB_CLASSES: "db.t3.micro db.t2.micro"
         run: |
           set -euo pipefail
+          echo "===== DEPLOY START ====="
           STACK="$STACK_NAME"
           if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
             STACK="subscriber-migration-portal-${{ inputs.stage }}"
@@ -88,6 +114,7 @@ jobs:
                 DbInstanceClass="$DBC"; then
               echo "db_class=$DBC" >> $GITHUB_OUTPUT
               echo "✅ Deploy succeeded with $DBC"
+              echo "===== DEPLOY END (SUCCESS) ====="
               exit 0
             else
               echo "⚠️ Deploy failed with $DBC, trying next..."
@@ -100,7 +127,6 @@ jobs:
                   aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
                   echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
-                  # delete object versions
                   while true; do
                     VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
                     if [ "$(echo "$VERS" | python - <<'PY'
@@ -109,7 +135,6 @@ PY
 )" = "0" ]; then break; fi
                     aws s3api delete-objects --bucket "$UPB" --delete "$VERS" --region "$AWS_REGION" || true
                   done
-                  # delete delete-markers
                   while true; do
                     MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
                     if [ "$(echo "$MKRS" | python - <<'PY'
@@ -124,9 +149,10 @@ PY
             fi
           done
           echo "❌ All DB instance classes failed"
+          echo "===== DEPLOY END (FAILED) ====="
           exit 1
 
-      - name: Export CloudFormation outputs
+      - name: 09 Export CloudFormation outputs
         if: steps.deploy.outcome == 'success'
         id: cfn-outputs
         run: |
@@ -147,11 +173,11 @@ with open(os.environ['GITHUB_ENV'],'a') as f:
 print('✅ Outputs exported')
 PY
 
-      - name: Initialize MySQL schema (Lambda in VPC)
+      - name: 10 Initialize MySQL schema (Lambda in VPC)
         if: steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
-          echo "🔧 Initializing schema via Lambda: $SCHEMA_INIT_FUNCTION_NAME in $AWS_REGION"
+          echo "===== SCHEMA INIT (LAMBDA) START ====="
           aws lambda invoke \
             --region "$AWS_REGION" \
             --function-name "$SCHEMA_INIT_FUNCTION_NAME" \
@@ -171,10 +197,11 @@ PY
             echo "❗ Lambda schema init reported errors; running direct fallback"
           else
             echo "✅ Lambda schema initialization completed"
+            echo "===== SCHEMA INIT (LAMBDA) END (SUCCESS) ====="
             exit 0
           fi
 
-      - name: Initialize MySQL schema (Direct runner fallback)
+      - name: 11 Initialize MySQL schema (Direct runner fallback)
         if: steps.deploy.outcome == 'success'
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
@@ -182,6 +209,7 @@ PY
           LEGACY_DB_HOST: ${{ env.LegacyDbHost }}
         run: |
           set -euo pipefail
+          echo "===== SCHEMA INIT (DIRECT) START ====="
           python - <<'PY'
 import os, json, boto3, pymysql, sys
 region = os.environ.get('AWS_REGION','us-west-2')
@@ -224,3 +252,10 @@ print(f'✅ Schema init completed: executed={executed}, skipped={skipped}, error
 if errors:
     sys.exit(1)
 PY
+          echo "===== SCHEMA INIT (DIRECT) END ====="
+
+      - name: 12 Notify failure
+        if: failure()
+        run: |
+          echo "❌ Deploy failed for $GITHUB_REF"
+          echo "Check logs for steps 08-11 for details."
