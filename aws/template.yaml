@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Subscriber Migration Portal - Complete Cloud/Legacy/Dual CRUD System'
+Description: 'Subscriber Migration Portal - Complete System with Step Functions Orchestration'
 
 Parameters:
   Stage:
@@ -39,6 +39,39 @@ Resources:
       CompatibleRuntimes:
         - python3.11
       RetentionPolicy: Delete
+
+  # ======================
+  # S3 BUCKETS
+  # ======================
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-uploads'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+          - Id: DeleteOldUploads
+            Status: Enabled
+            ExpirationInDays: 30
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ProcessFileFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
 
   # ======================
   # DYNAMODB TABLES
@@ -88,6 +121,33 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
+  MigrationJobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-migration-jobs'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: job_id
+          AttributeType: S
+        - AttributeName: job_type
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: job_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: job-type-index
+          KeySchema:
+            - AttributeName: job_type
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+
   # ======================
   # RDS RESOURCES
   # ======================
@@ -110,7 +170,7 @@ Resources:
       EngineVersion: '8.0'
       DBInstanceClass: db.t4g.micro
       AllocatedStorage: 20
-      PubliclyAccessible: true  # TODO: Move to private VPC in Step 3
+      PubliclyAccessible: true  # TODO: Move to private VPC in Step 4
       MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
       DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
@@ -125,9 +185,309 @@ Resources:
           Value: !Ref Stage
 
   # ======================
+  # IAM ROLES FOR STEP FUNCTIONS
+  # ======================
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
+      Policies:
+        - PolicyName: StepFunctionExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                  - !Sub '${ProcessFileFunction.Arn}*'
+                  - !Sub '${ProcessAuditFunction.Arn}*'
+                  - !Sub '${ProcessExportFunction.Arn}*'
+                  - !Sub '${ValidateJobFunction.Arn}*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt MigrationJobsTable.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # ======================
+  # STEP FUNCTIONS
+  # ======================
+  MigrationWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${AWS::StackName}-migration-workflow'
+      DefinitionS3Location:
+        Bucket: !Ref UploadsBucket
+        Key: stepfunctions/migration-workflow.json
+      DefinitionSubstitutions:
+        ValidateJobLambdaArn: !GetAtt ValidateJobFunction.Arn
+        ProcessMigrationLambdaArn: !GetAtt ProcessFileFunction.Arn
+        ProcessBulkDeleteLambdaArn: !GetAtt ProcessFileFunction.Arn
+        ProcessAuditLambdaArn: !GetAtt ProcessAuditFunction.Arn
+        MergeExportLambdaArn: !GetAtt ProcessExportFunction.Arn
+        MigrationJobsTable: !Ref MigrationJobsTable
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
+
+  AuditWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${AWS::StackName}-audit-workflow'
+      DefinitionS3Location:
+        Bucket: !Ref UploadsBucket
+        Key: stepfunctions/audit-workflow.json
+      DefinitionSubstitutions:
+        ProcessAuditLambdaArn: !GetAtt ProcessAuditFunction.Arn
+        GenerateAuditReportLambdaArn: !GetAtt ProcessExportFunction.Arn
+        MigrationJobsTable: !Ref MigrationJobsTable
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
+
+  ExportWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${AWS::StackName}-export-workflow'
+      DefinitionS3Location:
+        Bucket: !Ref UploadsBucket
+        Key: stepfunctions/export-workflow.json
+      DefinitionSubstitutions:
+        ProcessExportLambdaArn: !GetAtt ProcessExportFunction.Arn
+        ProcessComparisonExportLambdaArn: !GetAtt ProcessExportFunction.Arn
+        MergeExportLambdaArn: !GetAtt ProcessExportFunction.Arn
+        MigrationJobsTable: !Ref MigrationJobsTable
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
+
+  StepFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/stepfunctions/${AWS::StackName}'
+      RetentionInDays: 30
+
+  # ======================
   # LAMBDA FUNCTIONS
   # ======================
   
+  # Main Orchestrator Function
+  OrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/migration/
+      Handler: orchestrator.lambda_handler
+      Timeout: 60
+      Environment:
+        Variables:
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          MIGRATION_WORKFLOW_ARN: !Ref MigrationWorkflow
+          AUDIT_WORKFLOW_ARN: !Ref AuditWorkflow
+          EXPORT_WORKFLOW_ARN: !Ref ExportWorkflow
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MigrationJobsTable
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+                - states:DescribeExecution
+                - states:StopExecution
+              Resource:
+                - !Ref MigrationWorkflow
+                - !Ref AuditWorkflow
+                - !Ref ExportWorkflow
+      Events:
+        # Upload endpoints
+        UploadRequest:
+          Type: Api
+          Properties:
+            Path: /migration/upload
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        
+        # Job creation endpoints
+        CreateMigrationJob:
+          Type: Api
+          Properties:
+            Path: /migration/jobs
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        CreateAuditJob:
+          Type: Api
+          Properties:
+            Path: /audit/jobs
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        CreateExportJob:
+          Type: Api
+          Properties:
+            Path: /export/jobs
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        
+        # Job management endpoints
+        GetJobStatus:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        CancelJob:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}/cancel
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        ListJobs:
+          Type: Api
+          Properties:
+            Path: /jobs
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  # Job Processing Functions
+  ValidateJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/migration/
+      Handler: validate_job.lambda_handler
+      Environment:
+        Variables:
+          UPLOADS_BUCKET: !Ref UploadsBucket
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref UploadsBucket
+
+  ProcessFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/migration/
+      Handler: process_file.lambda_handler
+      Timeout: 900  # 15 minutes for large files
+      MemorySize: 1024
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubscribersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MigrationJobsTable
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref LegacyDbSecret
+      Events:
+        FileUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref UploadsBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: uploads/
+
+  ProcessAuditFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/migration/
+      Handler: process_audit.lambda_handler
+      Timeout: 600  # 10 minutes for audits
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref SubscribersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MigrationJobsTable
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref LegacyDbSecret
+
+  ProcessExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/migration/
+      Handler: process_export.lambda_handler
+      Timeout: 600  # 10 minutes for exports
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref SubscribersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MigrationJobsTable
+        - S3CrudPolicy:
+            BucketName: !Ref UploadsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref LegacyDbSecret
+
   # Settings Function
   SettingsFunction:
     Type: AWS::Serverless::Function
@@ -169,7 +529,6 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref SubscribersTable
       Events:
-        # List subscribers
         ListCloudSubscribers:
           Type: Api
           Properties:
@@ -177,7 +536,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
-        # Create subscriber
         CreateCloudSubscriber:
           Type: Api
           Properties:
@@ -185,7 +543,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # Get specific subscriber
         GetCloudSubscriber:
           Type: Api
           Properties:
@@ -193,7 +550,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
-        # Update subscriber
         UpdateCloudSubscriber:
           Type: Api
           Properties:
@@ -201,7 +557,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: NONE
-        # Delete subscriber
         DeleteCloudSubscriber:
           Type: Api
           Properties:
@@ -216,7 +571,7 @@ Resources:
     Properties:
       CodeUri: lambda/legacy/
       Handler: subscribers.lambda_handler
-      Timeout: 60  # Longer timeout for DB operations
+      Timeout: 60
       Environment:
         Variables:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
@@ -232,7 +587,6 @@ Resources:
                 - rds:DescribeDBInstances
               Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
       Events:
-        # List legacy subscribers
         ListLegacySubscribers:
           Type: Api
           Properties:
@@ -240,7 +594,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
-        # Create legacy subscriber
         CreateLegacySubscriber:
           Type: Api
           Properties:
@@ -248,7 +601,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # Get specific legacy subscriber
         GetLegacySubscriber:
           Type: Api
           Properties:
@@ -256,7 +608,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
-        # Update legacy subscriber
         UpdateLegacySubscriber:
           Type: Api
           Properties:
@@ -264,7 +615,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: NONE
-        # Delete legacy subscriber
         DeleteLegacySubscriber:
           Type: Api
           Properties:
@@ -279,7 +629,7 @@ Resources:
     Properties:
       CodeUri: lambda/dual/
       Handler: subscribers.lambda_handler
-      Timeout: 90  # Longest timeout for dual operations
+      Timeout: 90
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -298,7 +648,6 @@ Resources:
                 - rds:DescribeDBInstances
               Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
       Events:
-        # Dual subscribers CRUD
         ListDualSubscribers:
           Type: Api
           Properties:
@@ -334,7 +683,6 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: NONE
-        # Sync operations
         GetSyncStatus:
           Type: Api
           Properties:
@@ -385,10 +733,28 @@ Resources:
             Auth:
               Authorizer: NONE
 
+  # S3 Bucket Permission for Lambda
+  ProcessFileFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ProcessFileFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub '${UploadsBucket}/*'
+
 Outputs:
   ApiEndpoint:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+    
+  UploadsBucketName:
+    Description: S3 bucket for file uploads
+    Value: !Ref UploadsBucket
+    
+  MigrationJobsTableName:
+    Description: DynamoDB table for job tracking
+    Value: !Ref MigrationJobsTable
     
   SubscribersTableName:
     Description: DynamoDB Subscribers table name
@@ -406,23 +772,26 @@ Outputs:
     Description: Legacy RDS endpoint hostname
     Value: !GetAtt LegacyDB.Endpoint.Address
     
-  LegacyDbPort:
-    Description: Legacy RDS port
-    Value: !GetAtt LegacyDB.Endpoint.Port
+  MigrationWorkflowArn:
+    Description: Migration Step Function ARN
+    Value: !Ref MigrationWorkflow
+    
+  AuditWorkflowArn:
+    Description: Audit Step Function ARN
+    Value: !Ref AuditWorkflow
+    
+  ExportWorkflowArn:
+    Description: Export Step Function ARN
+    Value: !Ref ExportWorkflow
 
-  # API Endpoints for documentation
-  CloudSubscribersEndpoint:
-    Description: Cloud subscribers CRUD endpoint
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/cloud/subscribers'
-    
-  LegacySubscribersEndpoint:
-    Description: Legacy subscribers CRUD endpoint  
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/legacy/subscribers'
-    
-  DualSubscribersEndpoint:
-    Description: Dual provision subscribers endpoint
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/dual/subscribers'
-    
-  SettingsEndpoint:
-    Description: Settings management endpoint
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/settings/provisioning-mode'
+  # Job Management API Endpoints
+  JobManagementEndpoints:
+    Description: Job management API endpoints
+    Value: !Sub |
+      Upload: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/migration/upload
+      Migration Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/migration/jobs
+      Audit Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/audit/jobs
+      Export Jobs: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/export/jobs
+      Job Status: GET https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs/{id}
+      Cancel Job: POST https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs/{id}/cancel
+      List Jobs: GET https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/jobs
