@@ -19,8 +19,6 @@ Globals:
     Timeout: 30
     MemorySize: 512
     Runtime: python3.11
-    Layers:
-      - !Ref CommonLayer
     Environment:
       Variables:
         STAGE: !Ref Stage
@@ -33,19 +31,6 @@ Globals:
       MaxAge: "'600'"
 
 Resources:
-  # ======================
-  # LAMBDA LAYER
-  # ======================
-  CommonLayer:
-    Type: AWS::Serverless::LayerVersion
-    Properties:
-      LayerName: !Sub '${AWS::StackName}-common'
-      Description: 'Common utilities and dependencies'
-      ContentUri: lambda/layers/common/
-      CompatibleRuntimes:
-        - python3.11
-      RetentionPolicy: Delete
-
   # ======================
   # S3 BUCKETS
   # ======================
@@ -970,15 +955,35 @@ Resources:
             Path: /dual/subscribers/{uid}/sync
             Method: POST
 
-  # ======================
-  # EXISTING FUNCTIONS (Health, Auth, etc.)
-  # ======================
-  
+  # Health Function
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: lambda/health/
       Handler: handler.lambda_handler
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          SETTINGS_TABLE: !Ref SettingsTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref SubscribersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref SettingsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref MigrationJobsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - rds:DescribeDBInstances
+              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
+            - Effect: Allow
+              Action:
+                - stepfunctions:ListStateMachines
+                - stepfunctions:DescribeStateMachine
+              Resource: '*'
       Events:
         HealthCheck:
           Type: Api
@@ -986,6 +991,7 @@ Resources:
             Path: /health
             Method: GET
 
+  # Auth Function
   AuthFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -999,6 +1005,16 @@ Resources:
           Type: Api
           Properties:
             Path: /auth/login
+            Method: POST
+        VerifyToken:
+          Type: Api
+          Properties:
+            Path: /auth/verify
+            Method: POST
+        RefreshToken:
+          Type: Api
+          Properties:
+            Path: /auth/refresh
             Method: POST
 
   # S3 Bucket Permission for Lambda
