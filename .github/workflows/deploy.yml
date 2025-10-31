@@ -1,0 +1,79 @@
+name: 🚀 Prod-Only Deployment
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  STACK_NAME: subscriber-migration-portal-prod
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  validate:
+    name: 🔍 Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install SAM
+        run: pip install aws-sam-cli boto3
+      - name: Validate SAM
+        run: |
+          set -euo pipefail
+          cd aws
+          sam validate --template template.yaml --region ${{ env.AWS_DEFAULT_REGION }}
+
+  deploy:
+    name: 🏗️ Deploy (Prod Only) with Robust Cleanup
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: production
+    outputs:
+      api-endpoint: ${{ steps.outputs_step.outputs.api_endpoint }}
+      upload-bucket: ${{ steps.outputs_step.outputs.upload_bucket }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install tooling
+        run: pip install aws-sam-cli boto3 jq
+
+      - name: 🔥 Detect and cleanup failed/rollback stacks BEFORE deploy
+        run: |
+          set -euo pipefail
+          STACK="${{ env.STACK_NAME }}"
+          echo "🔎 Checking stack status for $STACK"
+          STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NONE")
+          echo "Current status: $STATUS"
+
+          is_bad() {
+            case "$1" in
+              ROLLBACK_*|*_ROLLBACK_*|*_FAILED|DELETE_FAILED) return 0;;
+              *) return 1;;
+            esac
+          }
+
+          cleanup_resources() {
+            echo "🧹 Cleaning associated resources for $STACK"
+            # S3 buckets (uploads + frontend) - empty then delete
+            for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|uploads|frontend" || true); do
+              echo "  🪣 Empty+delete bucket: $b"
+              aws s3 rm "s3://$b" --recursive || true
+              aws s3 rb "s3://$b" --force || true
+            done
+            # Lambda functions
+            for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do
+              echo "  🧨 Delete lambda: $f"; aws lambda delete-function --function-name "$f" || true; done
+            # API Gateway (REST v1)
+            for id in $(aws apigateway get-rest-apis --query 'items[?contains(name, `'

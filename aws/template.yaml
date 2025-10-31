@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Subscriber Migration Portal - Serverless API (No Flask) + Legacy RDS'
+
+Parameters:
+  Stage:
+    Type: String
+    Default: 'prod'
+    AllowedValues: ['prod']
+  CorsOrigins:
+    Type: String
+    Default: 'https://yourdomain.com'
+  JwtSecret:
+    Type: String
+    NoEcho: true
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.11
+
+Resources:
+  # Existing resources omitted for brevity ...
+
+  # ======================
+  # Legacy DB Secret
+  # ======================
+  LegacyDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-legacy-db'
+      Description: 'Credentials for Legacy RDS MySQL'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\\'
+
+  # ======================
+  # Legacy RDS MySQL (public for demo; recommend VPC private in prod)
+  LegacyDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy'
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      PubliclyAccessible: true
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
+      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
+      DeletionProtection: false
+      BackupRetentionPeriod: 1
+      StorageType: gp2
+      MultiAZ: false
+      Tags:
+        - Key: Service
+          Value: SubscriberPortal
+        - Key: Environment
+          Value: !Ref Stage
+
+  # ======================
+  # Settings Table (stores provisioning mode)
+  # ======================
+  SettingsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-settings'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sk
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  # ======================
+  # Settings Lambda (GET/PUT provisioning mode)
+  # ======================
+  SettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/settings/
+      Handler: handler.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SettingsTable
+      Events:
+        GetMode:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        PutMode:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+
+Outputs:
+  ApiEndpoint:
+    Description: API URL
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
+  UploadBucketName:
+    Description: Upload bucket (existing)
+    Value: ''
+  SubscriberTableName:
+    Description: Subscriber table (existing)
+    Value: ''
+  LegacyDbSecretArn:
+    Description: Secret ARN for Legacy DB
+    Value: !Ref LegacyDbSecret
+  LegacyDbHost:
+    Description: Legacy DB endpoint hostname
+    Value: !GetAtt LegacyDB.Endpoint.Address
+  SettingsTableName:
+    Description: Settings table name
+    Value: !Ref SettingsTable
