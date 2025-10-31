@@ -257,52 +257,66 @@ jobs:
           echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
 
 
-          - name: 🗄️ Run schema initializer
-  env:
-    LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
-    LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
-  run: >
-    set -euo pipefail
+      - name: 🗄️ Run schema initializer
+        env:
+          LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
+          LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
+        run: |
+          set -euo pipefail
+          if [ -f database/rds_schema_update.sql ]; then
+            echo "🔍 Found schema file: database/rds_schema_update.sql"
 
-    if [ -f database/rds_schema_update.sql ]; then
-      cat > run_sql.py << 'PYEOF'
-      import os, json, boto3, pymysql, sys
+            cat > run_sql.py <<- 'PYEOF'
+            import os, json, boto3, pymysql, sys
 
-      secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
-      host = os.environ["LEGACY_DB_HOST"]
-      sql_file = "database/rds_schema_update.sql"
+            secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
+            host = os.environ["LEGACY_DB_HOST"]
+            sql_file = "database/rds_schema_update.sql"
 
-      sm = boto3.client("secretsmanager")
-      sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
-      user = sec.get("username") or sec.get("user")
-      pwd = sec.get("password") or sec.get("pass")
-      db = sec.get("dbname") or sec.get("database") or ""
+            sm = boto3.client("secretsmanager")
+            sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
 
-      conn = pymysql.connect(
-          host=host,
-          user=user,
-          password=pwd,
-          database=db,
-          autocommit=True,
-          connect_timeout=30
-      )
+            user = sec.get("username") or sec.get("user")
+            pwd = sec.get("password") or sec.get("pass")
+            db = sec.get("dbname") or sec.get("database") or ""
 
-      with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
-          sql = f.read()
-          for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]:
-              try:
-                  cur.execute(stmt)
-                  print(f"Executed: {stmt[:50]}...")
-              except Exception as e:
-                  if "already exists" not in str(e).lower():
-                      print(f"Error executing {stmt[:50]}...: {e}")
+            conn = pymysql.connect(
+                host=host,
+                user=user,
+                password=pwd,
+                database=db,
+                autocommit=True,
+                connect_timeout=30
+            )
 
-      print('✅ Legacy schema initialization completed')
-      PYEOF  # Ensure this is on a new line after the Python code
+            with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
+                sql = f.read()
+                statements = [
+                    s.strip() for s in sql.split(';')
+                    if s.strip() and not s.strip().startswith('--')
+                ]
+                for stmt in statements:
+                    try:
+                        cur.execute(stmt)
+                        print(f"✅ Executed: {stmt[:60]}...")
+                    except Exception as e:
+                        err_msg = str(e).lower()
+                        if "already exists" in err_msg:
+                            print(f"⚠️ Ignoring 'already exists': {stmt[:60]}...")
+                        else:
+                            print(f"❌ Error executing '{stmt[:60]}...': {e}")
+                            raise  # Fail on unexpected errors
 
-      python3 run_sql.py
-    else
-      echo "❌ No schema file found"; exit 1
+            print('🎉 Legacy schema initialization completed successfully')
+            PYEOF
+
+            python run_sql.py
+
+          else
+            echo "❌ ERROR: Schema file NOT FOUND at database/rds_schema_update.sql"
+            exit 1
+          fi
+  
   frontend-deploy:
     name: 🌐 Frontend Deploy
     runs-on: ubuntu-latest
