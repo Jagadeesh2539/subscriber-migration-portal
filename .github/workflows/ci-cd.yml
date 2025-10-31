@@ -15,8 +15,8 @@ on:
         options: [dev, test, prod]
 
 env:
-  AWS_DEFAULT_REGION: us-east-1
-  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-west-2
+  AWS_REGION: us-west-2
   STACK_NAME: subscriber-migration-portal-prod
   BUCKET_SUFFIX: '20251031'
   STAGE: prod
@@ -56,7 +56,7 @@ jobs:
         working-directory: aws
         run: sam build --use-container
 
-      - name: Deploy with Aurora EngineVersion fallback
+      - name: Deploy with Aurora EngineVersion fallback (us-west-2)
         id: deploy
         working-directory: aws
         env:
@@ -68,7 +68,7 @@ jobs:
             STACK="subscriber-migration-portal-${{ inputs.stage }}"
           fi
           for EV in $ENGINE_VERSIONS; do
-            echo "Attempting deploy with AuroraEngineVersion=$EV"
+            echo "Attempting deploy with AuroraEngineVersion=$EV in $AWS_REGION"
             if sam deploy \
               --stack-name "$STACK" \
               --region "$AWS_REGION" \
@@ -86,31 +86,26 @@ jobs:
               exit 0
             else
               echo "⚠️ Deploy failed with $EV, trying next..."
-              # Roll back failed stack if it exists to avoid blocking next attempt
-              if aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
-                STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].StackStatus" --output text || true)
+              if aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" >/dev/null 2>&1; then
+                STATUS=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].StackStatus" --output text || true)
                 echo "Stack status: $STATUS"
                 if [[ "$STATUS" == *"ROLLBACK"* || "$STATUS" == *"FAILED"* ]]; then
                   echo "🗑️ Deleting bad stack $STACK"
-                  aws cloudformation delete-stack --stack-name "$STACK"
-                  aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
-                  # Force-empty uploads bucket (versioned) to unblock re-deploy
+                  aws cloudformation delete-stack --region "$AWS_REGION" --stack-name "$STACK"
+                  aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
-                  echo "🧹 Force-empty S3 bucket: $UPB"
-                  # Delete object versions
+                  echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
                   while true; do
-                    VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json || echo '{"Objects":[]}')
+                    VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
                     if [ "$(echo "$VERS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
-                    aws s3api delete-objects --bucket "$UPB" --delete "$VERS" || true
+                    aws s3api delete-objects --bucket "$UPB" --delete "$VERS" --region "$AWS_REGION" || true
                   done
-                  # Delete delete-markers
                   while true; do
-                    MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json || echo '{"Objects":[]}')
+                    MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
                     if [ "$(echo "$MKRS" | python -c 'import sys,json;print(len(json.load(sys.stdin)["Objects"]))')" = "0" ]; then break; fi
-                    aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" || true
+                    aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" --region "$AWS_REGION" || true
                   done
-                  # Try delete bucket
-                  aws s3api delete-bucket --bucket "$UPB" || true
+                  aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" || true
                 fi
               fi
             fi
@@ -127,7 +122,7 @@ jobs:
           if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
             STACK="subscriber-migration-portal-${{ inputs.stage }}"
           fi
-          OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
+          OUT=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
           echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
           python3 << 'PY'
 import os, json
@@ -143,8 +138,9 @@ PY
         if: steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
-          echo "🔧 Initializing schema via: $SCHEMA_INIT_FUNCTION_NAME"
+          echo "🔧 Initializing schema via: $SCHEMA_INIT_FUNCTION_NAME in $AWS_REGION"
           aws lambda invoke \
+            --region "$AWS_REGION" \
             --function-name "$SCHEMA_INIT_FUNCTION_NAME" \
             --payload '{}' \
             --log-type Tail \
