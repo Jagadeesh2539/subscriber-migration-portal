@@ -1,12 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Subscriber Migration Portal - Complete System with Step Functions Orchestration'
+Description: 'Subscriber Migration Portal - Step Functions with decoupled IAM to avoid cycles'
 
 Parameters:
   Stage:
     Type: String
     Default: 'prod'
-    AllowedValues: ['prod']
   CorsOrigins:
     Type: String
     Default: 'https://yourdomain.com'
@@ -23,6 +22,7 @@ Globals:
       Variables:
         STAGE: !Ref Stage
         CORS_ORIGINS: !Ref CorsOrigins
+        AWS_STACK_NAME: !Sub '${AWS::StackName}'
   Api:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
@@ -31,153 +31,37 @@ Globals:
       MaxAge: "'600'"
 
 Resources:
-  # ======================
-  # S3 BUCKETS
-  # ======================
   UploadsBucket:
     Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub '${AWS::StackName}-uploads'
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      LifecycleConfiguration:
-        Rules:
-          - Id: DeleteIncompleteMultipartUploads
-            Status: Enabled
-            AbortIncompleteMultipartUpload:
-              DaysAfterInitiation: 1
-          - Id: DeleteOldUploads
-            Status: Enabled
-            ExpirationInDays: 30
-      NotificationConfiguration:
-        LambdaConfigurations:
-          - Event: s3:ObjectCreated:*
-            Function: !GetAtt ProcessFileFunction.Arn
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: prefix
-                    Value: uploads/
 
-  # ======================
-  # DYNAMODB TABLES
-  # ======================
   SubscribersTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${AWS::StackName}-subscribers'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: uid
-          AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-        - AttributeName: plan_id
-          AttributeType: S
+        - {AttributeName: uid, AttributeType: S}
       KeySchema:
-        - AttributeName: uid
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: status-index
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: plan-index
-          KeySchema:
-            - AttributeName: plan_id
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      SSESpecification:
-        SSEEnabled: true
+        - {AttributeName: uid, KeyType: HASH}
 
   SettingsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${AWS::StackName}-settings'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: sk
-          AttributeType: S
+        - {AttributeName: sk, AttributeType: S}
       KeySchema:
-        - AttributeName: sk
-          KeyType: HASH
-      SSESpecification:
-        SSEEnabled: true
+        - {AttributeName: sk, KeyType: HASH}
 
   MigrationJobsTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub '${AWS::StackName}-migration-jobs'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: job_id
-          AttributeType: S
-        - AttributeName: job_type
-          AttributeType: S
-        - AttributeName: created_at
-          AttributeType: S
+        - {AttributeName: job_id, AttributeType: S}
       KeySchema:
-        - AttributeName: job_id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: job-type-index
-          KeySchema:
-            - AttributeName: job_type
-              KeyType: HASH
-            - AttributeName: created_at
-              KeyType: RANGE
-          Projection:
-            ProjectionType: ALL
-      SSESpecification:
-        SSEEnabled: true
+        - {AttributeName: job_id, KeyType: HASH}
 
-  # ======================
-  # RDS RESOURCES
-  # ======================
-  LegacyDbSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub '${AWS::StackName}-legacy-db'
-      Description: 'Credentials for Legacy RDS MySQL'
-      GenerateSecretString:
-        SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
-        GenerateStringKey: 'password'
-        PasswordLength: 24
-        ExcludeCharacters: '"@/\\'
-
-  LegacyDB:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy'
-      Engine: mysql
-      EngineVersion: '8.0'
-      DBInstanceClass: db.t4g.micro
-      AllocatedStorage: 20
-      PubliclyAccessible: true  # TODO: Move to private VPC in Step 4
-      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
-      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
-      DeletionProtection: false
-      BackupRetentionPeriod: 1
-      StorageType: gp2
-      MultiAZ: false
-      Tags:
-        - Key: Service
-          Value: SubscriberPortal
-        - Key: Environment
-          Value: !Ref Stage
-
-  # ======================
-  # IAM ROLES FOR STEP FUNCTIONS
-  # ======================
+  # 1) Create roles with only assume role policy (no inline policies here)
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -185,885 +69,189 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal:
-              Service: states.amazonaws.com
+            Principal: { Service: states.amazonaws.com }
             Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaRole
-      Policies:
-        - PolicyName: StepFunctionExecutionPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: 
-                  - !Sub '${ProcessFileFunction.Arn}*'
-                  - !Sub '${ProcessAuditFunction.Arn}*'
-                  - !Sub '${ProcessExportFunction.Arn}*'
-                  - !Sub '${ValidateJobFunction.Arn}*'
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                Resource: !GetAtt MigrationJobsTable.Arn
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: '*'
 
-  # ======================
-  # STEP FUNCTIONS
-  # ======================
-  MigrationWorkflow:
-    Type: AWS::StepFunctions::StateMachine
+  LambdaBasicRole:
+    Type: AWS::IAM::Role
     Properties:
-      StateMachineName: !Sub '${AWS::StackName}-migration-workflow'
-      DefinitionString: !Sub |
-        {
-          "Comment": "Subscriber Migration Workflow - Handles bulk migration jobs with automatic retries and rollbacks",
-          "StartAt": "ValidateJob",
-          "TimeoutSeconds": 3600,
-          "States": {
-            "ValidateJob": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ValidateJobFunction.Arn}",
-                "Payload": {
-                  "jobId.$": "$.jobId",
-                  "inputFileKey.$": "$.inputFileKey",
-                  "jobType.$": "$.jobType",
-                  "filters.$": "$.filters"
-                }
-              },
-              "ResultPath": "$.validation",
-              "Next": "CheckValidation",
-              "Retry": [
-                {
-                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
-                  "IntervalSeconds": 2,
-                  "MaxAttempts": 3,
-                  "BackoffRate": 2.0
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "Next": "JobFailed",
-                  "ResultPath": "$.error"
-                }
-              ]
-            },
-            "CheckValidation": {
-              "Type": "Choice",
-              "Choices": [
-                {
-                  "Variable": "$.validation.Payload.valid",
-                  "BooleanEquals": true,
-                  "Next": "UpdateJobStatus"
-                }
-              ],
-              "Default": "ValidationFailed"
-            },
-            "ValidationFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, error_message = :error, updated_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "FAILED"},
-                  ":error": {"S.$": "$.validation.Payload.error"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "End": true
-            },
-            "UpdateJobStatus": {
-              "Type": "Task", 
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "RUNNING"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "ResultPath": null,
-              "Next": "ProcessMigration"
-            },
-            "ProcessMigration": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ProcessFileFunction.Arn}",
-                "Payload": {
-                  "jobId.$": "$.jobId",
-                  "inputFileKey.$": "$.inputFileKey", 
-                  "filters.$": "$.filters",
-                  "batchSize": 100
-                }
-              },
-              "ResultPath": "$.result",
-              "Next": "ProcessingComplete",
-              "Retry": [
-                {
-                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
-                  "IntervalSeconds": 5,
-                  "MaxAttempts": 3,
-                  "BackoffRate": 2.0
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "Next": "ProcessingFailed",
-                  "ResultPath": "$.error"
-                }
-              ]
-            },
-            "ProcessingComplete": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "COMPLETED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "End": true
-            },
-            "ProcessingFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem", 
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "FAILED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
-                  ":error": {"S.$": "$.error.Cause"}
-                }
-              },
-              "End": true
-            },
-            "JobFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "FAILED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
-                  ":error": {"S.$": "$.error.Cause"}
-                }
-              },
-              "End": true
-            }
-          }
-        }
-      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
-      LoggingConfiguration:
-        Level: ERROR
-        IncludeExecutionData: false
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
 
-  AuditWorkflow:
-    Type: AWS::StepFunctions::StateMachine
-    Properties:
-      StateMachineName: !Sub '${AWS::StackName}-audit-workflow'
-      DefinitionString: !Sub |
-        {
-          "Comment": "Subscriber Audit Workflow - System-generated audits with consistency checks",
-          "StartAt": "InitializeAudit",
-          "TimeoutSeconds": 1800,
-          "States": {
-            "InitializeAudit": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "RUNNING"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "ResultPath": null,
-              "Next": "ProcessAudit"
-            },
-            "ProcessAudit": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke", 
-              "Parameters": {
-                "FunctionName": "${ProcessAuditFunction.Arn}",
-                "Payload": {
-                  "jobId.$": "$.jobId",
-                  "filters.$": "$.filters",
-                  "auditType.$": "$.auditType"
-                }
-              },
-              "ResultPath": "$.result",
-              "Next": "ProcessingComplete",
-              "Retry": [
-                {
-                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
-                  "IntervalSeconds": 3,
-                  "MaxAttempts": 2,
-                  "BackoffRate": 2.0
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "Next": "AuditFailed",
-                  "ResultPath": "$.error"
-                }
-              ]
-            },
-            "ProcessingComplete": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "COMPLETED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "End": true
-            },
-            "AuditFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "FAILED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
-                  ":error": {"S.$": "$.error.Cause"}
-                }
-              },
-              "End": true
-            }
-          }
-        }
-      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
-      LoggingConfiguration:
-        Level: ERROR
-        IncludeExecutionData: false
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
-
-  ExportWorkflow:
-    Type: AWS::StepFunctions::StateMachine
-    Properties:
-      StateMachineName: !Sub '${AWS::StackName}-export-workflow'
-      DefinitionString: !Sub |
-        {
-          "Comment": "Subscriber Export Workflow - System-generated exports with data merging",
-          "StartAt": "InitializeExport",
-          "TimeoutSeconds": 2400,
-          "States": {
-            "InitializeExport": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "RUNNING"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "ResultPath": null,
-              "Next": "ProcessExport"
-            },
-            "ProcessExport": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::lambda:invoke",
-              "Parameters": {
-                "FunctionName": "${ProcessExportFunction.Arn}",
-                "Payload": {
-                  "jobId.$": "$.jobId",
-                  "filters.$": "$.filters",
-                  "format.$": "$.format"
-                }
-              },
-              "ResultPath": "$.result",
-              "Next": "ProcessingComplete",
-              "Retry": [
-                {
-                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
-                  "IntervalSeconds": 10,
-                  "MaxAttempts": 2,
-                  "BackoffRate": 2.0
-                }
-              ],
-              "Catch": [
-                {
-                  "ErrorEquals": ["States.ALL"],
-                  "Next": "ExportFailed",
-                  "ResultPath": "$.error"
-                }
-              ]
-            },
-            "ProcessingComplete": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "COMPLETED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"}
-                }
-              },
-              "End": true
-            },
-            "ExportFailed": {
-              "Type": "Task",
-              "Resource": "arn:aws:states:::dynamodb:updateItem",
-              "Parameters": {
-                "TableName": "${MigrationJobsTable}",
-                "Key": {
-                  "job_id": {
-                    "S.$": "$.jobId"
-                  }
-                },
-                "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
-                "ExpressionAttributeValues": {
-                  ":status": {"S": "FAILED"},
-                  ":timestamp": {"S.$": "$$.State.EnteredTime"},
-                  ":error": {"S.$": "$.error.Cause"}
-                }
-              },
-              "End": true
-            }
-          }
-        }
-      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
-      LoggingConfiguration:
-        Level: ERROR
-        IncludeExecutionData: false
-        Destinations:
-          - CloudWatchLogsLogGroup:
-              LogGroupArn: !Sub '${StepFunctionLogGroup.Arn}:*'
-
-  StepFunctionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/stepfunctions/${AWS::StackName}'
-      RetentionInDays: 30
-
-  # ======================
-  # LAMBDA FUNCTIONS
-  # ======================
-  
-  # Main Orchestrator Function
+  # 2) Create functions and state machines (no policy refs that cause cycles)
   OrchestratorFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: orchestrator.lambda_handler
-      Timeout: 60
       Environment:
         Variables:
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
-          MIGRATION_WORKFLOW_ARN: !Ref MigrationWorkflow
-          AUDIT_WORKFLOW_ARN: !Ref AuditWorkflow
-          EXPORT_WORKFLOW_ARN: !Ref ExportWorkflow
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MigrationJobsTable
-        - S3CrudPolicy:
-            BucketName: !Ref UploadsBucket
-        - Statement:
-            - Effect: Allow
-              Action:
-                - states:StartExecution
-                - states:DescribeExecution
-                - states:StopExecution
-              Resource:
-                - !Ref MigrationWorkflow
-                - !Ref AuditWorkflow
-                - !Ref ExportWorkflow
       Events:
-        UploadRequest:
-          Type: Api
-          Properties:
-            Path: /migration/upload
-            Method: POST
-        CreateMigrationJob:
-          Type: Api
-          Properties:
-            Path: /migration/jobs
-            Method: POST
-        CreateAuditJob:
-          Type: Api
-          Properties:
-            Path: /audit/jobs
-            Method: POST
-        CreateExportJob:
-          Type: Api
-          Properties:
-            Path: /export/jobs
-            Method: POST
-        GetJobStatus:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}
-            Method: GET
-        CancelJob:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}/cancel
-            Method: POST
-        ListJobs:
-          Type: Api
-          Properties:
-            Path: /jobs
-            Method: GET
+        UploadRequest: { Type: Api, Properties: { Path: /migration/upload, Method: POST } }
+        CreateMigrationJob: { Type: Api, Properties: { Path: /migration/jobs, Method: POST } }
+        CreateAuditJob: { Type: Api, Properties: { Path: /audit/jobs, Method: POST } }
+        CreateExportJob: { Type: Api, Properties: { Path: /export/jobs, Method: POST } }
+        GetJobStatus: { Type: Api, Properties: { Path: /jobs/{id}, Method: GET } }
+        CancelJob: { Type: Api, Properties: { Path: /jobs/{id}/cancel, Method: POST } }
+        ListJobs: { Type: Api, Properties: { Path: /jobs, Method: GET } }
 
-  # Job Processing Functions
   ValidateJobFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: validate_job.lambda_handler
       Environment:
         Variables:
           UPLOADS_BUCKET: !Ref UploadsBucket
-      Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref UploadsBucket
 
   ProcessFileFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: process_file.lambda_handler
-      Timeout: 900  # 15 minutes for large files
-      MemorySize: 1024
+      Timeout: 900
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref SubscribersTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MigrationJobsTable
-        - S3CrudPolicy:
-            BucketName: !Ref UploadsBucket
-        - Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref LegacyDbSecret
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: process_audit.lambda_handler
-      Timeout: 600  # 10 minutes for audits
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubscribersTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MigrationJobsTable
-        - S3CrudPolicy:
-            BucketName: !Ref UploadsBucket
-        - Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref LegacyDbSecret
 
   ProcessExportFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/migration/
       Handler: process_export.lambda_handler
-      Timeout: 600  # 10 minutes for exports
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubscribersTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref MigrationJobsTable
-        - S3CrudPolicy:
-            BucketName: !Ref UploadsBucket
-        - Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref LegacyDbSecret
 
-  # Settings Function
   SettingsFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/settings/
       Handler: handler.lambda_handler
       Environment:
         Variables:
           SETTINGS_TABLE: !Ref SettingsTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref SettingsTable
       Events:
-        GetMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: GET
-        PutMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: PUT
+        GetMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: GET } }
+        PutMode: { Type: Api, Properties: { Path: /settings/provisioning-mode, Method: PUT } }
 
-  # Cloud Subscribers Function (DynamoDB)
-  CloudSubscribersFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: lambda/cloud/
-      Handler: subscribers.lambda_handler
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref SubscribersTable
-      Events:
-        ListCloudSubscribers:
-          Type: Api
-          Properties:
-            Path: /cloud/subscribers
-            Method: GET
-        CreateCloudSubscriber:
-          Type: Api
-          Properties:
-            Path: /cloud/subscribers
-            Method: POST
-        GetCloudSubscriber:
-          Type: Api
-          Properties:
-            Path: /cloud/subscribers/{uid}
-            Method: GET
-        UpdateCloudSubscriber:
-          Type: Api
-          Properties:
-            Path: /cloud/subscribers/{uid}
-            Method: PUT
-        DeleteCloudSubscriber:
-          Type: Api
-          Properties:
-            Path: /cloud/subscribers/{uid}
-            Method: DELETE
-
-  # Legacy Subscribers Function (RDS MySQL)
-  LegacySubscribersFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: lambda/legacy/
-      Handler: subscribers.lambda_handler
-      Timeout: 60
-      Environment:
-        Variables:
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref LegacyDbSecret
-            - Effect: Allow
-              Action:
-                - rds:DescribeDBInstances
-              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
-      Events:
-        ListLegacySubscribers:
-          Type: Api
-          Properties:
-            Path: /legacy/subscribers
-            Method: GET
-        CreateLegacySubscriber:
-          Type: Api
-          Properties:
-            Path: /legacy/subscribers
-            Method: POST
-        GetLegacySubscriber:
-          Type: Api
-          Properties:
-            Path: /legacy/subscribers/{uid}
-            Method: GET
-        UpdateLegacySubscriber:
-          Type: Api
-          Properties:
-            Path: /legacy/subscribers/{uid}
-            Method: PUT
-        DeleteLegacySubscriber:
-          Type: Api
-          Properties:
-            Path: /legacy/subscribers/{uid}
-            Method: DELETE
-
-  # Dual Provision Function (Both systems)
-  DualSubscribersFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      CodeUri: lambda/dual/
-      Handler: subscribers.lambda_handler
-      Timeout: 90
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref SubscribersTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-              Resource: !Ref LegacyDbSecret
-            - Effect: Allow
-              Action:
-                - rds:DescribeDBInstances
-              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
-      Events:
-        ListDualSubscribers:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers
-            Method: GET
-        CreateDualSubscriber:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers
-            Method: POST
-        GetDualSubscriber:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers/{uid}
-            Method: GET
-        UpdateDualSubscriber:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers/{uid}
-            Method: PUT
-        DeleteDualSubscriber:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers/{uid}
-            Method: DELETE
-        GetSyncStatus:
-          Type: Api
-          Properties:
-            Path: /dual/sync-status
-            Method: GET
-        SyncSubscriber:
-          Type: Api
-          Properties:
-            Path: /dual/subscribers/{uid}/sync
-            Method: POST
-
-  # Health Function
   HealthFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/health/
       Handler: handler.lambda_handler
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          SETTINGS_TABLE: !Ref SettingsTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-      Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref SubscribersTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref SettingsTable
-        - DynamoDBReadPolicy:
-            TableName: !Ref MigrationJobsTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - rds:DescribeDBInstances
-              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
-            - Effect: Allow
-              Action:
-                - stepfunctions:ListStateMachines
-                - stepfunctions:DescribeStateMachine
-              Resource: '*'
       Events:
-        HealthCheck:
-          Type: Api
-          Properties:
-            Path: /health
-            Method: GET
+        HealthCheck: { Type: Api, Properties: { Path: /health, Method: GET } }
 
-  # Auth Function
   AuthFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Role: !GetAtt LambdaBasicRole.Arn
       CodeUri: lambda/auth/
       Handler: handler.lambda_handler
       Environment:
         Variables:
           JWT_SECRET: !Ref JwtSecret
       Events:
-        Login:
-          Type: Api
-          Properties:
-            Path: /auth/login
-            Method: POST
-        VerifyToken:
-          Type: Api
-          Properties:
-            Path: /auth/verify
-            Method: POST
-        RefreshToken:
-          Type: Api
-          Properties:
-            Path: /auth/refresh
-            Method: POST
+        Login: { Type: Api, Properties: { Path: /auth/login, Method: POST } }
+        VerifyToken: { Type: Api, Properties: { Path: /auth/verify, Method: POST } }
+        RefreshToken: { Type: Api, Properties: { Path: /auth/refresh, Method: POST } }
 
-  # S3 Bucket Permission for Lambda
-  ProcessFileFunctionPermission:
-    Type: AWS::Lambda::Permission
+  MigrationWorkflow:
+    Type: AWS::StepFunctions::StateMachine
     Properties:
-      FunctionName: !GetAtt ProcessFileFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref AWS::AccountId
-      SourceArn: !Sub '${UploadsBucket}/*'
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      DefinitionString: !Sub |
+        {"StartAt":"Validate","States":{"Validate":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ValidateJobFunction.Arn}","Payload.$":"$"},"Next":"Process"},"Process":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessFileFunction.Arn}","Payload.$":"$"},"End":true}}}
+
+  AuditWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      DefinitionString: !Sub |
+        {"StartAt":"Audit","States":{"Audit":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessAuditFunction.Arn}","Payload.$":"$"},"End":true}}}
+
+  ExportWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      DefinitionString: !Sub |
+        {"StartAt":"Export","States":{"Export":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessExportFunction.Arn}","Payload.$":"$"},"End":true}}}
+
+  # 3) Attach permissions after all resources exist (separate IAM Policy resources)
+  StepFunctionInvokeLambdaPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: StepFunctionInvokeLambdaPolicy
+      Roles: [ !Ref StepFunctionExecutionRole ]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [ 'lambda:InvokeFunction' ]
+            Resource:
+              - !GetAtt ValidateJobFunction.Arn
+              - !GetAtt ProcessFileFunction.Arn
+              - !GetAtt ProcessAuditFunction.Arn
+              - !GetAtt ProcessExportFunction.Arn
+
+  StepFunctionDynamoPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: StepFunctionDynamoPolicy
+      Roles: [ !Ref StepFunctionExecutionRole ]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [ 'dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem' ]
+            Resource: !GetAtt MigrationJobsTable.Arn
+
+  LambdaBasicExecutionPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: LambdaBasicExecutionPolicy
+      Roles: [ !Ref LambdaBasicRole ]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [ 'logs:CreateLogGroup','logs:CreateLogStream','logs:PutLogEvents' ]
+            Resource: '*'
+          - Effect: Allow
+            Action: [ 'dynamodb:*' ]
+            Resource: [ !GetAtt SubscribersTable.Arn, !GetAtt MigrationJobsTable.Arn, !GetAtt SettingsTable.Arn ]
+          - Effect: Allow
+            Action: [ 's3:*' ]
+            Resource: '*'
+          - Effect: Allow
+            Action: [ 'states:StartExecution','states:DescribeExecution','states:StopExecution','cloudformation:DescribeStacks' ]
+            Resource: '*'
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway endpoint URL
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
-    
-  UploadsBucketName:
-    Description: S3 bucket for file uploads
-    Value: !Ref UploadsBucket
-    
-  MigrationJobsTableName:
-    Description: DynamoDB table for job tracking
-    Value: !Ref MigrationJobsTable
-    
-  SubscribersTableName:
-    Description: DynamoDB Subscribers table name
-    Value: !Ref SubscribersTable
-    
-  SettingsTableName:
-    Description: DynamoDB Settings table name
-    Value: !Ref SettingsTable
-    
-  LegacyDbSecretArn:
-    Description: Secret ARN for Legacy RDS credentials
-    Value: !Ref LegacyDbSecret
-    
-  LegacyDbHost:
-    Description: Legacy RDS endpoint hostname
-    Value: !GetAtt LegacyDB.Endpoint.Address
-    
   MigrationWorkflowArn:
-    Description: Migration Step Function ARN
     Value: !Ref MigrationWorkflow
-    
   AuditWorkflowArn:
-    Description: Audit Step Function ARN
     Value: !Ref AuditWorkflow
-    
   ExportWorkflowArn:
-    Description: Export Step Function ARN
     Value: !Ref ExportWorkflow
