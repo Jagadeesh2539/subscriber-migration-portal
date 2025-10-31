@@ -26,7 +26,9 @@ env:
   STACK_NAME: subscriber-migration-portal-prod
   BUCKET_SUFFIX: '20251031'
   STAGE: prod
-  WORKFLOW_SIGNATURE: 'ci-fix-no-heredoc-2025-10-31T17:14Z'
+  WORKFLOW_SIGNATURE: 'ci-fix-yaml-no-heredoc-2025-10-31T17:20Z'
+  EFFECTIVE_STAGE: ${{ inputs.stage || env.STAGE }}
+  EFFECTIVE_MODE:  ${{ inputs.mode || 'deploy' }}
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -62,9 +64,9 @@ jobs:
 
       - name: 04 Preflight
         run: |
-          echo "Stage: ${{ inputs.stage || env.STAGE }}"
-          echo "Mode:  ${{ inputs.mode || 'deploy' }}"
-          if [ "${{ inputs.mode || 'deploy' }}" = "dry-run" ]; then
+          echo "Stage: $EFFECTIVE_STAGE"
+          echo "Mode:  $EFFECTIVE_MODE"
+          if [ "$EFFECTIVE_MODE" = "dry-run" ]; then
             echo "Dry run selected; exiting before deploy."
             exit 0
           fi
@@ -74,8 +76,10 @@ jobs:
         with:
           use-installer: true
 
-      - name: 06 Install Python dependencies
+      - name: 06 Install build dependencies
         run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
           python -m pip install --upgrade pip
           pip install boto3 pymysql
 
@@ -95,8 +99,8 @@ jobs:
           set -euo pipefail
           echo "===== DEPLOY START ====="
           STACK="$STACK_NAME"
-          if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
-            STACK="subscriber-migration-portal-${{ inputs.stage }}"
+          if [ "$EFFECTIVE_STAGE" != "" ] && [ "$EFFECTIVE_STAGE" != "prod" ]; then
+            STACK="subscriber-migration-portal-$EFFECTIVE_STAGE"
           fi
           for DBC in $DB_CLASSES; do
             echo "Attempting deploy with DbInstanceClass=$DBC in $AWS_REGION"
@@ -107,7 +111,7 @@ jobs:
               --no-confirm-changeset \
               --no-fail-on-empty-changeset \
               --parameter-overrides \
-                Stage="${{ inputs.stage || env.STAGE }}" \
+                Stage="$EFFECTIVE_STAGE" \
                 JwtSecret="${{ secrets.JWT_SECRET }}" \
                 CorsOrigins="${{ secrets.CORS_ORIGINS || 'https://yourdomain.com' }}" \
                 BucketSuffix="$BUCKET_SUFFIX" \
@@ -127,34 +131,19 @@ jobs:
                   aws cloudformation wait stack-delete-complete --region "$AWS_REGION" --stack-name "$STACK" || true
                   UPB="${STACK}-uploads-${BUCKET_SUFFIX}"
                   echo "🧹 Force-empty S3 bucket: $UPB in $AWS_REGION"
-                  # delete object versions
                   while true; do
                     VERS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    python - <<'PY'
-import os, sys, json
-obj=json.loads(os.environ.get('VERS','{"Objects":[]}')) if 'VERS' in os.environ else json.loads('{"Objects":[]}')
-print(len(obj.get('Objects', [])))
-PY
-                    COUNT=$(python - <<'PY'
-import json,sys
-obj=json.loads(sys.stdin.read())
-print(len(obj.get('Objects', [])))
-PY
-)
+                    COUNT=$(echo "$VERS" | jq '.Objects | length')
                     if [ "$COUNT" = "0" ]; then break; fi
-                    aws s3api delete-objects --bucket "$UPB" --delete "$VERS" --region "$AWS_REGION" || true
+                    echo "$VERS" > /tmp/vers.json
+                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/vers.json --region "$AWS_REGION" || true
                   done
-                  # delete delete-markers
                   while true; do
                     MKRS=$(aws s3api list-object-versions --bucket "$UPB" --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json --region "$AWS_REGION" || echo '{"Objects":[]}')
-                    COUNT2=$(python - <<'PY'
-import json,sys
-obj=json.loads(sys.stdin.read())
-print(len(obj.get('Objects', [])))
-PY
-<<< "$MKRS")
+                    COUNT2=$(echo "$MKRS" | jq '.Objects | length')
                     if [ "$COUNT2" = "0" ]; then break; fi
-                    aws s3api delete-objects --bucket "$UPB" --delete "$MKRS" --region "$AWS_REGION" || true
+                    echo "$MKRS" > /tmp/mkrs.json
+                    aws s3api delete-objects --bucket "$UPB" --delete file:///tmp/mkrs.json --region "$AWS_REGION" || true
                   done
                   aws s3api delete-bucket --bucket "$UPB" --region "$AWS_REGION" || true
                 fi
@@ -171,8 +160,8 @@ PY
         run: |
           set -euo pipefail
           STACK="$STACK_NAME"
-          if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
-            STACK="subscriber-migration-portal-${{ inputs.stage }}"
+          if [ "$EFFECTIVE_STAGE" != "" ] && [ "$EFFECTIVE_STAGE" != "prod" ]; then
+            STACK="subscriber-migration-portal-$EFFECTIVE_STAGE"
           fi
           OUT=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
           echo "CFN_OUTPUTS=$OUT" >> $GITHUB_ENV
@@ -202,16 +191,8 @@ PY
           echo
           cat out.json || true
           echo
-          OK=$(python - <<'PY'
-import json
-try:
-  import sys
-  print(json.load(open('out.json')).get('success', False))
-except Exception:
-  print('False')
-PY
-)
-          if [ "$OK" != "True" ]; then
+          OK=$(jq -r '.success // false' out.json 2>/dev/null || echo false)
+          if [ "$OK" != "true" ]; then
             echo "❗ Lambda schema init reported errors; running direct fallback"
           else
             echo "✅ Lambda schema initialization completed"
