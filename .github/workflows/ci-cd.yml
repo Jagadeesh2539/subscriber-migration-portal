@@ -56,19 +56,19 @@ jobs:
         working-directory: aws
         run: sam build --use-container
 
-      - name: Deploy with Aurora EngineVersion fallback (us-west-2)
+      - name: Deploy with DB instance-class fallback (t3.micro → t2.micro)
         id: deploy
         working-directory: aws
         env:
-          ENGINE_VERSIONS: "5.7.mysql_aurora.2.07.1 5.7.mysql_aurora.2.07.2 5.7.mysql_aurora.2.08.1 5.7.mysql_aurora.2.10.2"
+          DB_CLASSES: "db.t3.micro db.t2.micro"
         run: |
           set -euo pipefail
           STACK="$STACK_NAME"
           if [ "${{ inputs.stage || '' }}" != "" ] && [ "${{ inputs.stage }}" != "prod" ]; then
             STACK="subscriber-migration-portal-${{ inputs.stage }}"
           fi
-          for EV in $ENGINE_VERSIONS; do
-            echo "Attempting deploy with AuroraEngineVersion=$EV in $AWS_REGION"
+          for DBC in $DB_CLASSES; do
+            echo "Attempting deploy with DbInstanceClass=$DBC in $AWS_REGION"
             if sam deploy \
               --stack-name "$STACK" \
               --region "$AWS_REGION" \
@@ -80,12 +80,12 @@ jobs:
                 JwtSecret="${{ secrets.JWT_SECRET }}" \
                 CorsOrigins="${{ secrets.CORS_ORIGINS || 'https://yourdomain.com' }}" \
                 BucketSuffix="$BUCKET_SUFFIX" \
-                AuroraEngineVersion="$EV"; then
-              echo "engine_version=$EV" >> $GITHUB_OUTPUT
-              echo "✅ Deploy succeeded with $EV"
+                DbInstanceClass="$DBC"; then
+              echo "db_class=$DBC" >> $GITHUB_OUTPUT
+              echo "✅ Deploy succeeded with $DBC"
               exit 0
             else
-              echo "⚠️ Deploy failed with $EV, trying next..."
+              echo "⚠️ Deploy failed with $DBC, trying next..."
               if aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" >/dev/null 2>&1; then
                 STATUS=$(aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK" --query "Stacks[0].StackStatus" --output text || true)
                 echo "Stack status: $STATUS"
@@ -110,7 +110,7 @@ jobs:
               fi
             fi
           done
-          echo "❌ All Aurora engine versions failed"
+          echo "❌ All DB instance classes failed"
           exit 1
 
       - name: Export CloudFormation outputs
@@ -134,7 +134,7 @@ with open(os.environ['GITHUB_ENV'],'a') as f:
 print('✅ Outputs exported')
 PY
 
-      - name: Initialize Aurora schema (Lambda)
+      - name: Initialize MySQL schema (Lambda)
         if: steps.deploy.outcome == 'success'
         run: |
           set -euo pipefail
