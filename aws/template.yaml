@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Subscriber Migration Portal - Serverless API (No Flask) + Legacy RDS'
+Description: 'Subscriber Migration Portal - Complete Cloud/Legacy/Dual CRUD System'
 
 Parameters:
   Stage:
@@ -19,51 +19,61 @@ Globals:
     Timeout: 30
     MemorySize: 512
     Runtime: python3.11
+    Layers:
+      - !Ref CommonLayer
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        CORS_ORIGINS: !Ref CorsOrigins
 
 Resources:
-  # Existing resources omitted for brevity ...
-
   # ======================
-  # Legacy DB Secret
+  # LAMBDA LAYER
   # ======================
-  LegacyDbSecret:
-    Type: AWS::SecretsManager::Secret
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
     Properties:
-      Name: !Sub '${AWS::StackName}-legacy-db'
-      Description: 'Credentials for Legacy RDS MySQL'
-      GenerateSecretString:
-        SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
-        GenerateStringKey: 'password'
-        PasswordLength: 24
-        ExcludeCharacters: '"@/\\'
+      LayerName: !Sub '${AWS::StackName}-common'
+      Description: 'Common utilities and dependencies'
+      ContentUri: lambda/layers/common/
+      CompatibleRuntimes:
+        - python3.11
+      RetentionPolicy: Delete
 
   # ======================
-  # Legacy RDS MySQL (public for demo; recommend VPC private in prod)
-  LegacyDB:
-    Type: AWS::RDS::DBInstance
+  # DYNAMODB TABLES
+  # ======================
+  SubscribersTable:
+    Type: AWS::DynamoDB::Table
     Properties:
-      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy'
-      Engine: mysql
-      EngineVersion: '8.0'
-      DBInstanceClass: db.t4g.micro
-      AllocatedStorage: 20
-      PubliclyAccessible: true
-      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
-      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
-      DeletionProtection: false
-      BackupRetentionPeriod: 1
-      StorageType: gp2
-      MultiAZ: false
-      Tags:
-        - Key: Service
-          Value: SubscriberPortal
-        - Key: Environment
-          Value: !Ref Stage
+      TableName: !Sub '${AWS::StackName}-subscribers'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: uid
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: plan_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: uid
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: plan-index
+          KeySchema:
+            - AttributeName: plan_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
 
-  # ======================
-  # Settings Table (stores provisioning mode)
-  # ======================
   SettingsTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -79,13 +89,54 @@ Resources:
         SSEEnabled: true
 
   # ======================
-  # Settings Lambda (GET/PUT provisioning mode)
+  # RDS RESOURCES
   # ======================
+  LegacyDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-legacy-db'
+      Description: 'Credentials for Legacy RDS MySQL'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\\'
+
+  LegacyDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy'
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      PubliclyAccessible: true  # TODO: Move to private VPC in Step 3
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
+      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
+      DeletionProtection: false
+      BackupRetentionPeriod: 1
+      StorageType: gp2
+      MultiAZ: false
+      Tags:
+        - Key: Service
+          Value: SubscriberPortal
+        - Key: Environment
+          Value: !Ref Stage
+
+  # ======================
+  # LAMBDA FUNCTIONS
+  # ======================
+  
+  # Settings Function
   SettingsFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: lambda/settings/
       Handler: handler.lambda_handler
+      Environment:
+        Variables:
+          SETTINGS_TABLE: !Ref SettingsTable
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SettingsTable
@@ -105,22 +156,273 @@ Resources:
             Auth:
               Authorizer: NONE
 
+  # Cloud Subscribers Function (DynamoDB)
+  CloudSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/cloud/
+      Handler: subscribers.lambda_handler
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubscribersTable
+      Events:
+        # List subscribers
+        ListCloudSubscribers:
+          Type: Api
+          Properties:
+            Path: /cloud/subscribers
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        # Create subscriber
+        CreateCloudSubscriber:
+          Type: Api
+          Properties:
+            Path: /cloud/subscribers
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        # Get specific subscriber
+        GetCloudSubscriber:
+          Type: Api
+          Properties:
+            Path: /cloud/subscribers/{uid}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        # Update subscriber
+        UpdateCloudSubscriber:
+          Type: Api
+          Properties:
+            Path: /cloud/subscribers/{uid}
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+        # Delete subscriber
+        DeleteCloudSubscriber:
+          Type: Api
+          Properties:
+            Path: /cloud/subscribers/{uid}
+            Method: DELETE
+            Auth:
+              Authorizer: NONE
+
+  # Legacy Subscribers Function (RDS MySQL)
+  LegacySubscribersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/legacy/
+      Handler: subscribers.lambda_handler
+      Timeout: 60  # Longer timeout for DB operations
+      Environment:
+        Variables:
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref LegacyDbSecret
+            - Effect: Allow
+              Action:
+                - rds:DescribeDBInstances
+              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
+      Events:
+        # List legacy subscribers
+        ListLegacySubscribers:
+          Type: Api
+          Properties:
+            Path: /legacy/subscribers
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        # Create legacy subscriber
+        CreateLegacySubscriber:
+          Type: Api
+          Properties:
+            Path: /legacy/subscribers
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        # Get specific legacy subscriber
+        GetLegacySubscriber:
+          Type: Api
+          Properties:
+            Path: /legacy/subscribers/{uid}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        # Update legacy subscriber
+        UpdateLegacySubscriber:
+          Type: Api
+          Properties:
+            Path: /legacy/subscribers/{uid}
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+        # Delete legacy subscriber
+        DeleteLegacySubscriber:
+          Type: Api
+          Properties:
+            Path: /legacy/subscribers/{uid}
+            Method: DELETE
+            Auth:
+              Authorizer: NONE
+
+  # Dual Provision Function (Both systems)
+  DualSubscribersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/dual/
+      Handler: subscribers.lambda_handler
+      Timeout: 90  # Longest timeout for dual operations
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SubscribersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref LegacyDbSecret
+            - Effect: Allow
+              Action:
+                - rds:DescribeDBInstances
+              Resource: !Sub 'arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${LegacyDB}'
+      Events:
+        # Dual subscribers CRUD
+        ListDualSubscribers:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        CreateDualSubscriber:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        GetDualSubscriber:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers/{uid}
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        UpdateDualSubscriber:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers/{uid}
+            Method: PUT
+            Auth:
+              Authorizer: NONE
+        DeleteDualSubscriber:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers/{uid}
+            Method: DELETE
+            Auth:
+              Authorizer: NONE
+        # Sync operations
+        GetSyncStatus:
+          Type: Api
+          Properties:
+            Path: /dual/sync-status
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        SyncSubscriber:
+          Type: Api
+          Properties:
+            Path: /dual/subscribers/{uid}/sync
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  # ======================
+  # EXISTING FUNCTIONS (Health, Auth, etc.)
+  # ======================
+  
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/health/
+      Handler: handler.lambda_handler
+      Events:
+        HealthCheck:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda/auth/
+      Handler: handler.lambda_handler
+      Environment:
+        Variables:
+          JWT_SECRET: !Ref JwtSecret
+      Events:
+        Login:
+          Type: Api
+          Properties:
+            Path: /auth/login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
 Outputs:
   ApiEndpoint:
-    Description: API URL
+    Description: API Gateway endpoint URL
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
-  UploadBucketName:
-    Description: Upload bucket (existing)
-    Value: ''
-  SubscriberTableName:
-    Description: Subscriber table (existing)
-    Value: ''
-  LegacyDbSecretArn:
-    Description: Secret ARN for Legacy DB
-    Value: !Ref LegacyDbSecret
-  LegacyDbHost:
-    Description: Legacy DB endpoint hostname
-    Value: !GetAtt LegacyDB.Endpoint.Address
+    
+  SubscribersTableName:
+    Description: DynamoDB Subscribers table name
+    Value: !Ref SubscribersTable
+    
   SettingsTableName:
-    Description: Settings table name
+    Description: DynamoDB Settings table name
     Value: !Ref SettingsTable
+    
+  LegacyDbSecretArn:
+    Description: Secret ARN for Legacy RDS credentials
+    Value: !Ref LegacyDbSecret
+    
+  LegacyDbHost:
+    Description: Legacy RDS endpoint hostname
+    Value: !GetAtt LegacyDB.Endpoint.Address
+    
+  LegacyDbPort:
+    Description: Legacy RDS port
+    Value: !GetAtt LegacyDB.Endpoint.Port
+
+  # API Endpoints for documentation
+  CloudSubscribersEndpoint:
+    Description: Cloud subscribers CRUD endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/cloud/subscribers'
+    
+  LegacySubscribersEndpoint:
+    Description: Legacy subscribers CRUD endpoint  
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/legacy/subscribers'
+    
+  DualSubscribersEndpoint:
+    Description: Dual provision subscribers endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/dual/subscribers'
+    
+  SettingsEndpoint:
+    Description: Settings management endpoint
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/settings/provisioning-mode'
