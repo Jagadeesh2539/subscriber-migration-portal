@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Subscriber Migration Portal - Full VPC + Aurora Serverless v1 with EngineVersion fallback'
+Description: 'Subscriber Migration Portal - Full VPC + Standard RDS MySQL (free-tier friendly)'
 
 Parameters:
   Stage:
@@ -19,14 +19,15 @@ Parameters:
   VpcCidr:
     Type: String
     Default: '10.0.0.0/16'
-  AuroraEngineVersion:
+  DbInstanceClass:
     Type: String
-    Default: '5.7.mysql_aurora.2.07.1'
+    Default: 'db.t3.micro'
     AllowedValues:
-      - '5.7.mysql_aurora.2.07.1'
-      - '5.7.mysql_aurora.2.07.2'
-      - '5.7.mysql_aurora.2.08.1'
-      - '5.7.mysql_aurora.2.10.2'
+      - 'db.t3.micro'
+      - 'db.t2.micro'
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
 
 Globals:
   Function:
@@ -164,11 +165,11 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  DbSG:
+  RdsSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
-      GroupDescription: Aurora MySQL ingress from Lambda SG
+      GroupDescription: RDS MySQL ingress from Lambda SG
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 3306
@@ -323,45 +324,45 @@ Resources:
             - { AttributeName: created_at, KeyType: RANGE }
           Projection: { ProjectionType: ALL }
 
-  # ---------------- Aurora Serverless v1 ----------------
-  AuroraDbSecret:
+  # ---------------- Secrets + RDS MySQL ----------------
+  LegacyDbSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
-      Name: !Sub '${AWS::StackName}-aurora-secret-${BucketSuffix}'
-      Description: 'Credentials for Aurora Serverless v1 MySQL'
+      Name: !Sub '${AWS::StackName}-legacy-db-${BucketSuffix}'
+      Description: 'Credentials for RDS MySQL'
       GenerateSecretString:
         SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
         GenerateStringKey: 'password'
         PasswordLength: 24
         ExcludeCharacters: '"@/\\'
 
-  AuroraSubnetGroup:
+  LegacyDbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupName: !Sub '${AWS::StackName}-aurora-subnet-${BucketSuffix}'
-      DBSubnetGroupDescription: 'Aurora private subnets'
+      DBSubnetGroupName: !Sub '${AWS::StackName}-rds-subnet-${BucketSuffix}'
+      DBSubnetGroupDescription: Private subnets
       SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
 
-  AuroraCluster:
-    Type: AWS::RDS::DBCluster
+  LegacyDB:
+    Type: AWS::RDS::DBInstance
     Properties:
-      DBClusterIdentifier: !Sub '${AWS::StackName}-aurora-${BucketSuffix}'
-      Engine: aurora-mysql
-      EngineMode: serverless
-      EngineVersion: !Ref AuroraEngineVersion
-      DatabaseName: !Sub '{{resolve:secretsmanager:${AuroraDbSecret}::dbname}}'
-      MasterUsername: !Sub '{{resolve:secretsmanager:${AuroraDbSecret}::username}}'
-      MasterUserPassword: !Sub '{{resolve:secretsmanager:${AuroraDbSecret}::password}}'
-      DBSubnetGroupName: !Ref AuroraSubnetGroup
-      VpcSecurityGroupIds: [!Ref DbSG]
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy-${BucketSuffix}'
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      StorageType: gp2
+      PubliclyAccessible: false
+      MultiAZ: false
+      VPCSecurityGroups: [!Ref RdsSG]
+      DBSubnetGroupName: !Ref LegacyDbSubnetGroup
+      MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
+      DBName: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::dbname}}'
       BackupRetentionPeriod: 1
-      StorageEncrypted: true
-      DeletionProtection: false
-      ScalingConfiguration:
-        AutoPause: true
-        MinCapacity: 1
-        MaxCapacity: 2
-        SecondsUntilAutoPause: 900
+      EnablePerformanceInsights: false
+      MonitoringInterval: 0
+    DependsOn: [PrivateSubnetARouteTableAssociation, PrivateSubnetBRouteTableAssociation]
 
   # ---------------- IAM Roles & Policies ----------------
   StepFunctionExecutionRole:
@@ -427,7 +428,7 @@ Resources:
               - !Sub '${MigrationJobsTable.Arn}/index/*'
               - !GetAtt SettingsTable.Arn
           - Effect: Allow
-            Action: ['s3:*','secretsmanager:GetSecretValue','rds:DescribeDBClusters','rds:DescribeDBInstances','states:*','cloudformation:DescribeStacks']
+            Action: ['s3:*','secretsmanager:GetSecretValue','rds:DescribeDBInstances','states:*','cloudformation:DescribeStacks']
             Resource: '*'
 
   # ---------------- Lambdas ----------------
@@ -481,8 +482,8 @@ Resources:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref AuroraDbSecret
-          LEGACY_DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
@@ -499,8 +500,8 @@ Resources:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref AuroraDbSecret
-          LEGACY_DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   ProcessExportFunction:
     Type: AWS::Serverless::Function
@@ -517,8 +518,8 @@ Resources:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref AuroraDbSecret
-          LEGACY_DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   SchemaInitFunction:
     Type: AWS::Serverless::Function
@@ -532,8 +533,8 @@ Resources:
         SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
       Environment:
         Variables:
-          LEGACY_DB_SECRET_ARN: !Ref AuroraDbSecret
-          LEGACY_DB_HOST: !GetAtt AuroraCluster.Endpoint.Address
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
   SettingsFunction:
     Type: AWS::Serverless::Function
@@ -635,8 +636,8 @@ Outputs:
   ExportWorkflowArn:
     Value: !Ref ExportWorkflow
   LegacyDbSecretArn:
-    Value: !Ref AuroraDbSecret
+    Value: !Ref LegacyDbSecret
   LegacyDbHost:
-    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Value: !GetAtt LegacyDB.Endpoint.Address
   SchemaInitFunctionName:
     Value: !Ref SchemaInitFunction
