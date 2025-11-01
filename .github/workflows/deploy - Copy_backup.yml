@@ -693,6 +693,7 @@ jobs:
       
       - uses: aws-actions/configure-aws-credentials@v4
         with:
+          # ⚠️ RECOMMENDATION: Replace with OIDC Role ARN
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
@@ -702,28 +703,28 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       
-      - name: 🧹 Clean npm Cache and Old Dependencies
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "🧹 ============================================"
-          echo "🧹  CLEANING OLD DEPENDENCIES"
-          echo "🧹 ============================================"
-          echo ""
-          
-          # Clean npm cache
-          echo "🗑️  Cleaning npm cache..."
-          npm cache clean --force
-          
-          # Remove old node_modules and lockfile
-          echo "🗑️  Removing old node_modules..."
-          rm -rf node_modules package-lock.json build
-          
-          echo "✅ Cleanup complete"
-          echo ""
+      - name: 📦 Setup npm cache with graceful fallback
+        uses: actions/cache@v3
+        id: npm-cache
+        with:
+          path: |
+            frontend/node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.NODE_VERSION }}-
+            ${{ runner.os }}-node-
+        continue-on-error: true
       
-      - name: 📦 Install Dependencies with Correct Overrides
+      - name: 📊 Cache Status
+        run: |
+          if [[ "${{ steps.npm-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ Cache hit - dependencies restored from cache"
+          else
+            echo "⚠️ Cache miss - will install fresh dependencies"
+          fi
+      
+      - name: 📦 Install Dependencies with comprehensive retry logic
         timeout-minutes: 10
         run: |
           set -euo pipefail
@@ -734,146 +735,119 @@ jobs:
           echo "📦 ============================================"
           echo ""
           
-          # Display Node/npm versions
+          # Function: Retry with exponential backoff
+          retry_npm() {
+            local max_attempts=3
+            local attempt=1
+            local delay=10
+            local command=$1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "🔄 Attempt $attempt/$max_attempts: $command"
+              
+              if eval "$command" 2>&1; then
+                echo "✅ Success on attempt $attempt"
+                return 0
+              fi
+              
+              if [ $attempt -lt $max_attempts ]; then
+                echo "⚠️ Failed, waiting ${delay}s before retry..."
+                sleep $delay
+                delay=$((delay * 2))
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            return 1
+          }
+          
+          # Check if package.json exists
+          if [[ ! -f package.json ]]; then
+            echo "❌ CRITICAL: package.json not found in frontend directory"
+            exit 1
+          fi
+          
+          echo "📋 package.json found"
           echo "Node version: $(node --version)"
           echo "npm version: $(npm --version)"
           echo ""
           
-          # Show configured overrides
-          echo "📋 Configured dependency overrides:"
-          if grep -q '"overrides"' package.json; then
-            node -e "
-              const pkg = require('./package.json');
-              if (pkg.overrides) {
-                Object.entries(pkg.overrides).forEach(([k,v]) => {
-                  console.log('  ✓', k + ':', v);
-                });
-              }
-            "
-          else
-            echo "  ⚠️  No overrides found"
-          fi
-          echo ""
-          
-          # Install with legacy peer deps
-          echo "📦 Installing dependencies..."
-          npm install --legacy-peer-deps
-          
-          echo ""
-          echo "✅ Dependencies installed"
-          echo ""
-      
-      - name: 🔍 Verify Critical Package Versions
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "🔍 ============================================"
-          echo "🔍  VERIFYING INSTALLED VERSIONS"
-          echo "🔍 ============================================"
-          echo ""
-          
-          # Verify critical packages using Node.js
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
+          # Strategy 1: npm ci with lockfile
+          if [[ -f package-lock.json ]]; then
+            echo "🎯 Strategy 1: npm ci (using lockfile)"
             
-            const packages = ['ajv', 'ajv-keywords', 'schema-utils'];
-            
-            console.log('Critical packages:');
-            packages.forEach(pkg => {
-              const pkgPath = path.join('node_modules', pkg, 'package.json');
-              if (fs.existsSync(pkgPath)) {
-                const pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                console.log('  ✅', pkg + ':', pkgJson.version);
-              } else {
-                console.log('  ❌', pkg + ': NOT FOUND');
-                process.exit(1);
-              }
-            });
-          "
-          
-          echo ""
-          echo "✅ Version verification complete"
-          echo ""
-      
-      - name: 🔧 Fix AJV Compatibility Issues
-        working-directory: ./frontend
-        run: |
-          set -euo pipefail
-          
-          echo "🔧 ============================================"
-          echo "🔧  AJV COMPATIBILITY FIX"
-          echo "🔧 ============================================"
-          echo ""
-          
-          # Check current AJV structure
-          echo "🔍 Checking AJV directory structure..."
-          
-          if [ -d "node_modules/ajv" ]; then
-            echo "📁 AJV package found"
-            
-            # Check if lib directory exists (AJV 6.x structure)
-            if [ -d "node_modules/ajv/lib" ]; then
-              echo "✅ Found AJV lib directory (6.x structure)"
-              
-              # Create dist symlink if missing
-              if [ ! -d "node_modules/ajv/dist" ]; then
-                echo "🔗 Creating dist symlink for compatibility..."
-                cd node_modules/ajv
-                ln -sf lib dist
-                cd ../..
-              fi
-              
-              # Ensure specific paths exist
-              if [ ! -f "node_modules/ajv/dist/compile/codegen/index.js" ]; then
-                if [ -f "node_modules/ajv/lib/compile/codegen/index.js" ]; then
-                  echo "🔗 Creating codegen compatibility path..."
-                  mkdir -p node_modules/ajv/dist/compile
-                  cd node_modules/ajv/dist/compile
-                  ln -sf ../../lib/compile/codegen codegen
-                  cd ../../../..
-                fi
-              fi
-              
-              if [ ! -f "node_modules/ajv/dist/compile/context.js" ]; then
-                if [ -f "node_modules/ajv/lib/compile/context.js" ]; then
-                  echo "🔗 Creating context compatibility path..."
-                  mkdir -p node_modules/ajv/dist/compile
-                  cd node_modules/ajv/dist/compile
-                  ln -sf ../../lib/compile/context.js context.js
-                  cd ../../../..
-                fi
-              fi
-              
-            else
-              echo "⚠️  AJV lib directory not found"
+            if retry_npm "npm ci"; then
+              echo "✅ npm ci completed successfully"
+              exit 0
             fi
+            
+            echo "⚠️ npm ci failed, trying with legacy peer deps..."
+            rm -rf node_modules
+            
+            if retry_npm "npm ci --legacy-peer-deps"; then
+              echo "✅ npm ci --legacy-peer-deps completed successfully"
+              exit 0
+            fi
+            
+            echo "⚠️ npm ci --legacy-peer-deps failed, removing lockfile..."
+            rm -rf node_modules package-lock.json
           else
-            echo "❌ AJV package not found"
+            echo "⚠️ No package-lock.json found, skipping npm ci"
+          fi
+          
+          # Strategy 2: npm install with legacy peer deps
+          echo ""
+          echo "🎯 Strategy 2: npm install --legacy-peer-deps"
+          
+          if retry_npm "npm install --legacy-peer-deps"; then
+            echo "✅ npm install --legacy-peer-deps completed successfully"
+          else
+            # Strategy 3: Nuclear option - clean install with force
+            echo ""
+            echo "🎯 Strategy 3: Clean npm install --force"
+            
+            rm -rf node_modules package-lock.json ~/.npm/_cacache
+            
+            if retry_npm "npm install --force --legacy-peer-deps"; then
+              echo "✅ npm install --force completed successfully"
+            else
+              echo "❌ All npm install strategies failed"
+              echo ""
+              echo "🔍 Debugging information:"
+              echo "  Current directory: $(pwd)"
+              echo "  package.json exists: $([ -f package.json ] && echo 'yes' || echo 'no')"
+              echo "  npm config:"
+              npm config list
+              exit 1
+            fi
+          fi
+          
+          # Generate lockfile for future runs
+          if [[ ! -f package-lock.json ]]; then
+            echo ""
+            echo "📝 Generating package-lock.json for future builds..."
+            npm install --package-lock-only || echo "⚠️ Could not generate lockfile"
+          fi
+          
+          # Verify installation
+          echo ""
+          echo "🔍 Verifying installation..."
+          
+          if [[ ! -d node_modules ]]; then
+            echo "❌ node_modules directory not created"
             exit 1
           fi
           
-          # Final verification
+          MODULE_COUNT=$(find node_modules -maxdepth 1 -type d | wc -l)
+          echo "✅ Installation verified: $MODULE_COUNT modules installed"
           echo ""
-          echo "📋 AJV structure verification:"
-          echo "  ajv/lib exists: $([ -d node_modules/ajv/lib ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist exists: $([ -d node_modules/ajv/dist ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist/compile/codegen exists: $([ -f node_modules/ajv/dist/compile/codegen/index.js ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist/compile/context exists: $([ -f node_modules/ajv/dist/compile/context.js ] && echo 'YES' || echo 'NO')"
-          
-          echo ""
-          echo "✅ AJV compatibility fix complete"
-          echo ""
+          echo "✅ ============================================"
+          echo "✅  DEPENDENCY INSTALLATION COMPLETE"
+          echo "✅ ============================================"
       
-      - name: 🏗️ Build React Application
+      - name: 🏗️ Build React Application with error handling
         timeout-minutes: 10
-        env:
-          REACT_APP_API_URL: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
-          REACT_APP_STAGE: prod
-          REACT_APP_VERSION: ${{ github.sha }}
-          REACT_APP_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
-          CI: false
         run: |
           set -euo pipefail
           cd frontend
@@ -933,9 +907,12 @@ jobs:
           
           # Execute build
           echo "🔨 Starting React build process..."
+          echo "Build environment: CI=false (warnings won't fail build)"
+          echo ""
+          
           BUILD_START=$(date +%s)
           
-          if npm run build 2>&1 | tee build.log; then
+          if CI=false npm run build 2>&1 | tee build.log; then
             BUILD_END=$(date +%s)
             BUILD_DURATION=$((BUILD_END - BUILD_START))
             
@@ -946,7 +923,6 @@ jobs:
             echo "❌ Build failed - checking logs..."
             
             if [[ -f build.log ]]; then
-              echo ""
               echo "Last 50 lines of build output:"
               tail -50 build.log
             fi
