@@ -202,11 +202,10 @@ jobs:
           echo "public_subnet_1=$PUBLIC_1" >> $GITHUB_OUTPUT
           echo "public_subnet_2=$PUBLIC_2" >> $GITHUB_OUTPUT
 
-  # ✅ FIX: This job was missing. I've added it back.
   cleanup-and-deploy:
     name: 🏗️ Deploy Infrastructure
     runs-on: ubuntu-latest
-    needs: discover-infrastructure # <-- CRITICAL FIX: Added this dependency
+    needs: discover-infrastructure 
     environment: production
     env:
       STACK_DELETE_TIMEOUT_MINUTES: 15
@@ -230,6 +229,10 @@ jobs:
       - name: Install Tools
         run: pip install aws-sam-cli boto3 jq
 
+      #
+      # ✅ FIX: All steps below were incorrectly indented
+      # and are now moved inside the 'steps:' block
+      #
       - name: 🔥 Execute Comprehensive Cleanup
         id: cleanup
         timeout-minutes: 25
@@ -237,7 +240,6 @@ jobs:
         run: |
           # Make script executable
           # Make sure your script is at 'scripts/cleanup.sh'
-          # If it's at '.github/scripts/cleanup.sh', change the path below
           chmod +x scripts/cleanup.sh
           
           # Export environment variables for script
@@ -251,6 +253,61 @@ jobs:
           # Run cleanup script
           ./scripts/cleanup.sh
 
+      # Add this step in your cleanup-and-deploy job, after the cleanup script step
+      - name: 🔨 Build PyMySQL Lambda Layer
+        id: build-layer
+        run: |
+          set -euo pipefail
+      
+          echo "🔨 Building PyMySQL Lambda Layer..."
+          cd aws
+      
+          # Ensure layer directory structure exists
+          mkdir -p layers/pymysql/python
+      
+          # Verify requirements.txt
+          if [[ ! -f layers/pymysql/requirements.txt ]]; then
+          echo "📝 Creating requirements.txt..."
+          cat > layers/pymysql/requirements.txt << 'EOF'
+          pymysql==1.1.0
+          cryptography>=3.4.8
+          EOF
+          fi
+      
+          echo "📦 Installing dependencies for Lambda layer..."
+      
+          # Install with proper flags for Lambda runtime
+          pip install \
+          -r layers/pymysql/requirements.txt \
+          -t layers/pymysql/python \
+          --upgrade \
+          --no-cache-dir \
+          --platform manylinux2014_x86_64 \
+          --only-binary=:all: \
+          --python-version 3.11
+      
+           # Clean up unnecessary files to reduce layer size
+          echo "🧹 Cleaning up unnecessary files..."
+          find layers/pymysql/python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find layers/pymysql/python -type f -name "*.pyc" -delete 2>/dev/null || true
+          find layers/pymysql/python -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
+          find layers/pymysql/python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+      
+          # Verify layer structure
+          if [ -d "layers/pymysql/python/pymysql" ]; then
+          echo "✅ PyMySQL layer built successfully"
+          echo "📊 Layer size: $(du -sh layers/pymysql/python | cut -f1)"
+          echo "📋 PyMySQL version: $(python -c "import sys; sys.path.insert(0, 'layers/pymysql/python'); import pymysql; print(pymysql.__version__)")"
+          else
+          echo "❌ CRITICAL: PyMySQL not found in layer"
+          echo "Layer contents:"
+          ls -la layers/pymysql/python/ || true
+          exit 1
+          fi
+      
+          cd ..
+      
+          echo "✅ Layer preparation complete"
 
       - name: 🚀 Deploy SAM Application
         id: sam-deploy
