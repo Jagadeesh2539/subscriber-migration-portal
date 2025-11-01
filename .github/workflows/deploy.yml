@@ -956,7 +956,7 @@ jobs:
             exit 0
           fi
 
-    deploy-frontend:
+  deploy-frontend:
     name: 🌐 Deploy Frontend with Enhanced Error Handling
     runs-on: ubuntu-latest
     needs: [cleanup-and-deploy, initialize-database]
