@@ -346,22 +346,76 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: 📦 Install & Build
+      - name: 📦 Install & Build Frontend
         run: |
           cd frontend
-          npm ci || (npm cache verify && rm -rf node_modules package-lock.json && npm install --force)
+          
+          # Try npm ci first, fallback to npm install if package-lock.json is missing
+          if [[ -f "package-lock.json" ]]; then
+            echo "📦 Installing dependencies with npm ci..."
+            npm ci || {
+              echo "⚠️ npm ci failed, cleaning up and trying npm install..."
+              rm -rf node_modules package-lock.json
+              npm install
+            }
+          else
+            echo "📦 No package-lock.json found, using npm install..."
+            npm install
+          fi
+          
+          # Generate package-lock.json for future builds
+          if [[ ! -f "package-lock.json" ]]; then
+            echo "🔄 Generating package-lock.json..."
+            npm install --package-lock-only
+          fi
+          
+          # Set environment variables for build
           echo "REACT_APP_API_URL=${{ needs.deploy.outputs.api-endpoint }}" > .env.production
           echo "REACT_APP_STAGE=prod" >> .env.production
+          
+          # Build the application
+          echo "🏗️ Building React application..."
           npm run build
+          
+          echo "✅ Frontend build completed successfully"
       - name: 🚀 Upload to S3 website
         run: |
           FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
-          aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
+          
+          # Create bucket if it doesn't exist
+          if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
+            echo "🚀 Creating frontend S3 bucket: $FRONTEND_BUCKET"
+            if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
+              aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
+            else
+              aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
+            fi
+          fi
+          
+          # Sync build files to S3
+          echo "📤 Uploading frontend build to S3..."
           aws s3 sync frontend/build/ s3://$FRONTEND_BUCKET --delete
+          
+          # Configure static website hosting
           aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{
             "IndexDocument": {"Suffix": "index.html"},
             "ErrorDocument": {"Key": "index.html"}
           }'
+          
+          # Make bucket publicly readable for static website
+          aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy '{
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
+            }]
+          }'
+          
+          # Get website URL
+          WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          echo "🌐 Frontend deployed to: $WEBSITE_URL"
 
   comprehensive-smoke-tests:
     name: 🧪 Comprehensive Smoke Tests with Step Functions Validation
@@ -768,6 +822,7 @@ jobs:
             echo "   4. Validate RDS connectivity and schema"
             echo "   5. Check Step Functions execution status"
             echo "   6. Verify PyMySQL layer deployment"
+            echo "   7. Check frontend S3 bucket and website configuration"
           fi
 
 permissions:
