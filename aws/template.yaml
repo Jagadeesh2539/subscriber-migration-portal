@@ -431,6 +431,19 @@ Resources:
             Action: ['s3:*','secretsmanager:GetSecretValue','rds:DescribeDBInstances','states:*','cloudformation:DescribeStacks']
             Resource: '*'
 
+  # ---------------- Lambda Layers ----------------
+  PymysqlLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-pymysql'
+      Description: PyMySQL library for database operations
+      ContentUri: layers/pymysql/
+      CompatibleRuntimes:
+        - python3.11
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.11
+
   # ---------------- Lambdas ----------------
   OrchestratorFunction:
     Type: AWS::Serverless::Function
@@ -521,15 +534,22 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
+  # Schema Initializer Lambda (VPC-enabled Python with PyMySQL)
   SchemaInitializerFunction:
     Type: AWS::Serverless::Function
+    DependsOn:
+      - LegacyDB
+      - LegacyDbSecret
     Properties:
+      FunctionName: !Sub '${AWS::StackName}-schema-initializer'
       Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/schema/
+      CodeUri: lambda/schema-init/
       Handler: index.handler
-      Runtime: nodejs18.x
+      Runtime: python3.11
       Timeout: 300
       MemorySize: 512
+      Layers:
+        - !Ref PymysqlLayer
       VpcConfig:
         SecurityGroupIds: [!Ref LambdaSG]
         SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
@@ -632,3 +652,11 @@ Outputs:
     Value: !GetAtt LegacyDB.Endpoint.Address
   SchemaInitializerFunctionName:
     Value: !Ref SchemaInitializerFunction
+    Description: Schema Initializer Lambda Name
+    Export:
+      Name: !Sub '${AWS::StackName}-schema-initializer-name'
+  SchemaInitializerArn:
+    Value: !GetAtt SchemaInitializerFunction.Arn
+    Description: Schema Initializer Lambda ARN
+    Export:
+      Name: !Sub '${AWS::StackName}-schema-initializer-arn'
