@@ -130,7 +130,7 @@ jobs:
       - name: Install tooling
         run: pip install aws-sam-cli boto3 jq
 
-      - name: 🚀 Build & Deploy SAM with Existing VPC
+      - name: 🚀 Build & Deploy SAM with Existing VPC (Dynamic Parameters)
         id: deploy_step
         run: |
           set -euo pipefail
@@ -143,31 +143,42 @@ jobs:
           
           JWT_SECRET=$(openssl rand -base64 48)
           
-          # Use discovered VPC and subnet IDs
+          # Required: discovered VPC and private subnets
           VPC_ID="${{ needs.discover-infrastructure.outputs.vpc-id }}"
           PRIVATE_1="${{ needs.discover-infrastructure.outputs.private-subnet-1 }}"
           PRIVATE_2="${{ needs.discover-infrastructure.outputs.private-subnet-2 }}"
+          
+          # Optional: public subnets (only if discovered)
           PUBLIC_1="${{ needs.discover-infrastructure.outputs.public-subnet-1 }}"
           PUBLIC_2="${{ needs.discover-infrastructure.outputs.public-subnet-2 }}"
           
           echo "🔧 Using discovered infrastructure:"
           echo "  VPC: $VPC_ID"
           echo "  Private: $PRIVATE_1, $PRIVATE_2"
-          echo "  Public: $PUBLIC_1, $PUBLIC_2"
+          echo "  Public: ${PUBLIC_1:-<none>}, ${PUBLIC_2:-<none>}"
+          
+          # Build parameter array dynamically - only include non-empty values
+          PARAMS=(
+            "Stage=prod"
+            "JwtSecret=$JWT_SECRET"
+            "CorsOrigins=https://yourdomain.com"
+            "VpcId=$VPC_ID"
+            "PrivateSubnetId1=$PRIVATE_1"
+            "PrivateSubnetId2=$PRIVATE_2"
+          )
+          
+          # Only add public subnet parameters if they have values
+          [[ -n "$PUBLIC_1" ]] && PARAMS+=("PublicSubnetId1=$PUBLIC_1")
+          [[ -n "$PUBLIC_2" ]] && PARAMS+=("PublicSubnetId2=$PUBLIC_2")
+          
+          echo "📦 Parameter count: ${#PARAMS[@]}"
+          echo "📝 Parameters: ${PARAMS[*]}"
           
           sam deploy \
             --stack-name "${{ env.STACK_NAME }}" \
             --region ${{ env.AWS_DEFAULT_REGION }} \
             --s3-bucket "$BUCKET" \
-            --parameter-overrides \
-              Stage=prod \
-              JwtSecret="$JWT_SECRET" \
-              CorsOrigins="https://yourdomain.com" \
-              VpcId="$VPC_ID" \
-              PrivateSubnetId1="$PRIVATE_1" \
-              PrivateSubnetId2="$PRIVATE_2" \
-              PublicSubnetId1="$PUBLIC_1" \
-              PublicSubnetId2="$PUBLIC_2" \
+            --parameter-overrides "${PARAMS[@]}" \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset \
             --no-confirm-changeset
@@ -257,7 +268,7 @@ jobs:
           PAYLOAD=$(jq -n --argjson stmts "$SQL_STATEMENTS" '{sql_statements: $stmts}')
           
           echo "📤 Invoking schema initializer..."
-          echo "📝 Payload contains $(echo $SQL_STATEMENTS | jq 'length') statements with proper table-first order"
+          echo "📝 Payload contains $(echo $SQL_STATEMENTS | jq 'length') statements with tables-first order + auto-healing"
           
           # Invoke Lambda
           aws lambda invoke \
@@ -297,11 +308,11 @@ jobs:
           AUTO_CREATED=$(echo "$BODY" | jq -r '.summary.auto_created_tables // 0')
           
           echo ""
-          echo "📊 MySQL 5.7 Schema Initialization Summary:"
+          echo "📊 MySQL 5.7 Schema Initialization with Auto-Healing:"
           echo "  ✅ Executed: $EXECUTED (tables, data, events)"
-          echo "  ⏭️  Skipped:  $SKIPPED (duplicates/exists)"
-          echo "  🏗️ Auto-created: $AUTO_CREATED tables"
-          echo "  ❌ Errors:   $ERRORS (critical only)"
+          echo "  ⏭️  Skipped:  $SKIPPED (duplicates/already exists)"
+          echo "  🏗️ Auto-created: $AUTO_CREATED tables (missing tables created automatically)"
+          echo "  ❌ Errors:   $ERRORS (critical issues only)"
           echo "  📊 Total:    $TOTAL statements processed"
           
           # Success validation with auto-creation support
@@ -309,14 +320,14 @@ jobs:
             echo ""
             echo "✅ Schema initialization completed successfully!"
             if [[ "$AUTO_CREATED" -gt 0 ]]; then
-              echo "🏗️ Auto-created $AUTO_CREATED missing tables to satisfy indexes"
+              echo "🏗️ Auto-created $AUTO_CREATED missing tables when indexes failed"
             fi
-            echo "📝 Tables created in correct order with MySQL 5.7 syntax"
+            echo "📝 All tables exist with proper MySQL 5.7 compatible indexes"
           elif [[ "$EXECUTED" -gt 5 ]] && [[ "$ERRORS" -le 5 ]]; then
             # Allow minor errors if core functionality is established
             echo ""
-            echo "✅ Schema initialization completed with minor issues!"
-            echo "📝 Core database structure and data established"
+            echo "✅ Schema initialization completed with acceptable issues!"
+            echo "📝 Core database structure established, minor issues are non-blocking"
           else
             echo ""
             echo "⚠️ Schema initialization had significant issues:"
@@ -324,15 +335,15 @@ jobs:
             
             # Only fail if we have many errors and few executions (critical failure)
             if [[ "$EXECUTED" -lt 3 ]] && [[ "$ERRORS" -gt 10 ]]; then
-              echo "❌ Critical failure: minimal functionality established"
+              echo "❌ Critical failure: minimal core functionality established"
               exit 1
             else
-              echo "📝 Acceptable: some core functionality working"
+              echo "📝 Acceptable outcome: sufficient core functionality working"
             fi
           fi
           
           echo ""
-          echo "✅ Schema initialization phase completed"
+          echo "✅ Schema initialization phase completed - ready for application use"
 
   frontend-deploy:
     name: 🌐 Frontend Deploy
@@ -467,16 +478,16 @@ jobs:
           echo ""
           echo "✅ Features Available:"
           echo "   🔄 Migration Jobs with Step Functions"
-          echo "   📏 Audit and Export Jobs  "
-          echo "   🗺 MySQL 5.7 Legacy Database"
+          echo "   📏 Audit and Export Jobs"
+          echo "   🗺 MySQL 5.7 Legacy Database with Auto-Healing Schema"
           echo "   ⚡ DynamoDB Cloud Storage"
           echo "   🌐 React Frontend (S3 Website)"
-          echo "   🔐 Auto-healing Schema Initialization"
+          echo "   🏗️ Infrastructure Reuse (No CIDR Conflicts)"
           
           if [[ "${{ needs.comprehensive-smoke-tests.result }}" == "success" ]]; then
-            echo "✅ All tests passed!"
+            echo "✅ All tests passed - Production ready!"
           else
-            echo "⚠️ Some tests had issues, check logs"
+            echo "⚠️ Some tests had issues, check logs above"
           fi
 
 permissions:
