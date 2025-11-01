@@ -64,7 +64,7 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  PublicSubnetA:
+  PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
@@ -72,7 +72,7 @@ Resources:
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
 
-  PublicSubnetB:
+  PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
@@ -80,14 +80,14 @@ Resources:
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
 
-  PrivateSubnetA:
+  PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: 10.0.16.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
 
-  PrivateSubnetB:
+  PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
@@ -107,16 +107,16 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetARouteTableAssociation:
+  PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnetA
+      SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
 
-  PublicSubnetBRouteTableAssociation:
+  PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PublicSubnetB
+      SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
   EIPNat:
@@ -128,7 +128,7 @@ Resources:
     Type: AWS::EC2::NatGateway
     Properties:
       AllocationId: !GetAtt EIPNat.AllocationId
-      SubnetId: !Ref PublicSubnetA
+      SubnetId: !Ref PublicSubnet1
     DependsOn: VPCGatewayAttachment
 
   PrivateRouteTable:
@@ -143,49 +143,49 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGateway
 
-  PrivateSubnetARouteTableAssociation:
+  PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetA
+      SubnetId: !Ref PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
 
-  PrivateSubnetBRouteTableAssociation:
+  PrivateSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetB
+      SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
   # ---------------- Security Groups ----------------
-  LambdaSG:
+  LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
-      GroupDescription: Lambda egress
+      GroupDescription: Lambda security group with egress
       SecurityGroupEgress:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  RdsSG:
+  RdsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
-      GroupDescription: RDS MySQL ingress from Lambda SG
+      GroupDescription: RDS MySQL ingress from Lambda
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
-          SourceSecurityGroupId: !Ref LambdaSG
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
-  VpcEndpointSG:
+  VpcEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       VpcId: !Ref VPC
-      GroupDescription: VPC Endpoint SG (HTTPS from Lambda)
+      GroupDescription: VPC Endpoint security group
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
-          SourceSecurityGroupId: !Ref LambdaSG
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
   # ---------------- VPC Endpoints ----------------
   SecretsManagerEndpoint:
@@ -194,8 +194,8 @@ Resources:
       VpcId: !Ref VPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.secretsmanager'
       VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref VpcEndpointSG]
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+      SecurityGroupIds: [!Ref VpcEndpointSecurityGroup]
       PrivateDnsEnabled: true
 
   LogsEndpoint:
@@ -204,28 +204,8 @@ Resources:
       VpcId: !Ref VPC
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
       VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref VpcEndpointSG]
-      PrivateDnsEnabled: true
-
-  StepFunctionsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.states'
-      VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref VpcEndpointSG]
-      PrivateDnsEnabled: true
-
-  LambdaEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VPC
-      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.lambda'
-      VpcEndpointType: Interface
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref VpcEndpointSG]
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+      SecurityGroupIds: [!Ref VpcEndpointSecurityGroup]
       PrivateDnsEnabled: true
 
   S3GatewayEndpoint:
@@ -247,38 +227,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-
-  UploadsBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref UploadsBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: DenyNonTLS
-            Effect: Deny
-            Principal: '*'
-            Action: 's3:*'
-            Resource:
-              - !Sub '${UploadsBucket.Arn}'
-              - !Sub '${UploadsBucket.Arn}/*'
-            Condition:
-              Bool:
-                aws:SecureTransport: 'false'
-          - Sid: AllowOnlyVPCE
-            Effect: Allow
-            Principal: '*'
-            Action:
-              - 's3:GetObject'
-              - 's3:PutObject'
-              - 's3:DeleteObject'
-              - 's3:ListBucket'
-            Resource:
-              - !Sub '${UploadsBucket.Arn}'
-              - !Sub '${UploadsBucket.Arn}/*'
-            Condition:
-              StringEquals:
-                aws:SourceVpce: !Ref S3GatewayEndpoint
 
   # ---------------- DynamoDB ----------------
   SubscribersTable:
@@ -341,20 +289,20 @@ Resources:
     Properties:
       DBSubnetGroupName: !Sub '${AWS::StackName}-rds-subnet-${BucketSuffix}'
       DBSubnetGroupDescription: Private subnets
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
 
-  LegacyDB:
+  LegacyDb:
     Type: AWS::RDS::DBInstance
     Properties:
       DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy-${BucketSuffix}'
       Engine: mysql
-      EngineVersion: '8.0'
+      EngineVersion: '5.7.44'  # Use MySQL 5.7 for compatibility
       DBInstanceClass: !Ref DbInstanceClass
       AllocatedStorage: !Ref DbAllocatedStorage
       StorageType: gp2
       PubliclyAccessible: false
       MultiAZ: false
-      VPCSecurityGroups: [!Ref RdsSG]
+      VPCSecurityGroups: [!Ref RdsSecurityGroup]
       DBSubnetGroupName: !Ref LegacyDbSubnetGroup
       MasterUsername: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::username}}'
       MasterUserPassword: !Sub '{{resolve:secretsmanager:${LegacyDbSecret}::password}}'
@@ -362,7 +310,7 @@ Resources:
       BackupRetentionPeriod: 1
       EnablePerformanceInsights: false
       MonitoringInterval: 0
-    DependsOn: [PrivateSubnetARouteTableAssociation, PrivateSubnetBRouteTableAssociation]
+    DependsOn: [PrivateSubnet1RouteTableAssociation, PrivateSubnet2RouteTableAssociation]
 
   # ---------------- IAM Roles & Policies ----------------
   StepFunctionExecutionRole:
@@ -444,7 +392,32 @@ Resources:
     Metadata:
       BuildMethod: python3.11
 
-  # ---------------- Lambdas ----------------
+  # ---------------- Schema Initializer Lambda ----------------
+  SchemaInitializerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - LegacyDb
+      - LegacyDbSecret
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-schema-initializer'
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/schema-init/  # Use separate code directory
+      Handler: index.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 512
+      Layers:
+        - !Ref PymysqlLayer
+      VpcConfig:
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
+      Environment:
+        Variables:
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+          AWS_STACK_NAME: !Sub '${AWS::StackName}'
+
+  # ---------------- Application Lambdas ----------------
   OrchestratorFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -452,8 +425,8 @@ Resources:
       CodeUri: lambda/migration/
       Handler: orchestrator.lambda_handler
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
@@ -474,8 +447,8 @@ Resources:
       CodeUri: lambda/migration/
       Handler: validate_job.lambda_handler
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           UPLOADS_BUCKET: !Ref UploadsBucket
@@ -487,16 +460,18 @@ Resources:
       CodeUri: lambda/migration/
       Handler: process_file.lambda_handler
       Timeout: 900
+      Layers:
+        - !Ref PymysqlLayer
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
@@ -505,16 +480,18 @@ Resources:
       CodeUri: lambda/migration/
       Handler: process_audit.lambda_handler
       Timeout: 600
+      Layers:
+        - !Ref PymysqlLayer
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
 
   ProcessExportFunction:
     Type: AWS::Serverless::Function
@@ -523,41 +500,18 @@ Resources:
       CodeUri: lambda/migration/
       Handler: process_export.lambda_handler
       Timeout: 600
+      Layers:
+        - !Ref PymysqlLayer
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-
-  # Schema Initializer Lambda (VPC-enabled Python with PyMySQL)
-  SchemaInitializerFunction:
-    Type: AWS::Serverless::Function
-    DependsOn:
-      - LegacyDB
-      - LegacyDbSecret
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-schema-initializer'
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/schema-init/
-      Handler: index.handler
-      Runtime: python3.11
-      Timeout: 300
-      MemorySize: 512
-      Layers:
-        - !Ref PymysqlLayer
-      VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      Environment:
-        Variables:
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
-          AWS_STACK_NAME: !Sub '${AWS::StackName}'
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
 
   SettingsFunction:
     Type: AWS::Serverless::Function
@@ -566,8 +520,8 @@ Resources:
       CodeUri: lambda/settings/
       Handler: handler.lambda_handler
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           SETTINGS_TABLE: !Ref SettingsTable
@@ -582,8 +536,8 @@ Resources:
       CodeUri: lambda/auth/
       Handler: handler.lambda_handler
       VpcConfig:
-        SecurityGroupIds: [!Ref LambdaSG]
-        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
       Environment:
         Variables:
           JWT_SECRET: !Ref JwtSecret
@@ -620,15 +574,6 @@ Resources:
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub '{"StartAt":"Export","States":{"Export":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessExportFunction.Arn}","Payload.$":"$"},"End":true}}}'
 
-  ProcessFileFunctionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt ProcessFileFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref AWS::AccountId
-      SourceArn: !GetAtt UploadsBucket.Arn
-
 Outputs:
   ApiEndpoint:
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
@@ -649,7 +594,7 @@ Outputs:
   LegacyDbSecretArn:
     Value: !Ref LegacyDbSecret
   LegacyDbHost:
-    Value: !GetAtt LegacyDB.Endpoint.Address
+    Value: !GetAtt LegacyDb.Endpoint.Address
   SchemaInitializerFunctionName:
     Value: !Ref SchemaInitializerFunction
     Description: Schema Initializer Lambda Name
