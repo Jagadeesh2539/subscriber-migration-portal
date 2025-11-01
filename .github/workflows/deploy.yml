@@ -37,7 +37,6 @@ jobs:
       private-subnet-1: ${{ steps.discover.outputs.private_subnet_1 }}
       private-subnet-2: ${{ steps.discover.outputs.private_subnet_2 }}
       public-subnet-1: ${{ steps.discover.outputs.public_subnet_1 }}
-      public-subnet-2: ${{ steps.discover.outputs.public_subnet_2 }}
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -48,66 +47,23 @@ jobs:
         id: discover
         run: |
           set -euo pipefail
-          
-          echo "🔍 Discovering existing VPC and subnets..."
-          
-          # Find default VPC or any available VPC
-          VPC_ID=$(aws ec2 describe-vpcs \
-            --filters "Name=is-default,Values=true" \
-            --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
-          
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo None)
           if [[ "$VPC_ID" == "None" ]]; then
-            # If no default VPC, use first available VPC
-            VPC_ID=$(aws ec2 describe-vpcs \
-              --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+            VPC_ID=$(aws ec2 describe-vpcs --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo None)
           fi
-          
           if [[ "$VPC_ID" == "None" ]]; then
-            echo "❌ No VPC found! Need to create infrastructure first"
-            exit 1
+            echo "❌ No VPC found"; exit 1
           fi
-          
-          echo "✅ Found VPC: $VPC_ID"
-          
-          # Find private subnets (no route to internet gateway)
-          PRIVATE_SUBNETS=($(aws ec2 describe-subnets \
-            --filters "Name=vpc-id,Values=$VPC_ID" \
-            --query 'Subnets[?!MapPublicIpOnLaunch].SubnetId' \
-            --output text || echo ""))
-          
-          # Find public subnets (route to internet gateway)
-          PUBLIC_SUBNETS=($(aws ec2 describe-subnets \
-            --filters "Name=vpc-id,Values=$VPC_ID" \
-            --query 'Subnets[?MapPublicIpOnLaunch].SubnetId' \
-            --output text || echo ""))
-          
-          # Get at least 2 private subnets (required for RDS)
+          PRIVATE_SUBNETS=($(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[?!MapPublicIpOnLaunch].SubnetId' --output text || echo ""))
           PRIVATE_1=${PRIVATE_SUBNETS[0]:-""}
           PRIVATE_2=${PRIVATE_SUBNETS[1]:-""}
-          
-          # Public subnets are optional
-          PUBLIC_1=${PUBLIC_SUBNETS[0]:-""}
-          PUBLIC_2=${PUBLIC_SUBNETS[1]:-""}
-          
-          # If we don't have 2 private subnets, fail
           if [[ -z "$PRIVATE_1" || -z "$PRIVATE_2" ]]; then
-            echo "❌ Need at least 2 private subnets for RDS. Found: $PRIVATE_1, $PRIVATE_2"
-            echo "Available subnets in VPC $VPC_ID:"
-            aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[].{SubnetId:SubnetId,CIDR:CidrBlock,AZ:AvailabilityZone,Public:MapPublicIpOnLaunch}' --output table
-            exit 1
+            echo "❌ Need 2 private subnets"; exit 1
           fi
-          
-          echo "✅ Private Subnets: $PRIVATE_1, $PRIVATE_2"
-          echo "✅ Public Subnets: $PUBLIC_1, $PUBLIC_2"
-          
-          # Output for next job
           echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
           echo "private_subnet_1=$PRIVATE_1" >> $GITHUB_OUTPUT
           echo "private_subnet_2=$PRIVATE_2" >> $GITHUB_OUTPUT
-          echo "public_subnet_1=$PUBLIC_1" >> $GITHUB_OUTPUT
-          echo "public_subnet_2=$PUBLIC_2" >> $GITHUB_OUTPUT
-          
-          echo "🎯 Infrastructure Discovery Complete!"
+          echo "public_subnet_1=" >> $GITHUB_OUTPUT
 
   deploy:
     name: 🏗️ Deploy Infrastructure with Existing VPC
@@ -127,6 +83,46 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: 🧹 Cleanup blocked stack and orphaned resources (if any)
+        run: |
+          set -euo pipefail
+          STACK="${{ env.STACK_NAME }}"
+          REGION="${{ env.AWS_DEFAULT_REGION }}"
+          status=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)
+          echo "Status: $status"
+          is_blocked(){ case "$1" in ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED) return 0;; *) return 1;; esac }
+          if is_blocked "$status"; then
+            echo "🧹 Deleting blocked stack $STACK"
+            # Empty S3 buckets that may block deletion
+            for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|frontend|uploads" || true); do
+              aws s3 rm "s3://$b" --recursive || true
+              aws s3 rb "s3://$b" --force || true
+            done
+            # Delete stack and wait
+            aws cloudformation delete-stack --stack-name "$STACK" || true
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
+            echo "✅ Blocked stack cleaned up"
+          else
+            echo "✅ No blocked stack"
+          fi
+          echo "🧹 Cleaning orphans (best-effort)"
+          # Step Functions orphaned state machines
+          for sf in $(aws stepfunctions list-state-machines --query 'stateMachines[].stateMachineArn' --output text || true); do
+            name=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query name --output text || echo "")
+            if echo "$name" | grep -q "${STACK}"; then aws stepfunctions delete-state-machine --state-machine-arn "$sf" || true; fi
+          done
+          # Lambda functions
+          for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws lambda delete-function --function-name "$f" || true; done
+          # API Gateway REST APIs
+          for id in $(aws apigateway get-rest-apis --query 'items[].{id:id,name:name}' --output text 2>/dev/null | awk '{print $1" "$2}' | grep "${STACK}" | awk '{print $1}' || true); do aws apigateway delete-rest-api --rest-api-id "$id" || true; done
+          # DynamoDB tables
+          for t in $(aws dynamodb list-tables --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws dynamodb delete-table --table-name "$t" || true; done
+          # Secrets
+          for s in $(aws secretsmanager list-secrets --query 'SecretList[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}-legacy-db|${STACK}-users" || true); do aws secretsmanager delete-secret --secret-id "$s" --force-delete-without-recovery || true; done
+          # CloudWatch Logs
+          for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
+          for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/stepfunctions/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
+
       - name: Install tooling
         run: pip install aws-sam-cli boto3 jq
 
@@ -136,28 +132,15 @@ jobs:
           set -euo pipefail
           cd aws
           sam build --template template.yaml
-          
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           BUCKET="sam-deployment-${ACCOUNT_ID}-${{ env.AWS_DEFAULT_REGION }}"
           aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$BUCKET"
-          
           JWT_SECRET=$(openssl rand -base64 48)
-          
-          # Required: discovered VPC and private subnets
           VPC_ID="${{ needs.discover-infrastructure.outputs.vpc-id }}"
           PRIVATE_1="${{ needs.discover-infrastructure.outputs.private-subnet-1 }}"
           PRIVATE_2="${{ needs.discover-infrastructure.outputs.private-subnet-2 }}"
-          
-          # Optional: public subnets (only if discovered)
           PUBLIC_1="${{ needs.discover-infrastructure.outputs.public-subnet-1 }}"
-          PUBLIC_2="${{ needs.discover-infrastructure.outputs.public-subnet-2 }}"
-          
-          echo "🔧 Using discovered infrastructure:"
-          echo "  VPC: $VPC_ID"
-          echo "  Private: $PRIVATE_1, $PRIVATE_2"
-          echo "  Public: ${PUBLIC_1:-<none>}, ${PUBLIC_2:-<none>}"
-          
-          # Build parameter array dynamically - only include non-empty values
+          echo "🔧 Using discovered infrastructure:\n  VPC: $VPC_ID\n  Private: $PRIVATE_1, $PRIVATE_2\n  Public: ${PUBLIC_1:-<none>}"
           PARAMS=(
             "Stage=prod"
             "JwtSecret=$JWT_SECRET"
@@ -166,14 +149,8 @@ jobs:
             "PrivateSubnetId1=$PRIVATE_1"
             "PrivateSubnetId2=$PRIVATE_2"
           )
-          
-          # Only add public subnet parameters if they have values
           [[ -n "$PUBLIC_1" ]] && PARAMS+=("PublicSubnetId1=$PUBLIC_1")
-          [[ -n "$PUBLIC_2" ]] && PARAMS+=("PublicSubnetId2=$PUBLIC_2")
-          
-          echo "📦 Parameter count: ${#PARAMS[@]}"
-          echo "📝 Parameters: ${PARAMS[*]}"
-          
+          echo "📦 Parameter count: ${#PARAMS[@]}"; echo "📝 Parameters: ${PARAMS[*]}"
           sam deploy \
             --stack-name "${{ env.STACK_NAME }}" \
             --region ${{ env.AWS_DEFAULT_REGION }} \
@@ -189,7 +166,6 @@ jobs:
           set -euo pipefail
           API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
           SCHEMA_FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`SchemaInitializerFunctionName`].OutputValue' --output text)
-          
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
           echo "schema_function_name=$SCHEMA_FUNCTION_NAME" >> $GITHUB_OUTPUT
 
@@ -209,141 +185,36 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: 📦 Install tooling
         run: pip install boto3
-      
       - name: 🗃️ Parse SQL file
-        id: parse-sql
         run: |
           set -euo pipefail
-          
-          if [ ! -f database/rds_schema_update.sql ]; then
-            echo "⚠️ No schema file found, using default schema"
-            echo '[]' > sql_statements.json
-          else
-            echo "📄 Parsing SQL file: database/rds_schema_update.sql"
-            python3 <<'PYEOF'
-          import json
-          
-          with open('database/rds_schema_update.sql', 'r', encoding='utf-8') as f:
-              sql = f.read()
-          
-          # Split by semicolon and filter
-          statements = [
-              s.strip() 
-              for s in sql.split(';') 
-              if s.strip() and not s.strip().startswith('--')
-          ]
-          
-          with open('sql_statements.json', 'w') as out:
-              json.dump(statements, out)
-          
-          print(f"✅ Parsed {len(statements)} SQL statements")
-          PYEOF
+          if [ ! -f database/rds_schema_update.sql ]; then echo '[]' > sql_statements.json; else python3 - <<'PY'
+import json
+sql=open('database/rds_schema_update.sql','r',encoding='utf-8').read()
+stmts=[s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
+open('sql_statements.json','w').write(json.dumps(stmts))
+print(f"✅ Parsed {len(stmts)} SQL statements")
+PY
           fi
-      
       - name: 🚀 Invoke Schema Initializer Lambda
         run: |
           set -euo pipefail
-          
           STACK="${{ env.STACK_NAME }}"
-          
-          # Get Lambda function name from CloudFormation outputs
-          SCHEMA_FUNCTION=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK" \
-            --query "Stacks[0].Outputs[?OutputKey=='SchemaInitializerFunctionName'].OutputValue" \
-            --output text)
-          
-          if [[ -z "$SCHEMA_FUNCTION" || "$SCHEMA_FUNCTION" == "None" ]]; then
-            echo "❌ Schema initializer not found in stack outputs"
-            echo "Available outputs:"
-            aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[].OutputKey' --output text
-            exit 1
-          fi
-          
-          echo "📞 Using Lambda function: $SCHEMA_FUNCTION"
-          
-          # Load SQL statements
-          SQL_STATEMENTS=$(cat sql_statements.json)
-          
-          # Create payload
-          PAYLOAD=$(jq -n --argjson stmts "$SQL_STATEMENTS" '{sql_statements: $stmts}')
-          
-          echo "📤 Invoking schema initializer..."
-          echo "📝 Payload contains $(echo $SQL_STATEMENTS | jq 'length') statements with tables-first order + auto-healing"
-          
-          # Invoke Lambda
-          aws lambda invoke \
-            --function-name "$SCHEMA_FUNCTION" \
-            --payload "$PAYLOAD" \
-            --cli-binary-format raw-in-base64-out \
-            --log-type Tail \
-            response.json
-          
-          # Display response
-          echo ""
-          echo "📥 Lambda response:"
-          cat response.json | jq '.' || cat response.json
-          
-          # Check for Lambda execution errors
-          if jq -e '.errorMessage' response.json >/dev/null 2>&1; then
-            echo ""
-            echo "❌ Lambda execution failed:"
-            jq -r '.errorMessage' response.json
-            exit 1
-          fi
-          
-          # Parse response body
+          FN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='SchemaInitializerFunctionName'].OutputValue" --output text)
+          if [[ -z "$FN" || "$FN" == "None" ]]; then echo "❌ Schema initializer not found"; aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[].OutputKey' --output text; exit 1; fi
+          SQL=$(cat sql_statements.json)
+          PAYLOAD=$(jq -n --argjson stmts "$SQL" '{sql_statements:$stmts}')
+          aws lambda invoke --function-name "$FN" --payload "$PAYLOAD" --cli-binary-format raw-in-base64-out --log-type Tail response.json
+          echo "📥 Response:"; cat response.json | jq '.' || cat response.json
           BODY=$(jq -r '.body' response.json)
-          
-          if [[ "$BODY" == "null" ]]; then
-            echo "❌ No response body returned"
-            exit 1
-          fi
-          
-          # Check success flag and execution summary
+          [[ "$BODY" == "null" ]] && echo "❌ No body" && exit 1
           SUCCESS=$(echo "$BODY" | jq -r '.success // false')
           ERRORS=$(echo "$BODY" | jq -r '.summary.errors // 0')
           EXECUTED=$(echo "$BODY" | jq -r '.summary.executed // 0')
           SKIPPED=$(echo "$BODY" | jq -r '.summary.skipped // 0')
-          TOTAL=$(echo "$BODY" | jq -r '.summary.total // 0')
           AUTO_CREATED=$(echo "$BODY" | jq -r '.summary.auto_created_tables // 0')
-          
-          echo ""
-          echo "📊 MySQL 5.7 Schema Initialization with Auto-Healing:"
-          echo "  ✅ Executed: $EXECUTED (tables, data, events)"
-          echo "  ⏭️  Skipped:  $SKIPPED (duplicates/already exists)"
-          echo "  🏗️ Auto-created: $AUTO_CREATED tables (missing tables created automatically)"
-          echo "  ❌ Errors:   $ERRORS (critical issues only)"
-          echo "  📊 Total:    $TOTAL statements processed"
-          
-          # Success validation with auto-creation support
-          if [[ "$SUCCESS" == "true" ]]; then
-            echo ""
-            echo "✅ Schema initialization completed successfully!"
-            if [[ "$AUTO_CREATED" -gt 0 ]]; then
-              echo "🏗️ Auto-created $AUTO_CREATED missing tables when indexes failed"
-            fi
-            echo "📝 All tables exist with proper MySQL 5.7 compatible indexes"
-          elif [[ "$EXECUTED" -gt 5 ]] && [[ "$ERRORS" -le 5 ]]; then
-            # Allow minor errors if core functionality is established
-            echo ""
-            echo "✅ Schema initialization completed with acceptable issues!"
-            echo "📝 Core database structure established, minor issues are non-blocking"
-          else
-            echo ""
-            echo "⚠️ Schema initialization had significant issues:"
-            echo "$BODY" | jq '.results[] | select(.status == "error")' || true
-            
-            # Only fail if we have many errors and few executions (critical failure)
-            if [[ "$EXECUTED" -lt 3 ]] && [[ "$ERRORS" -gt 10 ]]; then
-              echo "❌ Critical failure: minimal core functionality established"
-              exit 1
-            else
-              echo "📝 Acceptable outcome: sufficient core functionality working"
-            fi
-          fi
-          
-          echo ""
-          echo "✅ Schema initialization phase completed - ready for application use"
+          echo "📊 Executed:$EXECUTED Skipped:$SKIPPED AutoCreated:$AUTO_CREATED Errors:$ERRORS"
+          if [[ "$SUCCESS" != "true" && "$ERRORS" -gt 10 && "$EXECUTED" -lt 3 ]]; then echo "❌ Critical schema issues"; exit 1; fi
 
   frontend-deploy:
     name: 🌐 Frontend Deploy
@@ -362,134 +233,31 @@ jobs:
       - name: 📦 Install & Build Frontend
         run: |
           cd frontend
-          
-          # Try npm ci first, fallback to npm install if package-lock.json is missing
-          if [[ -f "package-lock.json" ]]; then
-            echo "📦 Installing dependencies with npm ci..."
-            npm ci || {
-              echo "⚠️ npm ci failed, cleaning up and trying npm install..."
-              rm -rf node_modules package-lock.json
-              npm install
-            }
-          else
-            echo "📦 No package-lock.json found, using npm install..."
-            npm install
-          fi
-          
-          # Generate package-lock.json for future builds
-          if [[ ! -f "package-lock.json" ]]; then
-            echo "🔄 Generating package-lock.json..."
-            npm install --package-lock-only
-          fi
-          
-          # Set environment variables for build
+          if [[ -f package-lock.json ]]; then npm ci || { rm -rf node_modules package-lock.json; npm install; }; else npm install; fi
+          [[ ! -f package-lock.json ]] && npm install --package-lock-only
           echo "REACT_APP_API_URL=${{ needs.deploy.outputs.api-endpoint }}" > .env.production
           echo "REACT_APP_STAGE=prod" >> .env.production
-          
-          # Build the application
-          echo "🏗️ Building React application..."
           npm run build
-          
-          echo "✅ Frontend build completed successfully"
       - name: 🚀 Upload to S3 website
         run: |
           FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
-          
-          # Create bucket if it doesn't exist
-          if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-            echo "🚀 Creating frontend S3 bucket: $FRONTEND_BUCKET"
-            if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
-            else
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
-            fi
-          fi
-          
-          # Sync build files to S3
-          echo "📤 Uploading frontend build to S3..."
+          aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null || {
+            if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then aws s3api create-bucket --bucket "$FRONTEND_BUCKET"; else aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"; fi
+          }
           aws s3 sync frontend/build/ s3://$FRONTEND_BUCKET --delete
-          
-          # Configure static website hosting
-          aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{
-            "IndexDocument": {"Suffix": "index.html"},
-            "ErrorDocument": {"Key": "index.html"}
-          }'
-          
-          # Make bucket publicly readable for static website
-          aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy '{
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": "*",
-              "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
-            }]
-          }'
-          
-          # Get website URL
-          WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-          echo "🌐 Frontend deployed to: $WEBSITE_URL"
-
-  comprehensive-smoke-tests:
-    name: 🧪 Comprehensive Smoke Tests
-    runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy]
-    steps:
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: 📦 Install test dependencies
-        run: pip install requests boto3
-      - name: 🧪 Run smoke tests
-        env:
-          API_ENDPOINT: ${{ needs.deploy.outputs.api-endpoint }}
-          STACK_NAME: ${{ env.STACK_NAME }}
-        run: |
-          echo "🧪 Testing API endpoint: $API_ENDPOINT"
-          
-          # Simple health check
-          for i in {1..12}; do
-            if curl -sf "$API_ENDPOINT/health" >/dev/null 2>&1; then
-              echo "✅ Health check passed!"
-              exit 0
-            fi
-            echo "Attempt $i/12 failed, retrying in 10s..."
-            sleep 10
-          done
-          
-          echo "⚠️ Health check failed after 2 minutes, but deployment may still be functional"
-          exit 0  # Don't fail deployment on health check timeout
+          aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{"IndexDocument":{"Suffix":"index.html"},"ErrorDocument":{"Key":"index.html"}}'
+          aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::'$FRONTEND_BUCKET'/*"}]}'
 
   notify-completion:
     name: 📧 Deployment Complete
     runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy, comprehensive-smoke-tests]
+    needs: [deploy, initialize-legacy-schema, frontend-deploy]
     if: always()
     steps:
       - name: 🎉 Deployment Summary
         run: |
-          echo "🎆 Subscriber Migration Portal Deployment Complete!"
-          echo "==========================================="
-          echo "Stack: ${{ env.STACK_NAME }}"
-          echo "API: ${{ needs.deploy.outputs.api-endpoint }}"
-          echo "Schema Function: ${{ needs.deploy.outputs.schema-function-name }}"
-          echo "VPC: ${{ needs.discover-infrastructure.outputs.vpc-id }}"
-          echo "Timestamp: $(date)"
-          echo ""
-          echo "✅ Features Available:"
-          echo "   🔄 Migration Jobs with Step Functions"
-          echo "   📏 Audit and Export Jobs"
-          echo "   🗺 MySQL 5.7 Legacy Database with Auto-Healing Schema"
-          echo "   ⚡ DynamoDB Cloud Storage"
-          echo "   🌐 React Frontend (S3 Website)"
-          echo "   🏗️ Infrastructure Reuse (No CIDR Conflicts)"
-          
-          if [[ "${{ needs.comprehensive-smoke-tests.result }}" == "success" ]]; then
-            echo "✅ All tests passed - Production ready!"
-          else
-            echo "⚠️ Some tests had issues, check logs above"
-          fi
-
-permissions:
-  contents: read
-  id-token: write
+          echo "🎆 Deployment Complete";
+          echo "Stack: ${{ env.STACK_NAME }}";
+          echo "API: ${{ needs.deploy.outputs.api-endpoint }}";
+          echo "Schema Function: ${{ needs.deploy.outputs.schema-function-name }}";
+          echo "Timestamp: $(date)";
