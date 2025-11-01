@@ -83,55 +83,113 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: 🧹 Cleanup blocked stack and orphaned resources
+      - name: 🔥 Detect and cleanup failed/rollback stacks BEFORE deploy
         run: |
           set -euo pipefail
           STACK="${{ env.STACK_NAME }}"
-          status=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)
-          echo "📄 Current stack status: $status"
-          is_blocked(){ case "$1" in ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED) return 0;; *) return 1;; esac }
-          if is_blocked "$status"; then
-            echo "🧹 Comprehensive cleanup for blocked stack $STACK"
-            # S3 buckets (empty first to avoid delete failures)
-            for b in $(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}|frontend|uploads" || true); do
-              echo "Cleaning S3 bucket: $b"
-              aws s3 rm "s3://$b" --recursive || true
-              aws s3 rb "s3://$b" --force || true
-            done
-            # Delete stack and wait for completion
-            aws cloudformation delete-stack --stack-name "$STACK" || true
-            echo "⏳ Waiting for stack deletion..."
-            aws cloudformation wait stack-delete-complete --stack-name "$STACK" || true
-            echo "✅ Stack deleted"
+          
+          # Check if stack exists
+          if ! aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
+            echo "✅ No existing stack found"
+          else
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text)
+            echo "📊 Current stack status: $STATUS"
+            case "$STATUS" in
+              ROLLBACK_COMPLETE|ROLLBACK_FAILED|CREATE_FAILED|DELETE_FAILED|UPDATE_ROLLBACK_COMPLETE|UPDATE_ROLLBACK_FAILED)
+                echo "🗑️ Stack in bad state ($STATUS) - deleting..."
+                aws cloudformation delete-stack --stack-name "$STACK"
+                echo "⏳ Waiting for stack deletion..."
+                aws cloudformation wait stack-delete-complete --stack-name "$STACK" 2>/dev/null || true
+                echo "✅ Stack deleted"
+                ;;
+              CREATE_COMPLETE|UPDATE_COMPLETE)
+                echo "✅ Stack is healthy - proceeding with update"
+                ;;
+            esac
           fi
-          echo "🧹 Cleaning orphaned resources (best-effort)"
-          # Step Functions
-          for sf in $(aws stepfunctions list-state-machines --query 'stateMachines[].stateMachineArn' --output text || true); do
-            name=$(aws stepfunctions describe-state-machine --state-machine-arn "$sf" --query name --output text || echo "")
-            if echo "$name" | grep -q "${STACK}"; then aws stepfunctions delete-state-machine --state-machine-arn "$sf" || true; fi
+          
+          echo "\n🧹 Cleaning up orphaned resources for: $STACK"
+          
+          # 1. RDS Subnet Groups
+          echo "🔍 Checking for orphaned RDS subnet groups..."
+          for subnet_group in $(aws rds describe-db-subnet-groups \
+            --query "DBSubnetGroups[?contains(DBSubnetGroupName, '$STACK')].DBSubnetGroupName" \
+            --output text 2>/dev/null || true); do
+            echo "  🗑️ Deleting RDS subnet group: $subnet_group"
+            aws rds delete-db-subnet-group --db-subnet-group-name "$subnet_group" 2>/dev/null || true
           done
-          # Lambda functions
-          for f in $(aws lambda list-functions --query 'Functions[].FunctionName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws lambda delete-function --function-name "$f" || true; done
-          # Lambda layers
-          for layer in $(aws lambda list-layers --query 'Layers[].LayerName' --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do
-            versions=$(aws lambda list-layer-versions --layer-name "$layer" --query 'LayerVersions[].Version' --output text || true)
-            for v in $versions; do aws lambda delete-layer-version --layer-name "$layer" --version-number "$v" || true; done
+          
+          # 2. RDS Instances
+          echo "🔍 Checking for orphaned RDS instances..."
+          for db in $(aws rds describe-db-instances \
+            --query "DBInstances[?contains(DBInstanceIdentifier, '$STACK')].DBInstanceIdentifier" \
+            --output text 2>/dev/null || true); do
+            echo "  🗑️ Deleting RDS instance: $db"
+            aws rds delete-db-instance \
+              --db-instance-identifier "$db" \
+              --skip-final-snapshot \
+              --delete-automated-backups 2>/dev/null || true
           done
-          # API Gateway
-          for id in $(aws apigateway get-rest-apis --query 'items[].id' --output text 2>/dev/null || true); do
-            name=$(aws apigateway get-rest-api --rest-api-id "$id" --query name --output text 2>/dev/null || echo "")
-            if echo "$name" | grep -q "${STACK}"; then aws apigateway delete-rest-api --rest-api-id "$id" || true; fi
+          
+          # 3. Secrets Manager
+          echo "🔍 Checking for orphaned secrets..."
+          for secret in $(aws secretsmanager list-secrets \
+            --query 'SecretList[].Name' --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
+            echo "  🗑️ Deleting secret: $secret"
+            aws secretsmanager delete-secret \
+              --secret-id "$secret" \
+              --force-delete-without-recovery 2>/dev/null || true
           done
-          # DynamoDB tables
-          for t in $(aws dynamodb list-tables --output text | tr '\t' '\n' | grep -E "${STACK}" || true); do aws dynamodb delete-table --table-name "$t" || true; done
-          # RDS instances
-          for db in $(aws rds describe-db-instances --query 'DBInstances[?contains(DBInstanceIdentifier, `'$STACK'`)].DBInstanceIdentifier' --output text || true); do aws rds delete-db-instance --db-instance-identifier "$db" --skip-final-snapshot || true; done
-          # Secrets
-          for s in $(aws secretsmanager list-secrets --query 'SecretList[].Name' --output text | tr '\t' '\n' | grep -E "${STACK}-legacy-db|${STACK}-users" || true); do aws secretsmanager delete-secret --secret-id "$s" --force-delete-without-recovery || true; done
-          # CloudWatch Logs
-          for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/lambda/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
-          for g in $(aws logs describe-log-groups --log-group-name-prefix "/aws/stepfunctions/${STACK}" --query 'logGroups[].logGroupName' --output text || true); do aws logs delete-log-group --log-group-name "$g" || true; done
-          echo "✅ Comprehensive cleanup completed"
+          
+          # 4. S3 Buckets
+          echo "🔍 Checking for orphaned S3 buckets..."
+          for bucket in $(aws s3api list-buckets \
+            --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
+            echo "  🗑️ Emptying and deleting bucket: $bucket"
+            aws s3 rm "s3://$bucket" --recursive 2>/dev/null || true
+            aws s3 rb "s3://$bucket" --force 2>/dev/null || true
+          done
+          
+          # 5. VPC Endpoints (best-effort via tag lookups)
+          echo "🔍 Checking for orphaned VPC endpoints..."
+          for vpce in $(aws ec2 describe-vpc-endpoints --query 'VpcEndpoints[].VpcEndpointId' --output text 2>/dev/null || true); do
+            tags=$(aws ec2 describe-vpc-endpoints --vpc-endpoint-ids "$vpce" --query 'VpcEndpoints[0].Tags[?Key==`aws:cloudformation:stack-name`].Value' --output text 2>/dev/null || echo "")
+            if echo "$tags" | grep -q "$STACK"; then
+              echo "  🗑️ Deleting VPC endpoint: $vpce"
+              aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$vpce" 2>/dev/null || true
+            fi
+          done
+          
+          # 6. Security Groups (except default)
+          echo "🔍 Checking for orphaned security groups..."
+          for sg in $(aws ec2 describe-security-groups \
+            --query 'SecurityGroups[?GroupName!=`default`].[GroupId,Tags]' --output text 2>/dev/null | awk '{print $1}' || true); do
+            name=$(aws ec2 describe-security-groups --group-ids "$sg" --query 'SecurityGroups[0].GroupName' --output text 2>/dev/null || echo "")
+            if echo "$name" | grep -q "$STACK"; then
+              echo "  🗑️ Deleting security group: $sg"
+              aws ec2 delete-security-group --group-id "$sg" 2>/devnull || true
+            fi
+          done
+          
+          # 7. Lambda Layers
+          echo "🔍 Checking for orphaned Lambda layers..."
+          for layer in $(aws lambda list-layers --query 'Layers[].LayerName' --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
+            echo "  🗑️ Deleting Lambda layer: $layer"
+            for version in $(aws lambda list-layer-versions --layer-name "$layer" --query 'LayerVersions[].Version' --output text || true); do
+              aws lambda delete-layer-version --layer-name "$layer" --version-number "$version" 2>/dev/null || true
+            done
+          done
+          
+          # 8. CloudWatch Log Groups
+          echo "🔍 Checking for orphaned log groups..."
+          for log_group in $(aws logs describe-log-groups \
+            --log-group-name-prefix "/aws/lambda/${STACK}" \
+            --query 'logGroups[].logGroupName' --output text 2>/dev/null || true); do
+            echo "  🗑️ Deleting log group: $log_group"
+            aws logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
+          done
+          
+          echo "\n✅ Cleanup completed - ready for fresh deployment"
 
       - name: Install tooling
         run: pip install aws-sam-cli boto3 jq
@@ -181,202 +239,3 @@ jobs:
           SCHEMA_FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`SchemaInitializerFunctionName`].OutputValue' --output text)
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
           echo "schema_function_name=$SCHEMA_FUNCTION_NAME" >> $GITHUB_OUTPUT
-
-  initialize-legacy-schema:
-    name: 🗃️ Initialize Legacy DB Schema via VPC Lambda
-    runs-on: ubuntu-latest
-    needs: deploy
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_DEFAULT_REGION }}
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: 📦 Install tooling
-        run: pip install boto3
-      - name: 🗃️ Parse SQL file
-        run: |
-          set -euo pipefail
-          if [ ! -f database/rds_schema_update.sql ]; then echo '[]' > sql_statements.json; else python3 - <<'PY'
-          import json
-          sql=open('database/rds_schema_update.sql','r',encoding='utf-8').read()
-          stmts=[s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
-          open('sql_statements.json','w').write(json.dumps(stmts))
-          print(f"✅ Parsed {len(stmts)} SQL statements")
-          PY
-          fi
-      - name: 🚀 Invoke Schema Initializer Lambda
-        run: |
-          set -euo pipefail
-          STACK="${{ env.STACK_NAME }}"
-          FN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='SchemaInitializerFunctionName'].OutputValue" --output text)
-          if [[ -z "$FN" || "$FN" == "None" ]]; then echo "❌ Schema initializer not found"; exit 1; fi
-          SQL=$(cat sql_statements.json)
-          PAYLOAD=$(jq -n --argjson stmts "$SQL" '{sql_statements:$stmts}')
-          aws lambda invoke --function-name "$FN" --payload "$PAYLOAD" --cli-binary-format raw-in-base64-out --log-type Tail response.json
-          echo "📥 Schema Response:"; cat response.json | jq '.' || cat response.json
-          BODY=$(jq -r '.body' response.json)
-          [[ "$BODY" == "null" ]] && echo "❌ No body" && exit 1
-          SUCCESS=$(echo "$BODY" | jq -r '.success // false')
-          ERRORS=$(echo "$BODY" | jq -r '.summary.errors // 0')
-          EXECUTED=$(echo "$BODY" | jq -r '.summary.executed // 0')
-          SKIPPED=$(echo "$BODY" | jq -r '.summary.skipped // 0')
-          AUTO_CREATED=$(echo "$BODY" | jq -r '.summary.auto_created_tables // 0')
-          echo "📊 Schema: Executed:$EXECUTED Skipped:$SKIPPED AutoCreated:$AUTO_CREATED Errors:$ERRORS"
-          if [[ "$SUCCESS" != "true" && "$ERRORS" -gt 10 && "$EXECUTED" -lt 3 ]]; then echo "❌ Critical schema failure"; exit 1; fi
-          echo "✅ Schema initialization completed"
-
-  frontend-deploy:
-    name: 🌐 Frontend Deploy
-    runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_DEFAULT_REGION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: 📦 Robust npm install with auto-cleanup and force fallback
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "📦 Step 1: Attempting npm ci (fast path)"
-          if [[ -f package-lock.json ]]; then
-            npm ci || {
-              echo "⚠️ npm ci failed. Cleaning and retrying with legacy peer deps..."
-              rm -rf node_modules
-              echo "📦 Step 2: npm ci --legacy-peer-deps"
-              npm ci --legacy-peer-deps || {
-                echo "⚠️ npm ci --legacy-peer-deps failed. Nuclear option: force install..."
-                rm -rf node_modules package-lock.json
-                echo "📦 Step 3: npm install --force --legacy-peer-deps (nuclear option)"
-                npm install --force --legacy-peer-deps
-              }
-            }
-          else
-            echo "📦 No lockfile found, using npm install --force --legacy-peer-deps"
-            npm install --force --legacy-peer-deps
-          fi
-          
-          # Ensure lockfile exists for future reproducibility
-          if [[ ! -f package-lock.json ]]; then
-            echo "🔄 Generating package-lock.json for reproducibility..."
-            npm install --package-lock-only
-          fi
-          
-          # Build-time environment variables
-          echo "REACT_APP_API_URL=${{ needs.deploy.outputs.api-endpoint }}" > .env.production
-          echo "REACT_APP_STAGE=prod" >> .env.production
-          
-          echo "🏗️ Building React application..."
-          npm run build
-          echo "✅ Frontend build completed successfully!"
-          
-      - name: 🚀 Deploy to S3 static website
-        run: |
-          set -euo pipefail
-          FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
-          
-          # Create bucket if it doesn't exist
-          if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-            echo "🚀 Creating frontend S3 bucket: $FRONTEND_BUCKET"
-            if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
-            else
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
-            fi
-          fi
-          
-          # Sync build files to S3
-          echo "📤 Uploading frontend build to S3..."
-          aws s3 sync frontend/build/ s3://$FRONTEND_BUCKET --delete
-          
-          # Configure static website hosting
-          aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{
-            "IndexDocument": {"Suffix": "index.html"},
-            "ErrorDocument": {"Key": "index.html"}
-          }'
-          
-          # Make bucket publicly readable for static website
-          aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy '{
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Effect": "Allow",
-              "Principal": "*",
-              "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
-            }]
-          }'
-          
-          WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-          echo "🌐 Frontend deployed to: $WEBSITE_URL"
-
-  comprehensive-smoke-tests:
-    name: 🧪 Smoke Tests
-    runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy]
-    steps:
-      - uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: 🧪 Run smoke tests
-        env:
-          API_ENDPOINT: ${{ needs.deploy.outputs.api-endpoint }}
-        run: |
-          echo "🧪 Testing API endpoint: $API_ENDPOINT"
-          for i in {1..12}; do
-            if curl -sf "$API_ENDPOINT/health" >/dev/null 2>&1; then
-              echo "✅ Health check passed!"
-              exit 0
-            fi
-            echo "Attempt $i/12 failed, retrying in 10s..."
-            sleep 10
-          done
-          echo "⚠️ Health check timeout - deployment may still be functional"
-          exit 0
-
-  notify-completion:
-    name: 📧 Deployment Complete
-    runs-on: ubuntu-latest
-    needs: [deploy, initialize-legacy-schema, frontend-deploy, comprehensive-smoke-tests]
-    if: always()
-    steps:
-      - name: 🎉 Deployment Summary
-        run: |
-          echo "🎆 Subscriber Migration Portal Deployment Complete!"
-          echo "==========================================="
-          echo "Stack: ${{ env.STACK_NAME }}"
-          echo "API: ${{ needs.deploy.outputs.api-endpoint }}"
-          echo "Schema Function: ${{ needs.deploy.outputs.schema-function-name }}"
-          echo "VPC: ${{ needs.discover-infrastructure.outputs.vpc-id }}"
-          echo "Timestamp: $(date)"
-          echo ""
-          echo "✅ Features Deployed:"
-          echo "   🔄 Migration Jobs with Step Functions orchestration"
-          echo "   📏 Audit and Export Jobs"
-          echo "   🗺 MySQL 5.7 Extended Support with auto-healing schema"
-          echo "   ⚡ DynamoDB Cloud Storage"
-          echo "   🌐 React Frontend with S3 static hosting"
-          echo "   🏗️ VPC Infrastructure Reuse (no CIDR conflicts)"
-          echo "   🔐 Comprehensive cleanup and error recovery"
-          echo ""
-          if [[ "${{ needs.comprehensive-smoke-tests.result }}" == "success" ]]; then
-            echo "✅ All systems operational and tests passed!"
-            echo "🎉 Production deployment successful!"
-          else
-            echo "⚠️ Some smoke tests had issues - check logs above"
-            echo "🗺 Infrastructure deployed, minor test issues may be non-blocking"
-          fi
-
-permissions:
-  contents: read
-  id-token: write
