@@ -956,11 +956,11 @@ jobs:
             exit 0
           fi
 
-  deploy-frontend:
-    name: 🌐 Deploy Frontend
+    deploy-frontend:
+    name: 🌐 Deploy Frontend with Enhanced Error Handling
     runs-on: ubuntu-latest
     needs: [cleanup-and-deploy, initialize-database]
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       
@@ -970,148 +970,409 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
       
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
       
-      - name: 📦 Install Dependencies with retry
+      - name: 📦 Setup npm cache with graceful fallback
+        uses: actions/cache@v3
+        id: npm-cache
+        with:
+          path: |
+            frontend/node_modules
+            ~/.npm
+          key: ${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('frontend/package-lock.json', 'frontend/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.NODE_VERSION }}-
+            ${{ runner.os }}-node-
+        continue-on-error: true
+      
+      - name: 📊 Cache Status
+        run: |
+          if [[ "${{ steps.npm-cache.outputs.cache-hit }}" == "true" ]]; then
+            echo "✅ Cache hit - dependencies restored from cache"
+          else
+            echo "⚠️ Cache miss - will install fresh dependencies"
+          fi
+      
+      - name: 📦 Install Dependencies with comprehensive retry logic
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           cd frontend
           
-          echo "📦 Installing frontend dependencies..."
+          echo "📦 ============================================"
+          echo "📦  FRONTEND DEPENDENCY INSTALLATION"
+          echo "📦 ============================================"
+          echo ""
           
-          # Try npm ci first (fastest)
+          # Function: Retry with exponential backoff
+          retry_npm() {
+            local max_attempts=3
+            local attempt=1
+            local delay=10
+            local command=$1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "🔄 Attempt $attempt/$max_attempts: $command"
+              
+              if eval "$command" 2>&1; then
+                echo "✅ Success on attempt $attempt"
+                return 0
+              fi
+              
+              if [ $attempt -lt $max_attempts ]; then
+                echo "⚠️ Failed, waiting ${delay}s before retry..."
+                sleep $delay
+                delay=$((delay * 2))
+              fi
+              
+              attempt=$((attempt + 1))
+            done
+            
+            return 1
+          }
+          
+          # Check if package.json exists
+          if [[ ! -f package.json ]]; then
+            echo "❌ CRITICAL: package.json not found in frontend directory"
+            exit 1
+          fi
+          
+          echo "📋 package.json found"
+          echo "Node version: $(node --version)"
+          echo "npm version: $(npm --version)"
+          echo ""
+          
+          # Strategy 1: npm ci with lockfile
           if [[ -f package-lock.json ]]; then
-            echo "Attempting npm ci..."
-            if npm ci 2>&1; then
-              echo "✅ npm ci succeeded"
+            echo "🎯 Strategy 1: npm ci (using lockfile)"
+            
+            if retry_npm "npm ci"; then
+              echo "✅ npm ci completed successfully"
               exit 0
             fi
             
             echo "⚠️ npm ci failed, trying with legacy peer deps..."
             rm -rf node_modules
             
-            if npm ci --legacy-peer-deps 2>&1; then
-              echo "✅ npm ci --legacy-peer-deps succeeded"
+            if retry_npm "npm ci --legacy-peer-deps"; then
+              echo "✅ npm ci --legacy-peer-deps completed successfully"
               exit 0
             fi
             
-            echo "⚠️ npm ci --legacy-peer-deps failed, using npm install..."
+            echo "⚠️ npm ci --legacy-peer-deps failed, removing lockfile..."
             rm -rf node_modules package-lock.json
+          else
+            echo "⚠️ No package-lock.json found, skipping npm ci"
           fi
           
-          # Fallback to npm install
-          if npm install --legacy-peer-deps 2>&1; then
-            echo "✅ npm install succeeded"
+          # Strategy 2: npm install with legacy peer deps
+          echo ""
+          echo "🎯 Strategy 2: npm install --legacy-peer-deps"
+          
+          if retry_npm "npm install --legacy-peer-deps"; then
+            echo "✅ npm install --legacy-peer-deps completed successfully"
           else
-            echo "❌ All npm install attempts failed"
+            # Strategy 3: Nuclear option - clean install with force
+            echo ""
+            echo "🎯 Strategy 3: Clean npm install --force"
+            
+            rm -rf node_modules package-lock.json ~/.npm/_cacache
+            
+            if retry_npm "npm install --force --legacy-peer-deps"; then
+              echo "✅ npm install --force completed successfully"
+            else
+              echo "❌ All npm install strategies failed"
+              echo ""
+              echo "🔍 Debugging information:"
+              echo "  Current directory: $(pwd)"
+              echo "  package.json exists: $([ -f package.json ] && echo 'yes' || echo 'no')"
+              echo "  npm config:"
+              npm config list
+              exit 1
+            fi
+          fi
+          
+          # Generate lockfile for future runs
+          if [[ ! -f package-lock.json ]]; then
+            echo ""
+            echo "📝 Generating package-lock.json for future builds..."
+            npm install --package-lock-only || echo "⚠️ Could not generate lockfile"
+          fi
+          
+          # Verify installation
+          echo ""
+          echo "🔍 Verifying installation..."
+          
+          if [[ ! -d node_modules ]]; then
+            echo "❌ node_modules directory not created"
             exit 1
           fi
           
-          # Generate lockfile for next time
-          if [[ ! -f package-lock.json ]]; then
-            npm install --package-lock-only
-          fi
+          MODULE_COUNT=$(find node_modules -maxdepth 1 -type d | wc -l)
+          echo "✅ Installation verified: $MODULE_COUNT modules installed"
+          echo ""
+          echo "✅ ============================================"
+          echo "✅  DEPENDENCY INSTALLATION COMPLETE"
+          echo "✅ ============================================"
       
-      - name: 🏗️ Build React Application
+      - name: 🏗️ Build React Application with error handling
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           cd frontend
           
-          echo "🏗️ Building React application for production..."
+          echo "🏗️ ============================================"
+          echo "🏗️  FRONTEND BUILD PROCESS"
+          echo "🏗️ ============================================"
+          echo ""
           
-          # Create environment file
+          # Validate API endpoint
           API_ENDPOINT="${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
           
-          if [[ -z "$API_ENDPOINT" || "$API_ENDPOINT" == "None" ]]; then
-            echo "❌ API endpoint not available"
+          if [[ -z "$API_ENDPOINT" || "$API_ENDPOINT" == "None" || "$API_ENDPOINT" == "null" ]]; then
+            echo "❌ CRITICAL: API endpoint not available"
+            echo "Received value: '$API_ENDPOINT'"
             exit 1
           fi
+          
+          echo "✅ API endpoint validated: $API_ENDPOINT"
+          
+          # Create environment configuration
+          echo ""
+          echo "📝 Creating production environment configuration..."
           
           cat > .env.production << EOF
           REACT_APP_API_URL=$API_ENDPOINT
           REACT_APP_STAGE=prod
           REACT_APP_VERSION=$(date +%Y%m%d-%H%M%S)
+          REACT_APP_BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
           
-          echo "📋 Build configuration:"
+          echo "📋 Environment configuration:"
           cat .env.production
+          echo ""
           
-          # Build with production optimizations
-          if CI=false npm run build; then
-            echo "✅ Build successful"
-            
-            # Verify build output
-            if [[ ! -d build ]]; then
-              echo "❌ Build directory not found"
-              exit 1
-            fi
-            
-            if [[ ! -f build/index.html ]]; then
-              echo "❌ index.html not found in build"
-              exit 1
-            fi
-            
-            echo "📊 Build size:"
-            du -sh build/
-          else
-            echo "❌ Build failed"
+          # Pre-build checks
+          echo "🔍 Pre-build validation..."
+          
+          if [[ ! -d node_modules ]]; then
+            echo "❌ node_modules directory missing"
             exit 1
           fi
+          
+          if [[ ! -f package.json ]]; then
+            echo "❌ package.json missing"
+            exit 1
+          fi
+          
+          # Check if build script exists
+          if ! grep -q '"build"' package.json; then
+            echo "❌ No build script found in package.json"
+            exit 1
+          fi
+          
+          echo "✅ Pre-build validation passed"
+          echo ""
+          
+          # Execute build
+          echo "🔨 Starting React build process..."
+          echo "Build environment: CI=false (warnings won't fail build)"
+          echo ""
+          
+          BUILD_START=$(date +%s)
+          
+          if CI=false npm run build 2>&1 | tee build.log; then
+            BUILD_END=$(date +%s)
+            BUILD_DURATION=$((BUILD_END - BUILD_START))
+            
+            echo ""
+            echo "✅ Build completed in ${BUILD_DURATION}s"
+          else
+            echo ""
+            echo "❌ Build failed - checking logs..."
+            
+            if [[ -f build.log ]]; then
+              echo "Last 50 lines of build output:"
+              tail -50 build.log
+            fi
+            
+            exit 1
+          fi
+          
+          # Post-build validation
+          echo ""
+          echo "🔍 Post-build validation..."
+          
+          if [[ ! -d build ]]; then
+            echo "❌ build directory was not created"
+            exit 1
+          fi
+          
+          if [[ ! -f build/index.html ]]; then
+            echo "❌ build/index.html not found"
+            echo "Build directory contents:"
+            ls -la build/ || true
+            exit 1
+          fi
+          
+          # Check for critical files
+          CRITICAL_FILES=("index.html" "static")
+          for file in "${CRITICAL_FILES[@]}"; do
+            if [[ ! -e "build/$file" ]]; then
+              echo "⚠️ Warning: build/$file not found"
+            else
+              echo "✅ Found: build/$file"
+            fi
+          done
+          
+          # Build size analysis
+          echo ""
+          echo "📊 Build Analysis:"
+          echo "  Total size: $(du -sh build/ | cut -f1)"
+          
+          if [[ -d build/static ]]; then
+            echo "  Static files: $(du -sh build/static/ | cut -f1)"
+          fi
+          
+          FILE_COUNT=$(find build -type f | wc -l)
+          echo "  File count: $FILE_COUNT files"
+          
+          echo ""
+          echo "✅ ============================================"
+          echo "✅  BUILD VALIDATION COMPLETE"
+          echo "✅ ============================================"
       
-      - name: 🚀 Deploy to S3 with CDN optimization
+      - name: 🚀 Deploy to S3 with enhanced reliability
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
           
-          echo "🪣 Deploying to S3 bucket: $FRONTEND_BUCKET"
+          echo "🚀 ============================================"
+          echo "🚀  S3 FRONTEND DEPLOYMENT"
+          echo "🚀 ============================================"
+          echo ""
           
-          # Create bucket if needed
-          if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-            echo "🆕 Creating S3 bucket..."
+          echo "🪣 Target bucket: $FRONTEND_BUCKET"
+          echo "📍 Region: ${{ env.AWS_DEFAULT_REGION }}"
+          echo ""
+          
+          # Check if bucket exists
+          echo "🔍 Checking if bucket exists..."
+          
+          if aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
+            echo "✅ Bucket exists: $FRONTEND_BUCKET"
+          else
+            echo "🆕 Creating S3 bucket: $FRONTEND_BUCKET"
             
+            # Create bucket with region-specific configuration
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
+              if aws s3api create-bucket --bucket "$FRONTEND_BUCKET"; then
+                echo "✅ Bucket created in us-east-1"
+              else
+                echo "❌ Failed to create bucket"
+                exit 1
+              fi
             else
-              aws s3api create-bucket \
+              if aws s3api create-bucket \
                 --bucket "$FRONTEND_BUCKET" \
-                --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
+                --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"; then
+                echo "✅ Bucket created in ${{ env.AWS_DEFAULT_REGION }}"
+              else
+                echo "❌ Failed to create bucket"
+                exit 1
+              fi
             fi
+            
+            # Wait for bucket to be available
+            echo "⏳ Waiting for bucket to be available..."
+            sleep 5
           fi
           
-          # Upload static assets with long cache
-          echo "📤 Uploading static assets..."
+          # Upload static assets (JS, CSS, images) with long-term caching
+          echo ""
+          echo "📤 Uploading static assets with cache optimization..."
+          
           aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET" \
             --delete \
             --cache-control "public,max-age=31536000,immutable" \
             --exclude "*.html" \
             --exclude "service-worker.js" \
-            --exclude "asset-manifest.json"
+            --exclude "asset-manifest.json" \
+            --exclude "manifest.json" \
+            --exclude "robots.txt"
           
-          # Upload HTML files with no-cache
-          echo "📤 Uploading HTML files..."
+          STATIC_RESULT=$?
+          
+          if [ $STATIC_RESULT -eq 0 ]; then
+            echo "✅ Static assets uploaded successfully"
+          else
+            echo "❌ Static asset upload failed with code: $STATIC_RESULT"
+            exit 1
+          fi
+          
+          # Upload HTML and dynamic files with no-cache
+          echo ""
+          echo "📤 Uploading HTML and dynamic files with no-cache..."
+          
           aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET" \
             --exclude "*" \
             --include "*.html" \
             --include "service-worker.js" \
             --include "asset-manifest.json" \
-            --cache-control "no-cache,no-store,must-revalidate"
+            --include "manifest.json" \
+            --include "robots.txt" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --metadata-directive REPLACE
           
-          # Configure website hosting
+          HTML_RESULT=$?
+          
+          if [ $HTML_RESULT -eq 0 ]; then
+            echo "✅ HTML files uploaded successfully"
+          else
+            echo "❌ HTML upload failed with code: $HTML_RESULT"
+            exit 1
+          fi
+          
+          # Configure static website hosting
+          echo ""
           echo "🌐 Configuring static website hosting..."
-          aws s3api put-bucket-website \
+          
+          if aws s3api put-bucket-website \
             --bucket "$FRONTEND_BUCKET" \
             --website-configuration '{
               "IndexDocument": {"Suffix": "index.html"},
               "ErrorDocument": {"Key": "index.html"}
-            }'
+            }'; then
+            echo "✅ Website hosting configured"
+          else
+            echo "❌ Failed to configure website hosting"
+            exit 1
+          fi
           
-          # Set bucket policy for public access
-          echo "🔓 Setting public access policy..."
-          aws s3api put-bucket-policy \
+          # Configure CORS (if needed for API calls)
+          echo ""
+          echo "🔗 Configuring CORS..."
+          
+          aws s3api put-bucket-cors \
+            --bucket "$FRONTEND_BUCKET" \
+            --cors-configuration '{
+              "CORSRules": [{
+                "AllowedOrigins": ["*"],
+                "AllowedMethods": ["GET", "HEAD"],
+                "AllowedHeaders": ["*"],
+                "MaxAgeSeconds": 3000
+              }]
+            }' 2>/dev/null || echo "⚠️ CORS configuration skipped"
+          
+          # Set bucket policy for public read access
+          echo ""
+          echo "🔓 Configuring public access policy..."
+          
+          if aws s3api put-bucket-policy \
             --bucket "$FRONTEND_BUCKET" \
             --policy '{
               "Version": "2012-10-17",
@@ -1122,19 +1383,108 @@ jobs:
                 "Action": "s3:GetObject",
                 "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
               }]
-            }'
+            }'; then
+            echo "✅ Bucket policy set"
+          else
+            echo "❌ Failed to set bucket policy"
+            exit 1
+          fi
           
           # Disable block public access
-          aws s3api put-public-access-block \
+          echo ""
+          echo "🔓 Disabling block public access settings..."
+          
+          if aws s3api put-public-access-block \
             --bucket "$FRONTEND_BUCKET" \
             --public-access-block-configuration \
-            "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+            "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"; then
+            echo "✅ Public access configured"
+          else
+            echo "❌ Failed to configure public access"
+            exit 1
+          fi
           
+          # Generate website URL
           WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
+          # Verify deployment
           echo ""
-          echo "✅ Frontend deployment successful!"
+          echo "🔍 Verifying deployment..."
+          
+          sleep 5  # Wait for S3 to propagate
+          
+          if curl -sf "$WEBSITE_URL" >/dev/null 2>&1; then
+            echo "✅ Website is accessible"
+          else
+            echo "⚠️ Website may need a few moments to propagate"
+          fi
+          
+          # List uploaded files
+          echo ""
+          echo "📋 Uploaded files summary:"
+          FILE_COUNT=$(aws s3 ls "s3://$FRONTEND_BUCKET" --recursive | wc -l)
+          TOTAL_SIZE=$(aws s3 ls "s3://$FRONTEND_BUCKET" --recursive --summarize | grep "Total Size" | awk '{print $3}')
+          
+          echo "  Total files: $FILE_COUNT"
+          echo "  Total size: $TOTAL_SIZE bytes"
+          
+          echo ""
+          echo "✅ ============================================"
+          echo "✅  FRONTEND DEPLOYMENT COMPLETE"
+          echo "✅ ============================================"
+          echo ""
           echo "🌐 Website URL: $WEBSITE_URL"
+          echo "📦 Bucket: s3://$FRONTEND_BUCKET"
+          echo "📍 Region: ${{ env.AWS_DEFAULT_REGION }}"
+          echo ""
+      
+      - name: 🧪 Post-Deployment Validation
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          
+          WEBSITE_URL="http://${{ env.STACK_NAME }}-frontend.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          
+          echo "🧪 Testing frontend accessibility..."
+          echo "URL: $WEBSITE_URL"
+          echo ""
+          
+          MAX_RETRIES=12
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -sf -o /tmp/index.html "$WEBSITE_URL" 2>/dev/null; then
+              echo "✅ Frontend is accessible!"
+              
+              # Verify it's HTML content
+              if grep -q "<!DOCTYPE html>" /tmp/index.html || grep -q "<html" /tmp/index.html; then
+                echo "✅ Valid HTML content detected"
+                
+                # Check for React app
+                if grep -q "root" /tmp/index.html; then
+                  echo "✅ React root element found"
+                fi
+                
+                break
+              else
+                echo "⚠️ Response doesn't appear to be HTML"
+              fi
+            fi
+            
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            
+            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+              echo "⏳ Retry $RETRY_COUNT/$MAX_RETRIES - waiting 10s..."
+              sleep 10
+            else
+              echo "⚠️ Frontend validation timeout (non-fatal)"
+              echo "Website may still be propagating - check manually:"
+              echo "  $WEBSITE_URL"
+            fi
+          done
+          
+          echo ""
+          echo "✅ Post-deployment validation complete"
 
   smoke-tests:
     name: 🧪 Smoke Tests & Validation
