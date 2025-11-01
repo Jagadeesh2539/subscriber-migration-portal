@@ -3,16 +3,18 @@
   "version": "3.0.0",
   "private": true,
   "engines": {
-    "node": ">=18.20.0 <19.0.0",
+    "node": ">=18.20.0 <25.0.0",
     "npm": ">=10.0.0"
   },
   "resolutions": {
     "ajv": "6.12.6",
-    "ajv-keywords": "3.5.2"
+    "ajv-keywords": "3.5.2",
+    "schema-utils": "3.3.0"
   },
   "overrides": {
     "ajv": "6.12.6",
     "ajv-keywords": "3.5.2",
+    "schema-utils": "3.3.0",
     "typescript": "^5.6.3"
   },
   "dependencies": {
@@ -63,12 +65,16 @@
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,md,json}\"",
     "lint": "eslint \"src/**/*.{js,jsx,ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{js,jsx,ts,tsx}\" --fix",
+    "analyze": "npm run build && npx serve -s build",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf node_modules package-lock.json build",
     "reinstall": "npm run clean && npm install --legacy-peer-deps"
   },
   "eslintConfig": {
-    "extends": ["react-app", "react-app/jest"],
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ],
     "rules": {
       "react-hooks/exhaustive-deps": "warn",
       "no-unused-vars": "warn",
@@ -76,7 +82,15 @@
     }
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }
