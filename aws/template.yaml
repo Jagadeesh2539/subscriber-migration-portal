@@ -533,9 +533,7 @@ Resources:
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
           AWS_STACK_NAME: !Sub '${AWS::StackName}'
           DB_NAME: legacydb
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-schema-initializer'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   # ============================================
   # LAMBDA FUNCTIONS - APPLICATION
@@ -597,9 +595,7 @@ Resources:
           Properties:
             Path: /jobs
             Method: GET
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-orchestrator'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -618,9 +614,7 @@ Resources:
         Variables:
           UPLOADS_BUCKET: !Ref UploadsBucket
           MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-validate-job'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   ProcessFileFunction:
     Type: AWS::Serverless::Function
@@ -646,9 +640,7 @@ Resources:
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-process-file'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   ProcessAuditFunction:
     Type: AWS::Serverless::Function
@@ -674,9 +666,7 @@ Resources:
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-process-audit'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   ProcessExportFunction:
     Type: AWS::Serverless::Function
@@ -702,9 +692,7 @@ Resources:
           UPLOADS_BUCKET: !Ref UploadsBucket
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-process-export'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   SettingsFunction:
     Type: AWS::Serverless::Function
@@ -733,9 +721,7 @@ Resources:
           Properties:
             Path: /settings/provisioning-mode
             Method: PUT
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-settings'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -769,9 +755,7 @@ Resources:
           Properties:
             Path: /auth/refresh
             Method: POST
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-auth'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -786,9 +770,7 @@ Resources:
           Properties:
             Path: /health
             Method: GET
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-health'
+      # ✅ FIX: Removed invalid 'Tags' block. Globals will be used.
 
   # ============================================
   # STEP FUNCTIONS STATE MACHINES
