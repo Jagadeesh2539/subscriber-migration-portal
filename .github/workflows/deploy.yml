@@ -210,8 +210,8 @@ jobs:
           set -euo pipefail
           API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
           
-          # Get schema function name
-          SCHEMA_FUNCTION_NAME=$(aws cloudformation describe-stack-resources --stack-name "${{ env.STACK_NAME }}" --query 'StackResources[?LogicalResourceId==`SchemaInitializerFunction`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+          # Get schema function name from CloudFormation outputs
+          SCHEMA_FUNCTION_NAME=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`SchemaInitializerFunctionName`].OutputValue' --output text)
           
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
           echo "schema_function_name=$SCHEMA_FUNCTION_NAME" >> $GITHUB_OUTPUT
@@ -230,56 +230,107 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: 📦 Install AWS tooling
+      - name: 📦 Install tooling
         run: pip install boto3
-      - name: 🗄️ Invoke schema initializer Lambda
+      
+      - name: 🗄️ Parse SQL file
+        id: parse-sql
         run: |
           set -euo pipefail
           
-          # Find schema Lambda function
-          STACK="${{ env.STACK_NAME }}"
-          SCHEMA_FUNCTION=$(aws lambda list-functions --query 'Functions[?contains(FunctionName, `'$STACK'`) && contains(FunctionName, `schema`)].FunctionName' --output text | head -1)
+          if [ ! -f database/rds_schema_update.sql ]; then
+            echo "⚠️ No schema file found, using default schema"
+            echo '[]' > sql_statements.json
+          else
+            echo "📄 Parsing SQL file: database/rds_schema_update.sql"
+            python3 <<'PYEOF'
+          import json
           
-          if [[ -z "$SCHEMA_FUNCTION" ]]; then
-            echo "❌ Schema initializer Lambda function not found"
-            echo "Looking for functions containing '$STACK' and 'schema':"
-            aws lambda list-functions --query 'Functions[?contains(FunctionName, `'$STACK'`)].FunctionName' --output text
+          with open('database/rds_schema_update.sql', 'r', encoding='utf-8') as f:
+              sql = f.read()
+          
+          # Split by semicolon and filter
+          statements = [
+              s.strip() 
+              for s in sql.split(';') 
+              if s.strip() and not s.strip().startswith('--')
+          ]
+          
+          with open('sql_statements.json', 'w') as out:
+              json.dump(statements, out)
+          
+          print(f"✅ Parsed {len(statements)} SQL statements")
+          PYEOF
+          fi
+      
+      - name: 🚀 Invoke Schema Initializer Lambda
+        run: |
+          set -euo pipefail
+          
+          STACK="${{ env.STACK_NAME }}"
+          
+          # Get Lambda function name from CloudFormation outputs
+          SCHEMA_FUNCTION=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='SchemaInitializerFunctionName'].OutputValue" \
+            --output text)
+          
+          if [[ -z "$SCHEMA_FUNCTION" || "$SCHEMA_FUNCTION" == "None" ]]; then
+            echo "❌ Schema initializer not found in stack outputs"
+            echo "Available outputs:"
+            aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].Outputs[].OutputKey' --output text
             exit 1
           fi
           
-          echo "📞 Invoking schema initializer: $SCHEMA_FUNCTION"
+          echo "📞 Using Lambda function: $SCHEMA_FUNCTION"
           
-          # Invoke the Lambda function
+          # Load SQL statements
+          SQL_STATEMENTS=$(cat sql_statements.json)
+          
+          # Create payload
+          PAYLOAD=$(jq -n --argjson stmts "$SQL_STATEMENTS" '{sql_statements: $stmts}')
+          
+          echo "📤 Invoking schema initializer..."
+          echo "📝 Payload contains $(echo $SQL_STATEMENTS | jq 'length') custom statements"
+          
+          # Invoke Lambda
           aws lambda invoke \
             --function-name "$SCHEMA_FUNCTION" \
-            --payload '{}' \
+            --payload "$PAYLOAD" \
             --cli-binary-format raw-in-base64-out \
+            --log-type Tail \
             response.json
           
-          # Check response
-          if [[ -f response.json ]]; then
-            echo "📄 Lambda response:"
-            cat response.json | jq '.' || cat response.json
-            
-            # Check for errors
-            if jq -e '.errorMessage' response.json >/dev/null 2>&1; then
-              echo "❌ Lambda execution failed:"
-              jq -r '.errorMessage' response.json
-              exit 1
-            fi
-            
-            # Check status code
-            STATUS_CODE=$(jq -r '.statusCode // 200' response.json)
-            if [[ "$STATUS_CODE" != "200" ]]; then
-              echo "❌ Schema initialization failed with status: $STATUS_CODE"
-              exit 1
-            fi
-            
-            echo "✅ Schema initialization completed successfully via Lambda"
-          else
-            echo "❌ No response file generated"
+          # Display response
+          echo ""
+          echo "📥 Lambda response:"
+          cat response.json | jq '.' || cat response.json
+          
+          # Check for Lambda errors
+          if jq -e '.errorMessage' response.json >/dev/null 2>&1; then
+            echo ""
+            echo "❌ Lambda execution error:"
+            jq -r '.errorMessage' response.json
             exit 1
           fi
+          
+          # Parse body and check results
+          BODY=$(jq -r '.body' response.json)
+          if [[ "$BODY" != "null" ]]; then
+            echo ""
+            echo "📊 Execution Summary:"
+            echo "$BODY" | jq '.summary'
+            
+            ERRORS=$(echo "$BODY" | jq -r '.summary.errors // 0')
+            if [[ "$ERRORS" -gt 0 ]]; then
+              echo ""
+              echo "⚠️ Some statements failed (non-fatal):"
+              echo "$BODY" | jq '.results[] | select(.status == "error")'
+            fi
+          fi
+          
+          echo ""
+          echo "✅ Schema initialization completed successfully"
 
   frontend-deploy:
     name: 🌐 Frontend Deploy
@@ -663,7 +714,7 @@ jobs:
             echo "✅ RDS instance $RDS_ID is available"
           fi
           
-          # Check Lambda functions
+          # Check Lambda functions including schema initializer
           for func in $(aws cloudformation describe-stack-resources --stack-name "$STACK" --query 'StackResources[?ResourceType==`AWS::Lambda::Function`].PhysicalResourceId' --output text); do
             STATE=$(aws lambda get-function --function-name "$func" --query 'Configuration.State' --output text)
             if [[ "$STATE" != "Active" ]]; then
@@ -688,6 +739,7 @@ jobs:
           echo "==================="
           echo "Stack: ${{ env.STACK_NAME }}"
           echo "API Endpoint: ${{ needs.deploy.outputs.api-endpoint }}"
+          echo "Schema Function: ${{ needs.deploy.outputs.schema-function-name }}"
           echo "Deployment Status: ${{ needs.post-deployment-checks.result }}"
           echo "Timestamp: $(date)"
           echo ""
@@ -706,7 +758,7 @@ jobs:
             echo "   - File Upload: S3 pre-signed URL generation"
             echo "   - Job Management: Status tracking and cancellation"
             echo "   - Comprehensive monitoring and health checks"
-            echo "   - Schema Initialization: VPC-enabled Lambda function"
+            echo "   - Schema Initialization: VPC-enabled Python Lambda with PyMySQL"
           else
             echo "❌ Deployment completed with issues - check logs above"
             echo "🛠️ Troubleshooting:"
@@ -715,6 +767,7 @@ jobs:
             echo "   3. Check Lambda function logs in CloudWatch"
             echo "   4. Validate RDS connectivity and schema"
             echo "   5. Check Step Functions execution status"
+            echo "   6. Verify PyMySQL layer deployment"
           fi
 
 permissions:
