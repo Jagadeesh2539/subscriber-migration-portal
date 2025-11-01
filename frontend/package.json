@@ -9,7 +9,9 @@
   "overrides": {
     "typescript": "^5.6.3",
     "ajv": "^8.12.0",
-    "ajv-keywords": "^5.1.0"
+    "ajv-keywords": "^5.1.0",
+    "schema-utils": "^4.2.0",
+    "ajv-formats": "^2.1.1"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -46,6 +48,8 @@
     "typescript": "^5.6.3",
     "ajv": "^8.12.0",
     "ajv-keywords": "^5.1.0",
+    "ajv-formats": "^2.1.1",
+    "schema-utils": "^4.2.0",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@types/node": "^20.17.6",
