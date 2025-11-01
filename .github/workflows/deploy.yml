@@ -151,7 +151,7 @@ jobs:
                 echo "🗑️ Stack in bad state ($STATUS) - deleting before redeployment..."
                 aws cloudformation delete-stack --stack-name "$STACK"
                 
-                echo "⏳ Waiting for stack deletion (max 10 minutes)..."
+                echo "⏳ Waiting for stack deletion (max 15 minutes)..."
                 aws cloudformation wait stack-delete-complete --stack-name "$STACK" 2>/dev/null || true
                 
                 echo "✅ Stack deleted successfully"
@@ -176,51 +176,127 @@ jobs:
           echo "🧹 Cleaning up orphaned resources for: $STACK"
           echo "================================================"
           
-          # 1. RDS Subnet Groups
-          echo "🔍 Checking for orphaned RDS subnet groups..."
-          for subnet_group in $(aws rds describe-db-subnet-groups \
-            --query "DBSubnetGroups[?contains(DBSubnetGroupName, '$STACK')].DBSubnetGroupName" \
-            --output text 2>/dev/null || true); do
-            echo "  🗑️ Deleting RDS subnet group: $subnet_group"
-            aws rds delete-db-subnet-group \
-              --db-subnet-group-name "$subnet_group" 2>/dev/null || true
-          done
-          
-          # 2. RDS Instances
+          # 1. RDS Instances (DELETE FIRST, before subnet groups)
           echo "🔍 Checking for orphaned RDS instances..."
-          for db in $(aws rds describe-db-instances \
+          RDS_INSTANCES=$(aws rds describe-db-instances \
             --query "DBInstances[?contains(DBInstanceIdentifier, '$STACK')].DBInstanceIdentifier" \
-            --output text 2>/dev/null || true); do
-            echo "  🗑️ Deleting RDS instance: $db"
-            aws rds delete-db-instance \
-              --db-instance-identifier "$db" \
-              --skip-final-snapshot \
-              --delete-automated-backups 2>/dev/null || true
-          done
+            --output text 2>/dev/null || true)
+          
+          if [[ -n "$RDS_INSTANCES" ]]; then
+            for db in $RDS_INSTANCES; do
+              # Check current status
+              DB_STATUS=$(aws rds describe-db-instances \
+                --db-instance-identifier "$db" \
+                --query 'DBInstances[0].DBInstanceStatus' \
+                --output text 2>/dev/null || echo "not-found")
+              
+              echo "  📊 RDS instance $db status: $DB_STATUS"
+              
+              if [[ "$DB_STATUS" == "deleting" ]]; then
+                echo "  ⏳ RDS instance already deleting, will wait for completion..."
+              elif [[ "$DB_STATUS" != "not-found" ]]; then
+                echo "  🗑️ Initiating deletion of RDS instance: $db"
+                aws rds delete-db-instance \
+                  --db-instance-identifier "$db" \
+                  --skip-final-snapshot \
+                  --delete-automated-backups 2>/dev/null || true
+              fi
+            done
+            
+            # Wait for all RDS instances to finish deleting
+            echo ""
+            echo "  ⏳ Waiting for RDS instances to complete deletion (max 10 minutes)..."
+            for i in {1..60}; do
+              REMAINING=$(aws rds describe-db-instances \
+                --query "length(DBInstances[?contains(DBInstanceIdentifier, '$STACK')])" \
+                --output text 2>/dev/null || echo "0")
+              
+              if [[ "$REMAINING" == "0" ]]; then
+                echo "  ✅ All RDS instances deleted successfully"
+                break
+              fi
+              
+              # Show progress every minute
+              if [[ $((i % 6)) -eq 0 ]]; then
+                MINS=$((i / 6))
+                echo "  ⏳ Still waiting... ($MINS min elapsed - $REMAINING instance(s) remaining)"
+              fi
+              
+              sleep 10
+            done
+            
+            # Final check
+            FINAL_COUNT=$(aws rds describe-db-instances \
+              --query "length(DBInstances[?contains(DBInstanceIdentifier, '$STACK')])" \
+              --output text 2>/dev/null || echo "0")
+            
+            if [[ "$FINAL_COUNT" != "0" ]]; then
+              echo "  ⚠️ Warning: $FINAL_COUNT RDS instance(s) still exist after timeout"
+              echo "  ⚠️ Continuing anyway - may cause issues"
+            fi
+          else
+            echo "  ✅ No RDS instances found"
+          fi
+          
+          # 2. RDS Subnet Groups (DELETE AFTER RDS instances)
+          echo ""
+          echo "🔍 Checking for orphaned RDS subnet groups..."
+          SUBNET_GROUPS=$(aws rds describe-db-subnet-groups \
+            --query "DBSubnetGroups[?contains(DBSubnetGroupName, '$STACK')].DBSubnetGroupName" \
+            --output text 2>/dev/null || true)
+          
+          if [[ -n "$SUBNET_GROUPS" ]]; then
+            for subnet_group in $SUBNET_GROUPS; do
+              echo "  🗑️ Deleting RDS subnet group: $subnet_group"
+              if aws rds delete-db-subnet-group --db-subnet-group-name "$subnet_group" 2>/dev/null; then
+                echo "  ✅ Deleted subnet group: $subnet_group"
+              else
+                echo "  ⚠️ Failed to delete subnet group: $subnet_group (may still be in use)"
+              fi
+            done
+          else
+            echo "  ✅ No RDS subnet groups found"
+          fi
           
           # 3. Secrets Manager
+          echo ""
           echo "🔍 Checking for orphaned secrets..."
-          for secret in $(aws secretsmanager list-secrets \
+          SECRETS=$(aws secretsmanager list-secrets \
             --query 'SecretList[].Name' \
-            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
-            echo "  🗑️ Deleting secret: $secret"
-            aws secretsmanager delete-secret \
-              --secret-id "$secret" \
-              --force-delete-without-recovery 2>/dev/null || true
-          done
+            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true)
+          
+          if [[ -n "$SECRETS" ]]; then
+            for secret in $SECRETS; do
+              echo "  🗑️ Deleting secret: $secret"
+              aws secretsmanager delete-secret \
+                --secret-id "$secret" \
+                --force-delete-without-recovery 2>/dev/null || true
+            done
+          else
+            echo "  ✅ No secrets found"
+          fi
           
           # 4. S3 Buckets
+          echo ""
           echo "🔍 Checking for orphaned S3 buckets..."
-          for bucket in $(aws s3api list-buckets \
+          BUCKETS=$(aws s3api list-buckets \
             --query 'Buckets[].Name' \
-            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
-            echo "  🗑️ Emptying and deleting bucket: $bucket"
-            aws s3 rm "s3://$bucket" --recursive 2>/dev/null || true
-            aws s3 rb "s3://$bucket" --force 2>/dev/null || true
-          done
+            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true)
           
-          # 5. VPC Endpoints (check by CloudFormation tags)
+          if [[ -n "$BUCKETS" ]]; then
+            for bucket in $BUCKETS; do
+              echo "  🗑️ Emptying and deleting bucket: $bucket"
+              aws s3 rm "s3://$bucket" --recursive 2>/dev/null || true
+              aws s3 rb "s3://$bucket" --force 2>/dev/null || true
+            done
+          else
+            echo "  ✅ No S3 buckets found"
+          fi
+          
+          # 5. VPC Endpoints
+          echo ""
           echo "🔍 Checking for orphaned VPC endpoints..."
+          DELETED_VPCE=false
           for vpce in $(aws ec2 describe-vpc-endpoints \
             --query 'VpcEndpoints[].VpcEndpointId' \
             --output text 2>/dev/null || true); do
@@ -233,61 +309,108 @@ jobs:
             if echo "$tags" | grep -q "$STACK"; then
               echo "  🗑️ Deleting VPC endpoint: $vpce"
               aws ec2 delete-vpc-endpoints --vpc-endpoint-ids "$vpce" 2>/dev/null || true
+              DELETED_VPCE=true
             fi
           done
           
-          # 6. Security Groups (except default)
+          if [[ "$DELETED_VPCE" == "false" ]]; then
+            echo "  ✅ No VPC endpoints found"
+          else
+            echo "  ⏳ Waiting for VPC endpoints to delete (30 seconds)..."
+            sleep 30
+          fi
+          
+          # 6. Security Groups (DELETE AFTER everything else)
+          echo ""
           echo "🔍 Checking for orphaned security groups..."
-          for sg in $(aws ec2 describe-security-groups \
-            --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
-            --output text 2>/dev/null || true); do
+          for attempt in {1..3}; do
+            echo "  🔄 Security group cleanup attempt $attempt/3..."
+            DELETED_ANY=false
             
-            name=$(aws ec2 describe-security-groups \
-              --group-ids "$sg" \
-              --query 'SecurityGroups[0].GroupName' \
-              --output text 2>/dev/null || echo "")
+            for sg in $(aws ec2 describe-security-groups \
+              --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+              --output text 2>/dev/null || true); do
+              
+              name=$(aws ec2 describe-security-groups \
+                --group-ids "$sg" \
+                --query 'SecurityGroups[0].GroupName' \
+                --output text 2>/dev/null || echo "")
+              
+              if echo "$name" | grep -q "$STACK"; then
+                echo "    🗑️ Attempting to delete security group: $sg ($name)"
+                if aws ec2 delete-security-group --group-id "$sg" 2>/dev/null; then
+                  echo "    ✅ Deleted: $sg"
+                  DELETED_ANY=true
+                else
+                  echo "    ⏭️ Skipped (still in use): $sg"
+                fi
+              fi
+            done
             
-            if echo "$name" | grep -q "$STACK"; then
-              echo "  🗑️ Deleting security group: $sg ($name)"
-              aws ec2 delete-security-group --group-id "$sg" 2>/dev/null || true
+            if [[ "$DELETED_ANY" == "false" ]]; then
+              echo "  ✅ No more security groups to delete"
+              break
+            fi
+            
+            if [[ $attempt -lt 3 ]]; then
+              echo "  ⏳ Waiting 20 seconds before retry..."
+              sleep 20
             fi
           done
           
           # 7. Lambda Layers
+          echo ""
           echo "🔍 Checking for orphaned Lambda layers..."
-          for layer in $(aws lambda list-layers \
+          LAYERS=$(aws lambda list-layers \
             --query 'Layers[].LayerName' \
-            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true); do
-            
-            echo "  🗑️ Deleting Lambda layer: $layer"
-            for version in $(aws lambda list-layer-versions \
-              --layer-name "$layer" \
-              --query 'LayerVersions[].Version' \
-              --output text || true); do
-              aws lambda delete-layer-version \
+            --output text | tr '\t' '\n' | grep "$STACK" 2>/dev/null || true)
+          
+          if [[ -n "$LAYERS" ]]; then
+            for layer in $LAYERS; do
+              echo "  🗑️ Deleting Lambda layer: $layer"
+              for version in $(aws lambda list-layer-versions \
                 --layer-name "$layer" \
-                --version-number "$version" 2>/dev/null || true
+                --query 'LayerVersions[].Version' \
+                --output text 2>/dev/null || true); do
+                aws lambda delete-layer-version \
+                  --layer-name "$layer" \
+                  --version-number "$version" 2>/dev/null || true
+              done
             done
-          done
+          else
+            echo "  ✅ No Lambda layers found"
+          fi
           
           # 8. CloudWatch Log Groups
+          echo ""
           echo "🔍 Checking for orphaned log groups..."
-          for log_group in $(aws logs describe-log-groups \
+          LAMBDA_LOGS=$(aws logs describe-log-groups \
             --log-group-name-prefix "/aws/lambda/${STACK}" \
             --query 'logGroups[].logGroupName' \
-            --output text 2>/dev/null || true); do
-            echo "  🗑️ Deleting log group: $log_group"
-            aws logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
-          done
+            --output text 2>/dev/null || true)
           
-          # Also check Step Functions logs
-          for log_group in $(aws logs describe-log-groups \
+          if [[ -n "$LAMBDA_LOGS" ]]; then
+            for log_group in $LAMBDA_LOGS; do
+              echo "  🗑️ Deleting log group: $log_group"
+              aws logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
+            done
+          fi
+          
+          SFN_LOGS=$(aws logs describe-log-groups \
             --log-group-name-prefix "/aws/vendedlogs/states/${STACK}" \
             --query 'logGroups[].logGroupName' \
-            --output text 2>/dev/null || true); do
-            echo "  🗑️ Deleting log group: $log_group"
-            aws logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
-          done
+            --output text 2>/dev/null || true)
+          
+          if [[ -n "$SFN_LOGS" ]]; then
+            for log_group in $SFN_LOGS; do
+              echo "  🗑️ Deleting log group: $log_group"
+              aws logs delete-log-group --log-group-name "$log_group" 2>/dev/null || true
+            done
+          fi
+          
+          if [[ -z "$LAMBDA_LOGS" && -z "$SFN_LOGS" ]]; then
+            echo "  ✅ No log groups found"
+          fi
           
           echo ""
           echo "✅ Cleanup completed - ready for fresh deployment"
@@ -761,7 +884,7 @@ jobs:
           echo "✅ Deployed Features:"
           echo "  🔄 Migration Jobs with Step Functions orchestration"
           echo "  📊 Audit and Export Jobs"
-          echo "  🗄️ MySQL 5.7 Extended Support with auto-healing schema"
+          echo "  🗄️ MySQL 5.7 RDS with auto-healing schema"
           echo "  ⚡ DynamoDB Cloud Storage"
           echo "  🌐 React Frontend with S3 static hosting"
           echo "  🏗️ VPC Infrastructure Reuse (no CIDR conflicts)"
