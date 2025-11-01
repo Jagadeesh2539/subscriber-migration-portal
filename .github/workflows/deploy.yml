@@ -136,6 +136,7 @@ jobs:
     environment: production
     outputs:
       api-endpoint: ${{ steps.out.outputs.api_endpoint }}
+      schema-function-name: ${{ steps.out.outputs.schema_function_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -203,15 +204,20 @@ jobs:
             --no-fail-on-empty-changeset \
             --no-confirm-changeset
 
-      - name: 📤 Export API endpoint
+      - name: 📤 Export outputs
         id: out
         run: |
           set -euo pipefail
           API_ENDPOINT=$(aws cloudformation describe-stacks --stack-name "${{ env.STACK_NAME }}" --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' --output text)
+          
+          # Get schema function name
+          SCHEMA_FUNCTION_NAME=$(aws cloudformation describe-stack-resources --stack-name "${{ env.STACK_NAME }}" --query 'StackResources[?LogicalResourceId==`SchemaInitializerFunction`].PhysicalResourceId' --output text 2>/dev/null || echo "")
+          
           echo "api_endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "schema_function_name=$SCHEMA_FUNCTION_NAME" >> $GITHUB_OUTPUT
 
   initialize-legacy-schema:
-    name: 🗄️ Initialize Legacy DB Schema
+    name: 🗄️ Initialize Legacy DB Schema via VPC Lambda
     runs-on: ubuntu-latest
     needs: deploy
     steps:
@@ -224,68 +230,56 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: 📦 Install DB tooling
-        run: pip install boto3 pymysql
-      - name: 🔍 Fetch legacy DB outputs
-        id: cf
-        run: |
-          set -euo pipefail
-          STACK="${{ env.STACK_NAME }}"
-          LEGACY_DB_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbSecretArn'].OutputValue" --output text)
-          LEGACY_DB_HOST=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='LegacyDbHost'].OutputValue" --output text)
-          echo "legacy_db_secret_arn=$LEGACY_DB_SECRET_ARN" >> $GITHUB_OUTPUT
-          echo "legacy_db_host=$LEGACY_DB_HOST" >> $GITHUB_OUTPUT
-      - name: 🗄️ Run schema initializer
-        env:
-          LEGACY_DB_SECRET_ARN: ${{ steps.cf.outputs.legacy_db_secret_arn }}
-          LEGACY_DB_HOST: ${{ steps.cf.outputs.legacy_db_host }}
+      - name: 📦 Install AWS tooling
+        run: pip install boto3
+      - name: 🗄️ Invoke schema initializer Lambda
         run: |
           set -euo pipefail
           
-          if [ ! -f database/rds_schema_update.sql ]; then
-            echo "❌ No schema file found"
+          # Find schema Lambda function
+          STACK="${{ env.STACK_NAME }}"
+          SCHEMA_FUNCTION=$(aws lambda list-functions --query 'Functions[?contains(FunctionName, `'$STACK'`) && contains(FunctionName, `schema`)].FunctionName' --output text | head -1)
+          
+          if [[ -z "$SCHEMA_FUNCTION" ]]; then
+            echo "❌ Schema initializer Lambda function not found"
+            echo "Looking for functions containing '$STACK' and 'schema':"
+            aws lambda list-functions --query 'Functions[?contains(FunctionName, `'$STACK'`)].FunctionName' --output text
             exit 1
           fi
           
-          python3 <<'PYEOF'
-          import os, json, boto3, pymysql, sys
+          echo "📞 Invoking schema initializer: $SCHEMA_FUNCTION"
           
-          secret_arn = os.environ["LEGACY_DB_SECRET_ARN"]
-          host = os.environ["LEGACY_DB_HOST"]
-          sql_file = "database/rds_schema_update.sql"
+          # Invoke the Lambda function
+          aws lambda invoke \
+            --function-name "$SCHEMA_FUNCTION" \
+            --payload '{}' \
+            --cli-binary-format raw-in-base64-out \
+            response.json
           
-          sm = boto3.client("secretsmanager")
-          sec = json.loads(sm.get_secret_value(SecretId=secret_arn)["SecretString"])
-          
-          user = sec.get("username") or sec.get("user")
-          pwd = sec.get("password") or sec.get("pass")
-          db = sec.get("dbname") or sec.get("database") or ""
-          
-          conn = pymysql.connect(
-              host=host,
-              user=user,
-              password=pwd,
-              database=db,
-              autocommit=True,
-              connect_timeout=30
-          )
-          
-          with conn.cursor() as cur, open(sql_file, 'r', encoding='utf-8') as f:
-              sql = f.read()
-              statements = [s.strip() for s in sql.split(';') if s.strip() and not s.strip().startswith('--')]
-              
-              for stmt in statements:
-                  try:
-                      cur.execute(stmt)
-                      print(f"Executed: {stmt[:50]}...")
-                  except Exception as e:
-                      if "already exists" not in str(e).lower():
-                          print(f"Error executing {stmt[:50]}...: {e}")
-          
-          conn.close()
-          print('✅ Legacy schema initialization completed')
-          PYEOF
-
+          # Check response
+          if [[ -f response.json ]]; then
+            echo "📄 Lambda response:"
+            cat response.json | jq '.' || cat response.json
+            
+            # Check for errors
+            if jq -e '.errorMessage' response.json >/dev/null 2>&1; then
+              echo "❌ Lambda execution failed:"
+              jq -r '.errorMessage' response.json
+              exit 1
+            fi
+            
+            # Check status code
+            STATUS_CODE=$(jq -r '.statusCode // 200' response.json)
+            if [[ "$STATUS_CODE" != "200" ]]; then
+              echo "❌ Schema initialization failed with status: $STATUS_CODE"
+              exit 1
+            fi
+            
+            echo "✅ Schema initialization completed successfully via Lambda"
+          else
+            echo "❌ No response file generated"
+            exit 1
+          fi
 
   frontend-deploy:
     name: 🌐 Frontend Deploy
@@ -712,6 +706,7 @@ jobs:
             echo "   - File Upload: S3 pre-signed URL generation"
             echo "   - Job Management: Status tracking and cancellation"
             echo "   - Comprehensive monitoring and health checks"
+            echo "   - Schema Initialization: VPC-enabled Lambda function"
           else
             echo "❌ Deployment completed with issues - check logs above"
             echo "🛠️ Troubleshooting:"
