@@ -120,6 +120,10 @@ vulnerability-scan.json
 pymysql/
 pymysql-*/
 
+# Lambda Layers
+aws/layers/pymysql/python/
+aws/layers/*/python/
+
 # Test artifacts
 .coverage
 .nyc_output
