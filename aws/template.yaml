@@ -334,7 +334,7 @@ Resources:
         SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
         GenerateStringKey: 'password'
         PasswordLength: 24
-        ExcludeCharacters: '"@/\\'
+        ExcludeCharacters: '"@/\'
 
   LegacyDbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -521,13 +521,15 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
 
-  SchemaInitFunction:
+  SchemaInitializerFunction:
     Type: AWS::Serverless::Function
     Properties:
       Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      Handler: schema_init.lambda_handler
+      CodeUri: lambda/schema/
+      Handler: index.handler
+      Runtime: nodejs18.x
       Timeout: 300
+      MemorySize: 512
       VpcConfig:
         SecurityGroupIds: [!Ref LambdaSG]
         SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
@@ -535,6 +537,7 @@ Resources:
         Variables:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDB.Endpoint.Address
+          AWS_STACK_NAME: !Sub '${AWS::StackName}'
 
   SettingsFunction:
     Type: AWS::Serverless::Function
@@ -597,18 +600,6 @@ Resources:
       RoleArn: !GetAtt StepFunctionExecutionRole.Arn
       DefinitionString: !Sub '{"StartAt":"Export","States":{"Export":{"Type":"Task","Resource":"arn:aws:states:::lambda:invoke","Parameters":{"FunctionName":"${ProcessExportFunction.Arn}","Payload.$":"$"},"End":true}}}'
 
-  StepFunctionInvokeLambdaPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: !Sub '${AWS::StackName}-sfn-lambda'
-      Roles: [!Ref StepFunctionExecutionRole]
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action: ['lambda:InvokeFunction']
-            Resource: ['*']
-
   ProcessFileFunctionPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -639,5 +630,5 @@ Outputs:
     Value: !Ref LegacyDbSecret
   LegacyDbHost:
     Value: !GetAtt LegacyDB.Endpoint.Address
-  SchemaInitFunctionName:
-    Value: !Ref SchemaInitFunction
+  SchemaInitializerFunctionName:
+    Value: !Ref SchemaInitializerFunction
