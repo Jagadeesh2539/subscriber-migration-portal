@@ -3,260 +3,197 @@ import boto3
 import pymysql
 import os
 import logging
+import re
 
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Minimal table DDLs map for auto-create when missing
+# Keep lightweight and safe. Extend as needed.
+AUTO_CREATE_TABLES = {
+    'subscribers': (
+        """
+        CREATE TABLE IF NOT EXISTS subscribers (
+            uid VARCHAR(50) PRIMARY KEY,
+            msisdn VARCHAR(20),
+            imsi VARCHAR(20),
+            plan_id VARCHAR(50),
+            status VARCHAR(32) DEFAULT 'ACTIVE',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'migration_jobs': (
+        """
+        CREATE TABLE IF NOT EXISTS migration_jobs (
+            job_id VARCHAR(36) PRIMARY KEY,
+            job_type VARCHAR(32),
+            job_status VARCHAR(32) DEFAULT 'PENDING',
+            source_system VARCHAR(16),
+            target_system VARCHAR(16),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'audit_log': (
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            entity_type VARCHAR(32),
+            entity_id VARCHAR(100),
+            action VARCHAR(16),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'users': (
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id VARCHAR(36) PRIMARY KEY,
+            username VARCHAR(100) UNIQUE,
+            email VARCHAR(255) UNIQUE,
+            role VARCHAR(32) DEFAULT 'VIEWER',
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'user_sessions': (
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT TRUE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'plan_definitions': (
+        """
+        CREATE TABLE IF NOT EXISTS plan_definitions (
+            plan_id VARCHAR(50) PRIMARY KEY,
+            plan_name VARCHAR(200) NOT NULL,
+            plan_type VARCHAR(16) NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    ),
+    'user_sessions': (
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_id VARCHAR(36) PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            is_active BOOLEAN DEFAULT TRUE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    )
+}
+
+INDEX_TABLE_REGEX = re.compile(r"CREATE\s+INDEX\s+[^\s]+\s+ON\s+`?(\w+)`?\s*\(", re.IGNORECASE)
+
 def handler(event, context):
-    """
-    Schema Initializer Lambda Function - MySQL 5.7 Compatible
-    
-    This function runs within the VPC and can connect to RDS MySQL
-    to initialize database schemas safely with proper error handling
-    for MySQL 5.7 compatibility and table creation order.
-    """
     logger.info("🚀 Starting schema initialization...")
-    
+
     try:
-        # Get environment variables
         secret_arn = os.environ['LEGACY_DB_SECRET_ARN']
         host = os.environ['LEGACY_DB_HOST']
-        
-        logger.info(f"📡 Connecting to database host: {host}")
-        
-        # Get database credentials from Secrets Manager
+
         sm = boto3.client('secretsmanager')
         secret = json.loads(sm.get_secret_value(SecretId=secret_arn)['SecretString'])
-        
+
         user = secret.get('username') or secret.get('user')
         pwd = secret.get('password') or secret.get('pass')
         db = secret.get('dbname') or secret.get('database') or ''
-        
-        logger.info(f"🔑 Retrieved credentials for user: {user}, database: {db}")
-        
-        # Get SQL statements from event payload
+
         sql_statements = event.get('sql_statements', [])
-        
         if not sql_statements:
-            logger.info("📝 No SQL statements provided, using minimal default schema")
-            # Minimal schema for basic functionality
             sql_statements = [
                 "SET names utf8mb4",
                 "SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'",
-                """CREATE TABLE IF NOT EXISTS subscribers (
-                    uid VARCHAR(50) PRIMARY KEY,
-                    email VARCHAR(255) NOT NULL,
-                    phone VARCHAR(20),
-                    first_name VARCHAR(100),
-                    last_name VARCHAR(100),
-                    status ENUM('ACTIVE', 'INACTIVE', 'PENDING', 'SUSPENDED') DEFAULT 'ACTIVE',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )""",
-                "CREATE INDEX idx_email ON subscribers(email)",
-                "CREATE INDEX idx_status ON subscribers(status)"
             ]
-        
-        logger.info(f"📊 Processing {len(sql_statements)} SQL statements")
-        
-        # Connect to MySQL database
-        try:
-            conn = pymysql.connect(
-                host=host,
-                user=user,
-                password=pwd,
-                database=db,
-                connect_timeout=30,
-                autocommit=True
-            )
-            logger.info(f"✅ Successfully connected to database: {db}")
-        except Exception as e:
-            logger.error(f"❌ Database connection failed: {str(e)}")
-            raise
-        
-        # Execute SQL statements with intelligent error handling
-        results = []
-        executed = 0
-        skipped = 0
-        errors = 0
-        
-        # Define error codes and their handling based on SQL statement type
-        ALWAYS_IGNORABLE_CODES = {
-            1061: "Duplicate key name (index already exists)",
-            1050: "Table already exists", 
-            1062: "Duplicate entry for key",
-            1068: "Multiple primary key defined",
-            1826: "Duplicate foreign key constraint name"
-        }
-        
-        # Error codes that are ignorable for INDEX operations but not for TABLE operations
-        INDEX_IGNORABLE_CODES = {
-            1146: "Table doesn't exist (for index creation)"  # This is OK for indexes on missing tables
-        }
-        
-        # Error message patterns to treat as "already exists"
-        IGNORABLE_PATTERNS = [
-            'already exists',
-            'duplicate key name',
-            'duplicate entry',
-            'duplicate constraint'
-        ]
-        
-        def is_index_statement(stmt):
-            """Check if statement is creating an index"""
-            stmt_upper = stmt.upper().strip()
-            return stmt_upper.startswith('CREATE INDEX') or 'CREATE INDEX' in stmt_upper
-        
-        def should_ignore_error(stmt, error_code, error_msg):
-            """Determine if an error should be ignored based on statement type and error"""
-            # Always ignore these errors regardless of statement type
-            if error_code in ALWAYS_IGNORABLE_CODES:
-                return True, ALWAYS_IGNORABLE_CODES[error_code]
-            
-            # For INDEX statements, also ignore "table doesn't exist"
-            if is_index_statement(stmt) and error_code in INDEX_IGNORABLE_CODES:
-                return True, INDEX_IGNORABLE_CODES[error_code]
-            
-            # Check message patterns
-            if any(pattern in error_msg.lower() for pattern in IGNORABLE_PATTERNS):
-                return True, "Already exists (message pattern)"
-            
-            return False, None
-        
-        try:
-            with conn.cursor() as cursor:
-                for i, stmt in enumerate(sql_statements, 1):
-                    stmt = stmt.strip()
-                    if not stmt or stmt.startswith('--'):
-                        continue
-                    
-                    try:
-                        cursor.execute(stmt)
-                        executed += 1
-                        results.append({
-                            'index': i,
-                            'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                            'status': 'success'
-                        })
-                        logger.info(f"✅ [{i}] Executed: {stmt[:80]}...")
-                    
-                    except pymysql.err.OperationalError as e:
-                        error_code = e.args[0]
-                        error_msg = str(e)
-                        
-                        should_ignore, ignore_reason = should_ignore_error(stmt, error_code, error_msg)
-                        
-                        if should_ignore:
-                            skipped += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'skipped',
-                                'reason': ignore_reason,
-                                'error_code': error_code
-                            })
-                            logger.info(f"⏭️ [{i}] Skipped ({error_code}): {ignore_reason}")
-                        else:
-                            errors += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'error',
-                                'error': error_msg,
-                                'error_code': error_code
-                            })
-                            logger.error(f"❌ [{i}] Operational Error {error_code}: {error_msg}")
-                    
-                    except pymysql.err.ProgrammingError as e:
-                        error_code = e.args[0]
-                        error_msg = str(e)
-                        
-                        should_ignore, ignore_reason = should_ignore_error(stmt, error_code, error_msg)
-                        
-                        if should_ignore:
-                            skipped += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'skipped',
-                                'reason': ignore_reason,
-                                'error_code': error_code
-                            })
-                            logger.info(f"⏭️ [{i}] Skipped ({error_code}): {ignore_reason}")
-                        else:
-                            # Programming errors are usually syntax issues - treat as real errors
-                            errors += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'error',
-                                'error': error_msg,
-                                'error_code': error_code
-                            })
-                            logger.error(f"❌ [{i}] Programming Error {error_code}: {error_msg}")
-                    
-                    except Exception as e:
-                        error_msg = str(e).lower()
-                        
-                        # Check if message indicates "already exists"
-                        if any(pattern in error_msg for pattern in IGNORABLE_PATTERNS):
-                            skipped += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'skipped',
-                                'reason': 'Already exists (message pattern)'
-                            })
-                            logger.info(f"⏭️ [{i}] Skipped (msg pattern): {stmt[:80]}...")
-                        else:
-                            errors += 1
-                            results.append({
-                                'index': i,
-                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
-                                'status': 'error',
-                                'error': str(e)
-                            })
-                            logger.error(f"❌ [{i}] Generic Error: {str(e)}")
-        finally:
-            conn.close()
-            logger.info("🔌 Database connection closed")
-        
-        # Prepare summary
-        total_statements = len([s for s in sql_statements if s.strip() and not s.strip().startswith('--')])
-        summary = {
-            'executed': executed,
-            'skipped': skipped,
-            'errors': errors,
-            'total': total_statements
-        }
-        
-        # Determine success - critical success if we executed core tables and settings
-        # Allow some skipped indexes as long as core functionality is there
-        is_successful = errors == 0 and executed >= 5  # At least 5 core statements executed
-        
-        logger.info(f"📊 Summary: Executed: {executed}, Skipped: {skipped}, Errors: {errors}")
-        
-        # Return response with proper success flag
-        return {
-            'statusCode': 200 if is_successful else 207,
-            'body': json.dumps({
-                'message': 'Schema initialization completed successfully' if is_successful else 'Schema initialization completed with some errors',
-                'summary': summary,
-                'results': results,
-                'success': is_successful,  # Important for workflow validation
-                'mysql_version': '5.7 compatible',
-                'execution_strategy': 'tables_first_then_indexes'
-            })
-        }
-        
+
+        conn = pymysql.connect(
+            host=host,
+            user=user,
+            password=pwd,
+            database=db,
+            connect_timeout=30,
+            autocommit=True
+        )
+        logger.info(f"✅ Connected to database: {db}")
+
+        results, executed, skipped, errors, autocreated = [], 0, 0, 0, 0
+
+        ALWAYS_IGNORABLE_CODES = {1061: "Duplicate key name", 1050: "Table already exists", 1062: "Duplicate entry", 1068: "Multiple primary key", 1826: "Duplicate FK name"}
+        INDEX_IGNORABLE_CODES = {1146: "Table doesn't exist (index creation)"}
+
+        def is_index_stmt(stmt: str) -> bool:
+            s = stmt.strip().upper()
+            return s.startswith('CREATE INDEX')
+
+        def extract_table_from_index(stmt: str) -> str:
+            m = INDEX_TABLE_REGEX.search(stmt)
+            return m.group(1) if m else ''
+
+        with conn.cursor() as cursor:
+            for i, stmt in enumerate(sql_statements, 1):
+                stmt = stmt.strip()
+                if not stmt or stmt.startswith('--'):
+                    continue
+                try:
+                    cursor.execute(stmt)
+                    executed += 1
+                    results.append({'index': i, 'statement': stmt[:120], 'status': 'success'})
+                    logger.info(f"✅ [{i}] Executed: {stmt[:80]}...")
+                except (pymysql.err.OperationalError, pymysql.err.ProgrammingError) as e:
+                    code = e.args[0] if e.args else -1
+                    msg = str(e)
+
+                    # If index creation fails due to missing table (1146), auto-create minimal table and retry once
+                    if code == 1146 and is_index_stmt(stmt):
+                        table = extract_table_from_index(stmt)
+                        ddl = AUTO_CREATE_TABLES.get(table)
+                        if table and ddl:
+                            try:
+                                logger.info(f"🏗️ Auto-creating missing table '{table}' to satisfy index...")
+                                cursor.execute(ddl)
+                                autocreated += 1
+                                # retry index once
+                                cursor.execute(stmt)
+                                executed += 1
+                                results.append({'index': i, 'statement': stmt[:120], 'status': 'success', 'auto_created_table': table})
+                                logger.info(f"✅ [{i}] Executed after auto-create: {stmt[:80]}...")
+                                continue
+                            except Exception as retry_err:
+                                msg = f"Auto-create+retry failed: {retry_err}"
+                                # fall-through to classification
+                    # classify ignorable
+                    ignorable = code in ALWAYS_IGNORABLE_CODES or (is_index_stmt(stmt) and code in INDEX_IGNORABLE_CODES) or any(x in msg.lower() for x in ['already exists','duplicate key name','duplicate entry','duplicate constraint'])
+                    if ignorable:
+                        skipped += 1
+                        reason = ALWAYS_IGNORABLE_CODES.get(code) or INDEX_IGNORABLE_CODES.get(code) or 'Already exists (pattern)'
+                        results.append({'index': i, 'statement': stmt[:120], 'status': 'skipped', 'reason': reason, 'error_code': code})
+                        logger.info(f"⏭️ [{i}] Skipped ({code}): {reason}")
+                    else:
+                        errors += 1
+                        results.append({'index': i, 'statement': stmt[:120], 'status': 'error', 'error': msg, 'error_code': code})
+                        logger.error(f"❌ [{i}] Error {code}: {msg}")
+                except Exception as ge:
+                    errors += 1
+                    results.append({'index': i, 'statement': stmt[:120], 'status': 'error', 'error': str(ge)})
+                    logger.error(f"❌ [{i}] Generic Error: {ge}")
+
+        total = len([s for s in sql_statements if s.strip() and not s.strip().startswith('--')])
+        summary = {'executed': executed, 'skipped': skipped, 'errors': errors, 'auto_created_tables': autocreated, 'total': total}
+        success = errors == 0
+        logger.info(f"📊 Summary: {summary}")
+        return {'statusCode': 200 if success else 207, 'body': json.dumps({'message': 'Schema initialization completed' if success else 'Schema initialization completed with some errors', 'summary': summary, 'results': results, 'success': success})}
     except Exception as e:
-        logger.error(f"❌ Schema initialization failed: {str(e)}")
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': 'Schema initialization failed',
-                'message': str(e),
-                'success': False
-            })
-        }
+        logger.error(f"❌ Schema initialization failed: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'error': 'Schema initialization failed', 'message': str(e), 'success': False})}
