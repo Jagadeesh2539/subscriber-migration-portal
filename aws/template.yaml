@@ -41,11 +41,11 @@ Parameters:
   PublicSubnetId1:
     Type: String
     Description: 'First public subnet ID (optional)'
-    Default: 'subnet-0123456789abcdef2'  # Will be auto-detected
+    Default: ''
   PublicSubnetId2:
     Type: String
     Description: 'Second public subnet ID (optional)'
-    Default: 'subnet-0123456789abcdef3'  # Will be auto-detected
+    Default: ''
 
 Globals:
   Function:
@@ -198,7 +198,7 @@ Resources:
     Properties:
       DBInstanceIdentifier: !Sub '${AWS::StackName}-legacy-${BucketSuffix}'
       Engine: mysql
-      EngineVersion: '5.7.44'  # MySQL 5.7 for compatibility
+      EngineVersion: '5.7.44-RDS.20250508'
       DBInstanceClass: !Ref DbInstanceClass
       AllocatedStorage: !Ref DbAllocatedStorage
       StorageType: gp2
