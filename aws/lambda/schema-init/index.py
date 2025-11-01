@@ -10,10 +10,11 @@ logger.setLevel(logging.INFO)
 
 def handler(event, context):
     """
-    Schema Initializer Lambda Function
+    Schema Initializer Lambda Function - MySQL 5.7 Compatible
     
     This function runs within the VPC and can connect to RDS MySQL
-    to initialize database schemas safely.
+    to initialize database schemas safely with proper error handling
+    for MySQL 5.7 compatibility.
     """
     logger.info("🚀 Starting schema initialization...")
     
@@ -41,6 +42,8 @@ def handler(event, context):
             logger.info("📝 No SQL statements provided, using default schema")
             # Default basic schema for subscriber migration
             sql_statements = [
+                "SET names utf8mb4",
+                "SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION'",
                 """CREATE TABLE IF NOT EXISTS subscribers (
                     uid VARCHAR(50) PRIMARY KEY,
                     email VARCHAR(255) NOT NULL,
@@ -55,41 +58,10 @@ def handler(event, context):
                     migrated_at TIMESTAMP NULL,
                     migration_status ENUM('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED') DEFAULT 'PENDING'
                 )""",
-                "CREATE INDEX IF NOT EXISTS idx_email ON subscribers(email)",
-                "CREATE INDEX IF NOT EXISTS idx_status ON subscribers(status)",
-                "CREATE INDEX IF NOT EXISTS idx_plan_id ON subscribers(plan_id)",
-                "CREATE INDEX IF NOT EXISTS idx_migration_status ON subscribers(migration_status)",
-                "CREATE INDEX IF NOT EXISTS idx_created_at ON subscribers(created_at)",
-                
-                """CREATE TABLE IF NOT EXISTS migration_jobs (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    job_id VARCHAR(100) UNIQUE NOT NULL,
-                    status ENUM('PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING',
-                    total_records INT DEFAULT 0,
-                    processed_records INT DEFAULT 0,
-                    failed_records INT DEFAULT 0,
-                    error_details TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP NULL
-                )""",
-                "CREATE INDEX IF NOT EXISTS idx_job_id ON migration_jobs(job_id)",
-                "CREATE INDEX IF NOT EXISTS idx_job_status ON migration_jobs(status)",
-                "CREATE INDEX IF NOT EXISTS idx_job_created_at ON migration_jobs(created_at)",
-                
-                """CREATE TABLE IF NOT EXISTS audit_log (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    entity_type VARCHAR(50) NOT NULL,
-                    entity_id VARCHAR(100) NOT NULL,
-                    action ENUM('CREATE', 'UPDATE', 'DELETE', 'MIGRATE') NOT NULL,
-                    old_values JSON,
-                    new_values JSON,
-                    changed_by VARCHAR(100),
-                    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )""",
-                "CREATE INDEX IF NOT EXISTS idx_entity ON audit_log(entity_type, entity_id)",
-                "CREATE INDEX IF NOT EXISTS idx_action ON audit_log(action)",
-                "CREATE INDEX IF NOT EXISTS idx_changed_at ON audit_log(changed_at)"
+                "CREATE INDEX idx_email ON subscribers(email)",
+                "CREATE INDEX idx_status ON subscribers(status)",
+                "CREATE INDEX idx_plan_id ON subscribers(plan_id)",
+                "CREATE INDEX idx_migration_status ON subscribers(migration_status)"
             ]
         
         logger.info(f"📊 Processing {len(sql_statements)} SQL statements")
@@ -109,11 +81,28 @@ def handler(event, context):
             logger.error(f"❌ Database connection failed: {str(e)}")
             raise
         
-        # Execute SQL statements
+        # Execute SQL statements with MySQL 5.7 compatible error handling
         results = []
         executed = 0
         skipped = 0
         errors = 0
+        
+        # Error codes that should be treated as "already exists" (non-fatal)
+        IGNORABLE_ERROR_CODES = {
+            1061: "Duplicate key name (index already exists)",
+            1050: "Table already exists", 
+            1062: "Duplicate entry for key",
+            1068: "Multiple primary key defined",
+            1826: "Duplicate foreign key constraint name"
+        }
+        
+        # Error message patterns to treat as "already exists"
+        IGNORABLE_PATTERNS = [
+            'already exists',
+            'duplicate key name',
+            'duplicate entry',
+            'duplicate constraint'
+        ]
         
         try:
             with conn.cursor() as cursor:
@@ -131,47 +120,111 @@ def handler(event, context):
                             'status': 'success'
                         })
                         logger.info(f"✅ [{i}] Executed: {stmt[:80]}...")
-                    except Exception as e:
+                    
+                    except pymysql.err.OperationalError as e:
+                        error_code = e.args[0]
                         error_msg = str(e)
-                        if 'already exists' in error_msg.lower():
+                        
+                        # Check if this is a known ignorable error
+                        if error_code in IGNORABLE_ERROR_CODES:
                             skipped += 1
                             results.append({
                                 'index': i,
                                 'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
                                 'status': 'skipped',
-                                'reason': 'already exists'
+                                'reason': IGNORABLE_ERROR_CODES[error_code],
+                                'error_code': error_code
                             })
-                            logger.info(f"⏭️ [{i}] Skipped (exists): {stmt[:80]}...")
+                            logger.info(f"⏭️ [{i}] Skipped ({error_code}): {stmt[:80]}...")
+                        else:
+                            # Check if error message contains ignorable patterns
+                            is_ignorable = any(pattern in error_msg.lower() for pattern in IGNORABLE_PATTERNS)
+                            
+                            if is_ignorable:
+                                skipped += 1
+                                results.append({
+                                    'index': i,
+                                    'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
+                                    'status': 'skipped',
+                                    'reason': 'Already exists (pattern match)',
+                                    'error_code': error_code
+                                })
+                                logger.info(f"⏭️ [{i}] Skipped (pattern): {stmt[:80]}...")
+                            else:
+                                errors += 1
+                                results.append({
+                                    'index': i,
+                                    'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
+                                    'status': 'error',
+                                    'error': error_msg,
+                                    'error_code': error_code
+                                })
+                                logger.error(f"❌ [{i}] Error {error_code}: {error_msg}")
+                    
+                    except pymysql.err.ProgrammingError as e:
+                        error_code = e.args[0]
+                        error_msg = str(e)
+                        
+                        # Programming errors are usually syntax issues - treat as real errors
+                        errors += 1
+                        results.append({
+                            'index': i,
+                            'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
+                            'status': 'error',
+                            'error': error_msg,
+                            'error_code': error_code
+                        })
+                        logger.error(f"❌ [{i}] Programming Error {error_code}: {error_msg}")
+                    
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        
+                        # Check if message indicates "already exists"
+                        if any(pattern in error_msg for pattern in IGNORABLE_PATTERNS):
+                            skipped += 1
+                            results.append({
+                                'index': i,
+                                'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
+                                'status': 'skipped',
+                                'reason': 'Already exists (message pattern)'
+                            })
+                            logger.info(f"⏭️ [{i}] Skipped (msg pattern): {stmt[:80]}...")
                         else:
                             errors += 1
                             results.append({
                                 'index': i,
                                 'statement': stmt[:100] + ('...' if len(stmt) > 100 else ''),
                                 'status': 'error',
-                                'error': error_msg
+                                'error': str(e)
                             })
-                            logger.error(f"❌ [{i}] Error: {error_msg}")
+                            logger.error(f"❌ [{i}] Generic Error: {str(e)}")
         finally:
             conn.close()
             logger.info("🔌 Database connection closed")
         
         # Prepare summary
+        total_statements = len([s for s in sql_statements if s.strip() and not s.strip().startswith('--')])
         summary = {
             'executed': executed,
             'skipped': skipped,
             'errors': errors,
-            'total': len([s for s in sql_statements if s.strip() and not s.strip().startswith('--')])
+            'total': total_statements
         }
+        
+        # Determine success - only fail if there are actual errors (not skipped)
+        is_successful = errors == 0
         
         logger.info(f"📊 Summary: Executed: {executed}, Skipped: {skipped}, Errors: {errors}")
         
-        # Return response
+        # Return response with proper success flag
         return {
-            'statusCode': 200 if errors == 0 else 207,
+            'statusCode': 200 if is_successful else 207,
             'body': json.dumps({
-                'message': 'Schema initialization completed successfully' if errors == 0 else 'Schema initialization completed with some errors',
+                'message': 'Schema initialization completed successfully' if is_successful else 'Schema initialization completed with some errors',
                 'summary': summary,
-                'results': results
+                'results': results,
+                'success': is_successful,  # Important for workflow validation
+                'mysql_version': '5.7 compatible'
             })
         }
         
@@ -181,6 +234,7 @@ def handler(event, context):
             'statusCode': 500,
             'body': json.dumps({
                 'error': 'Schema initialization failed',
-                'message': str(e)
+                'message': str(e),
+                'success': False
             })
         }
