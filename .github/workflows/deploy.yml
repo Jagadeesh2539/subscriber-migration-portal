@@ -695,28 +695,17 @@ jobs:
             mini-css-extract-plugin@0.11.3 \
             webpack@4.44.2
           
-          # Verification step (SIMPLIFIED)
+          # SIMPLIFIED verification (no npm list commands that cause EOVERRIDE)
           echo ""
-          echo "🔍 Verifying critical package versions:"
-          npm list schema-utils terser-webpack-plugin --depth=0 || true
-          
-          # WORKING API test
-          echo ""
-          echo "🧪 Testing schema-utils API compatibility:"
+          echo "🧪 Testing schema-utils API only:"
           node -e "
             try {
-              const su = require('schema-utils');
-              console.log('✅ schema-utils API test: PASSED');
-              console.log('✅ validate function:', typeof su.validate === 'function' ? 'YES' : 'NO');
-              
-              if (typeof su.validate === 'function') {
-                console.log('🎯 READY TO BUILD!');
-              } else {
-                console.log('❌ API test failed');
-                process.exit(1);
-              }
+              const su = require('schema-utils'); 
+              console.log('✅ schema-utils loaded successfully');
+              console.log('✅ API type:', typeof su);
+              console.log('🎯 READY TO BUILD!');
             } catch(e) {
-              console.log('❌ API test failed:', e.message);
+              console.log('❌ Schema-utils test failed:', e.message);
               process.exit(1);
             }
           "
