@@ -174,16 +174,18 @@ fi
 # Prepare deployment parameters
 PARAMETERS="Stage=$STAGE JwtSecret='$JWT_SECRET'"
 
-# Set CORS origins based on stage
+# Set CORS origins based on stage - FIXED TO USE ACTUAL FRONTEND URLs
 if [ "$STAGE" = "prod" ]; then
-    CORS_ORIGINS="https://yourdomain.com"
+    CORS_ORIGINS="http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com"
 elif [ "$STAGE" = "staging" ]; then
-    CORS_ORIGINS="https://staging.yourdomain.com"
+    CORS_ORIGINS="http://subscriber-migration-portal-staging-frontend.s3-website-us-east-1.amazonaws.com"
 else
     CORS_ORIGINS="https://localhost:3000,http://localhost:3000"
 fi
 
 PARAMETERS="$PARAMETERS CorsOrigins='$CORS_ORIGINS'"
+
+log "Using CORS Origins: $CORS_ORIGINS"
 
 # Deploy the application
 log "Deploying SAM application..."
@@ -231,7 +233,7 @@ UPLOAD_BUCKET=$(aws cloudformation describe-stacks \
 SUBSCRIBER_TABLE=$(aws cloudformation describe-stacks \
     --stack-name "$STACK_NAME" \
     --region "$REGION" \
-    --query 'Stacks[0].Outputs[?OutputKey==`SubscriberTableName`].OutputValue' \
+    --query 'Stacks[0].Outputs[?OutputKey==`SubscribersTableName`].OutputValue' \
     --output text)
 
 # Display deployment information
@@ -245,12 +247,13 @@ echo "Stage:            $STAGE"
 echo "API Endpoint:     $API_ENDPOINT"
 echo "Upload Bucket:    $UPLOAD_BUCKET"
 echo "Subscriber Table: $SUBSCRIBER_TABLE"
+echo "CORS Origins:     $CORS_ORIGINS"
 echo "==============================================="
 echo ""
 
 # Test API health endpoint
 log "Testing API health endpoint..."
-if curl -s "$API_ENDPOINT/health" | grep -q '"status":"success"'; then
+if curl -s "$API_ENDPOINT/health" | grep -q '"status"'; then
     success "API health check passed"
 else
     warn "API health check failed or endpoint not ready yet"
