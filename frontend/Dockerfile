@@ -1,7 +1,7 @@
 # ==============================================================================
 # STAGE 0: Base - Shared dependencies
 # ==============================================================================
-FROM --platform=linux/amd64 node:18.20.8-alpine AS base
+FROM node:18.20.8-alpine AS base
 
 WORKDIR /app
 
@@ -42,10 +42,10 @@ RUN echo "REACT_APP_API_URL=$API_ENDPOINT" > .env.production && \
     echo "✅ Generated .env.production:" && \
     cat .env.production
 
-# Build the application with memory constraints
+# Build the application with memory constraints AND OpenSSL legacy provider
 RUN CI=true \
     GENERATE_SOURCEMAP=false \
-    NODE_OPTIONS="--max-old-space-size=4096" \
+    NODE_OPTIONS="--max-old-space-size=4096 --openssl-legacy-provider" \
     npm run build
 
 # Verify build output integrity
