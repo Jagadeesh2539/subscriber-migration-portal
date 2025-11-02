@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subscriber Migration Portal - Enterprise</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <link rel="stylesheet" href="styles/components.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3e%3ctext y='.9em' font-size='90'%3e🚀%3c/text%3e%3c/svg%3e">
+</head>
+<body>
+    <div id="app" class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="header-brand">
+                    <h1>🚀 Subscriber Migration Portal</h1>
+                    <span class="header-version" id="app-version">v3.0.0-prod</span>
+                </div>
+                <div class="header-status" id="connection-status">
+                    <span class="status-indicator" id="status-dot">●</span>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="nav-container">
+                <button class="nav-btn active" onclick="Navigation.showPage('dashboard')" id="nav-dashboard">
+                    📊 Dashboard
+                </button>
+                <button class="nav-btn" onclick="Navigation.showPage('migration')" id="nav-migration">
+                    🔄 Migration
+                </button>
+                <button class="nav-btn" onclick="Navigation.showPage('subscribers')" id="nav-subscribers">
+                    👥 Subscribers
+                </button>
+                <button class="nav-btn" onclick="Navigation.showPage('analytics')" id="nav-analytics">
+                    📈 Analytics
+                </button>
+                <button class="nav-btn" onclick="Navigation.showPage('logs')" id="nav-logs">
+                    📝 Logs
+                </button>
+                <button class="nav-btn" onclick="Navigation.showPage('admin')" id="nav-admin">
+                    ⚙️ Admin
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content" id="main-content">
+            <div class="loading-screen" id="loading-screen">
+                <div class="loader"></div>
+                <p>Loading Migration Portal...</p>
+            </div>
+        </main>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toast-container"></div>
+
+        <!-- Modal Container -->
+        <div class="modal-overlay" id="modal-overlay"></div>
+    </div>
+
+    <!-- Core JavaScript Modules -->
+    <script src="utils/config.js"></script>
+    <script src="utils/api.js"></script>
+    <script src="utils/helpers.js"></script>
+    <script src="utils/notifications.js"></script>
+    <script src="utils/modals.js"></script>
+    
+    <!-- Components -->
+    <script src="components/Dashboard.js"></script>
+    <script src="components/Migration.js"></script>
+    <script src="components/Subscribers.js"></script>
+    <script src="components/Analytics.js"></script>
+    <script src="components/Logs.js"></script>
+    <script src="components/Admin.js"></script>
+    
+    <!-- App Initialization -->
+    <script src="app.js"></script>
+</body>
+</html>

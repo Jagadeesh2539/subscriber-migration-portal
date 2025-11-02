@@ -631,22 +631,13 @@ jobs:
           fi
 
   deploy-frontend:
-    name: 🐳 Deploy Frontend with Docker
+    name: 🌐 Deploy Static Frontend to S3
     runs-on: ubuntu-22.04
     needs: [cleanup-and-deploy, initialize-database]
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
+    timeout-minutes: 15
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 🔧 Install Required Tools
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq curl
 
       - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -655,190 +646,36 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔍 Calculate build metadata
-        id: metadata
-        run: |
-          COMMIT_SHORT=$(git rev-parse --short HEAD)
-          echo "commit_short=$COMMIT_SHORT" >> $GITHUB_OUTPUT
-          
-          BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
-          
-          VERSION="v$(date -u +%Y%m%d)-${COMMIT_SHORT}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          
-          echo "🚀 Build metadata:"
-          echo "   Commit: ${COMMIT_SHORT}"
-          echo "   Version: ${VERSION}"
-          echo "   Time: ${BUILD_TIME}"
-
-      - name: 🏗️ Build React application with Docker
+      - name: 🚀 Deploy Static Frontend
         working-directory: frontend
-        run: |
-          echo "🐳 Starting Docker build..."
-          echo "   API Endpoint: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
-          echo "   Build Version: ${{ steps.metadata.outputs.version }}"
-          echo "   Build Time: ${{ steps.metadata.outputs.build_time }}"
-          
-          # Build using Docker with build arguments
-          docker build \
-            --target artifact \
-            --output build/ \
-            --build-arg API_ENDPOINT=${{ needs.cleanup-and-deploy.outputs.api-endpoint }} \
-            --build-arg BUILD_VERSION=${{ steps.metadata.outputs.version }} \
-            --build-arg BUILD_TIME="${{ steps.metadata.outputs.build_time }}" \
-            -f Dockerfile \
-            .
-          
-          echo "✅ Docker build completed successfully"
-          echo "📦 Build statistics:"
-          du -sh build/
-
-      - name: 🚀 Deploy to S3
-        timeout-minutes: 10
         env:
           FRONTEND_BUCKET: ${{ env.STACK_NAME }}-frontend
+          API_ENDPOINT: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
         run: |
-          set -euo pipefail
+          echo "🚀 Deploying static frontend..."
           
-          echo "🚀 ============================================"
-          echo "🚀  S3 FRONTEND DEPLOYMENT"
-          echo "🚀 ============================================"
-          echo ""
+          # Update config.js with actual API endpoint
+          sed -i "s|API_BASE:.*|API_BASE: '${API_ENDPOINT}',|g" utils/config.js
           
-          echo "🪣 Target bucket: $FRONTEND_BUCKET"
-          echo "📍 Region: ${{ env.AWS_DEFAULT_REGION }}"
-          echo ""
-          
-          echo "🔍 Checking if bucket exists..."
-          
-          if aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-            echo "✅ Bucket exists: $FRONTEND_BUCKET"
-          else
+          # Create bucket if needed
+          if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
             echo "🆕 Creating S3 bucket: $FRONTEND_BUCKET"
-            
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
               aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
             else
-              aws s3api create-bucket \
-                --bucket "$FRONTEND_BUCKET" \
-                --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
+              aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
             fi
             
-            sleep 5
-            
-            echo "🌐 Enabling static website hosting..."
-            aws s3api put-bucket-website \
-              --bucket "$FRONTEND_BUCKET" \
-              --website-configuration '{
-                "IndexDocument": {"Suffix": "index.html"},
-                "ErrorDocument": {"Key": "index.html"}
-              }'
-            
-            echo "🔒 Applying bucket policy..."
-            cat > bucket-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [{
-              "Sid": "PublicReadGetObject",
-              "Effect": "Allow",
-              "Principal": "*",
-              "Action": "s3:GetObject",
-              "Resource": "arn:aws:s3:::$FRONTEND_BUCKET/*"
-            }]
-          }
-          EOF
-            aws s3api put-bucket-policy \
-              --bucket "$FRONTEND_BUCKET" \
-              --policy file://bucket-policy.json
-            
-            echo "🔓 Configuring public access..."
-            aws s3api put-public-access-block \
-              --bucket "$FRONTEND_BUCKET" \
-              --public-access-block-configuration \
-              "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+            aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{"IndexDocument": {"Suffix": "index.html"}}'
+            aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::$FRONTEND_BUCKET/*\"}]}"
+            aws s3api put-public-access-block --bucket "$FRONTEND_BUCKET" --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
           fi
           
-          echo ""
-          echo "📤 Uploading optimized static assets..."
+          # Upload all static files
+          aws s3 sync . "s3://$FRONTEND_BUCKET/" --delete --exclude "*.md" --exclude "Dockerfile*"
           
-          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
-            --delete \
-            --cache-control "public,max-age=31536000,immutable" \
-            --exclude "*.html" \
-            --exclude "*.json" \
-            --exclude "*.txt" \
-            --exclude "service-worker.js"
-          
-          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
-            --exclude "*" \
-            --include "*.json" \
-            --include "*.txt" \
-            --include "service-worker.js" \
-            --cache-control "public,max-age=86400" \
-            --metadata-directive REPLACE
-          
-          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
-            --exclude "*" \
-            --include "*.html" \
-            --cache-control "no-cache,no-store,must-revalidate" \
-            --metadata-directive REPLACE
-          
-          echo ""
-          echo "✅ ============================================"
-          echo "✅  FRONTEND DEPLOYMENT COMPLETE"
-          echo "✅ ============================================"
-          echo ""
+          echo "✅ Static frontend deployed!"
           echo "🌐 Website URL: http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-
-      - name: 🧪 Post-Deployment Validation
-        timeout-minutes: 5
-        run: |
-          set -euo pipefail
-          
-          WEBSITE_URL="http://${{ env.STACK_NAME }}-frontend.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-          
-          echo "🧪 Testing frontend accessibility..."
-          echo "URL: $WEBSITE_URL"
-          echo ""
-          
-          MAX_RETRIES=12
-          RETRY_COUNT=0
-          
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if curl -sf -o /tmp/index.html "$WEBSITE_URL" 2>/dev/null; then
-              echo "✅ Frontend is accessible!"
-              
-              if grep -q "<!DOCTYPE html>" /tmp/index.html || grep -q "<html" /tmp/index.html; then
-                echo "✅ Valid HTML content detected"
-                
-                if grep -q "root" /tmp/index.html; then
-                  echo "✅ React root element found"
-                fi
-                
-                break
-              else
-                echo "⚠️ Response doesn't appear to be HTML"
-              fi
-            fi
-            
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              echo "⏳ Retry $RETRY_COUNT/$MAX_RETRIES - waiting 10s..."
-              sleep 10
-            else
-              echo "⚠️ Frontend validation timeout (non-fatal)"
-              echo "Website may still be propagating - check manually:"
-              echo "  $WEBSITE_URL"
-            fi
-          done
-          
-          echo ""
-          echo "✅ Post-deployment validation complete"
 
   smoke-tests:
     name: 🧪 Smoke Tests & Validation
