@@ -667,7 +667,7 @@ jobs:
         run: |
           set -euo pipefail
           
-          echo "📦 Installing dependencies..."
+          echo "📦 Installing dependencies with conservative webpack stack..."
           
           cat > .npmrc << 'EOF'
           legacy-peer-deps=true
@@ -684,18 +684,19 @@ jobs:
             schema-utils@2.7.1 \
             ajv@6.12.6 \
             ajv-keywords@3.5.2 \
-            fork-ts-checker-webpack-plugin@6.5.3
+            fork-ts-checker-webpack-plugin@6.5.3 \
+            terser-webpack-plugin@5.2.5
           
           npm dedupe --legacy-peer-deps || true
           
           echo "✅ Dependencies installed"
       
-      - name: 🔍 Verify Compatibility
+      - name: 🔍 Verify Webpack Plugin Compatibility
         working-directory: ./frontend
         run: |
           set -euo pipefail
           
-          echo "🔍 Verifying package versions..."
+          echo "🔍 Verifying webpack plugin versions and compatibility..."
           
           node -e "
             const fs = require('fs');
@@ -703,10 +704,13 @@ jobs:
             const packages = {
               'schema-utils': 'node_modules/schema-utils/package.json',
               'ajv': 'node_modules/ajv/package.json',
-              'fork-ts-checker-webpack-plugin': 'node_modules/fork-ts-checker-webpack-plugin/package.json'
+              'fork-ts-checker-webpack-plugin': 'node_modules/fork-ts-checker-webpack-plugin/package.json',
+              'terser-webpack-plugin': 'node_modules/terser-webpack-plugin/package.json'
             };
             
             console.log('📋 Installed Versions:');
+            console.log('');
+            
             const versions = {};
             
             Object.entries(packages).forEach(([name, path]) => {
@@ -721,26 +725,56 @@ jobs:
             });
             
             console.log('');
+            console.log('🔍 Compatibility Checks:');
             
             const schemaUtilsMajor = parseInt(versions['schema-utils'].split('.')[0]);
             const forkTsCheckerMajor = parseInt(versions['fork-ts-checker-webpack-plugin'].split('.')[0]);
+            const terserMajor = parseInt(versions['terser-webpack-plugin'].split('.')[0]);
+            const terserMinor = parseInt(versions['terser-webpack-plugin'].split('.')[1]);
             
+            let allCompatible = true;
+            
+            // Check fork-ts-checker compatibility
             if (schemaUtilsMajor === 2 && forkTsCheckerMajor === 6) {
-              console.log('✅ Compatible: schema-utils@2.x + fork-ts-checker@6.x');
-              console.log('✅ This combination works with react-scripts@5.0.1');
+              console.log('  ✅ fork-ts-checker@6.x + schema-utils@2.x');
             } else {
+              console.log('  ❌ fork-ts-checker incompatible');
+              allCompatible = false;
+            }
+            
+            // Check terser-webpack-plugin compatibility
+            // terser@5.2.x works with schema-utils@2.x
+            // terser@5.3.x requires schema-utils@3.x
+            if (schemaUtilsMajor === 2 && terserMajor === 5 && terserMinor === 2) {
+              console.log('  ✅ terser-webpack-plugin@5.2.x + schema-utils@2.x');
+            } else if (schemaUtilsMajor === 2 && terserMajor === 5 && terserMinor < 3) {
+              console.log('  ✅ terser-webpack-plugin@5.' + terserMinor + '.x + schema-utils@2.x');
+            } else {
+              console.log('  ❌ terser-webpack-plugin incompatible (v' + versions['terser-webpack-plugin'] + ')');
+              console.log('     Expected: terser@5.2.x with schema-utils@2.x');
+              allCompatible = false;
+            }
+            
+            if (!allCompatible) {
+              console.log('');
               console.log('❌ Incompatible versions detected');
               process.exit(1);
             }
             
+            // Test schema-utils
             const schemaUtils = require('schema-utils');
             if (typeof schemaUtils === 'function' || typeof schemaUtils.validate === 'function') {
-              console.log('✅ schema-utils validation function available');
+              console.log('  ✅ schema-utils validation function available');
             } else {
-              console.log('❌ schema-utils validation not available');
+              console.log('  ❌ schema-utils validation not available');
               process.exit(1);
             }
+            
+            console.log('');
+            console.log('✅ All webpack plugins are compatible');
+            console.log('✅ Ready to build with react-scripts@5.0.1');
           "
+      
       - name: 🏗️ Build React Application
         working-directory: ./frontend
         timeout-minutes: 10
@@ -788,7 +822,14 @@ jobs:
           else
             echo ""
             echo "❌ Build failed:"
-            tail -50 build.log
+            echo "--------------------------------------------"
+            tail -100 build.log
+            echo "--------------------------------------------"
+            
+            echo ""
+            echo "🔍 Installed webpack plugin versions:"
+            npm list schema-utils fork-ts-checker-webpack-plugin terser-webpack-plugin --depth=0 || true
+            
             exit 1
           fi
           
@@ -798,7 +839,17 @@ jobs:
           fi
           
           echo ""
-          echo "📊 Build size: $(du -sh build | cut -f1)"
+          echo "📊 Build Statistics:"
+          echo "  Total size: $(du -sh build | cut -f1)"
+          echo "  File count: $(find build -type f | wc -l)"
+          
+          if [[ -d build/static ]]; then
+            echo "  Static size: $(du -sh build/static | cut -f1)"
+            echo "  JS files: $(find build/static -name "*.js" | wc -l)"
+            echo "  CSS files: $(find build/static -name "*.css" | wc -l)"
+          fi
+          
+          echo ""
           echo "✅ Build validation complete"
       
       
