@@ -15,8 +15,8 @@ RUN apk add --no-cache \
 # Enable Corepack (included with Node.js 18)
 RUN corepack enable
 
-# Copy package file
-COPY package.json ./
+# Copy ALL source code first (critical for TypeScript detection)
+COPY . .
 
 # Set up Yarn
 RUN yarn set version 3.6.4 && \
@@ -27,9 +27,6 @@ RUN yarn install --no-immutable --no-immutable-cache
 
 # Force resolve critical ajv versions
 RUN yarn add ajv@6.12.6 ajv-keywords@3.5.2 --exact
-
-# Copy application source code
-COPY . .
 
 # Build arguments
 ARG API_ENDPOINT=https://bhgplw8pyk.execute-api.us-east-1.amazonaws.com/prod
