@@ -79,6 +79,7 @@ Globals:
           Identity:
             Header: Authorization
             ValidationExpression: "^Bearer [-0-9A-Za-z\\.]+$"
+      DefaultAuthorizer: JwtAuthorizer
 
 Resources:
   LambdaSecurityGroup:
@@ -344,49 +345,6 @@ Resources:
           LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
           SETTINGS_TABLE: !Ref SettingsTable
-      Events:
-        ListSubscribers:
-          Type: Api
-          Properties:
-            Path: /subscribers
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateSubscriber:
-          Type: Api
-          Properties:
-            Path: /subscribers
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        GetSubscriber:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        UpdateSubscriber:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: PUT
-            Auth:
-              Authorizer: JwtAuthorizer
-        DeleteSubscriber:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: DELETE
-            Auth:
-              Authorizer: JwtAuthorizer
-        SearchSubscribers:
-          Type: Api
-          Properties:
-            Path: /subscribers/search
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
 
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -607,56 +565,6 @@ Resources:
           MIGRATION_WORKFLOW_ARN: !Ref MigrationWorkflow
           AUDIT_WORKFLOW_ARN: !Ref AuditWorkflow
           EXPORT_WORKFLOW_ARN: !Ref ExportWorkflow
-      Events:
-        UploadRequest:
-          Type: Api
-          Properties:
-            Path: /migration/upload
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateMigrationJob:
-          Type: Api
-          Properties:
-            Path: /migration/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateAuditJob:
-          Type: Api
-          Properties:
-            Path: /audit/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateExportJob:
-          Type: Api
-          Properties:
-            Path: /export/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        GetJobStatus:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        CancelJob:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}/cancel
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        ListJobs:
-          Type: Api
-          Properties:
-            Path: /jobs
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -767,17 +675,6 @@ Resources:
       Environment:
         Variables:
           SETTINGS_TABLE: !Ref SettingsTable
-      Events:
-        GetMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: GET
-        PutMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: PUT
 
   AuthFunction:
     Type: AWS::Serverless::Function
