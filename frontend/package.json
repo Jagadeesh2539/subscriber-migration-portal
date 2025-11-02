@@ -2,26 +2,83 @@
   "name": "subscriber-portal-enhanced",
   "version": "3.0.0",
   "private": true,
+  "packageManager": "npm@10.8.2",
   "engines": {
-    "node": ">=18.20.0 <25.0.0"
+    "node": ">=18.20.0 <25.0.0",
+    "npm": ">=10.0.0"
+  },
+  "overrides": {
+    "ajv": "6.12.6",
+    "ajv-keywords": "3.5.2",
+    "schema-utils": "3.3.0",
+    "typescript": "^5.6.3"
   },
   "dependencies": {
-    "react": "18.2.0",
-    "react-dom": "18.2.0",
+    "@emotion/react": "^11.13.3",
+    "@emotion/styled": "^11.13.0",
+    "@mui/icons-material": "^6.1.6",
+    "@mui/lab": "^6.0.0-beta.12",
+    "@mui/material": "^6.1.6",
+    "@mui/x-data-grid": "^7.19.0",
+    "@mui/x-date-pickers": "^7.19.0",
+    "@tanstack/react-query": "^5.59.16",
+    "@tanstack/react-query-devtools": "^5.59.16",
+    "axios": "^1.7.7",
+    "date-fns": "^2.30.0",
+    "dayjs": "^1.11.13",
+    "formik": "^2.4.6",
+    "lodash": "^4.17.21",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-error-boundary": "^4.0.13",
+    "react-hot-toast": "^2.4.1",
+    "react-router-dom": "^6.28.0",
     "react-scripts": "5.0.1",
-    "typescript": "4.9.5"
+    "react-virtualized-auto-sizer": "^1.0.24",
+    "react-window": "^1.8.8",
+    "recharts": "^2.12.7",
+    "web-vitals": "^4.2.3"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.17.13",
+    "@types/node": "^20.17.6",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@types/react-window": "^1.8.8",
+    "@typescript-eslint/eslint-plugin": "^8.8.1",
+    "@typescript-eslint/parser": "^8.8.1",
+    "cross-env": "^7.0.3",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "prettier": "^3.3.3",
+    "serve": "^14.2.4",
+    "typescript": "^5.6.3"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
+    "start": "cross-env SKIP_PREFLIGHT_CHECK=true NODE_OPTIONS=--openssl-legacy-provider react-scripts start",
+    "build": "cross-env SKIP_PREFLIGHT_CHECK=true NODE_OPTIONS=--openssl-legacy-provider react-scripts build",
+    "build:ci": "cross-env CI=true GENERATE_SOURCEMAP=false NODE_OPTIONS=\"--max-old-space-size=4096 --openssl-legacy-provider\" npm run build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,md,json}\"",
+    "lint": "eslint \"src/**/*.{js,jsx,ts,tsx}\"",
+    "lint:fix": "eslint \"src/**/*.{js,jsx,ts,tsx}\" --fix",
+    "analyze": "serve -s build",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf node_modules package-lock.json build",
+    "reinstall": "npm run clean && npm install --legacy-peer-deps",
+    "build:docker": "docker build --target artifact --output build/ -f Dockerfile ."
   },
   "eslintConfig": {
     "extends": [
       "react-app",
       "react-app/jest"
-    ]
+    ],
+    "rules": {
+      "react-hooks/exhaustive-deps": "warn",
+      "no-unused-vars": "warn",
+      "no-console": "warn"
+    }
   },
   "browserslist": {
     "production": [
