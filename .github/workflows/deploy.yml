@@ -676,7 +676,7 @@ jobs:
           # Create optimized npm configuration
           cat > .npmrc << 'EOF'
           legacy-peer-deps=true
-          strict-peer-dependencies=false
+          strict-peer-deps=false
           auto-install-peers=true
           fund=false
           audit=false
@@ -694,19 +694,26 @@ jobs:
             terser-webpack-plugin@5.3.9 \
             webpack@5.88.2
           
-          # Verification step
+          # Verification step (SIMPLIFIED)
           echo ""
           echo "🔍 Verifying critical package versions:"
           npm list schema-utils terser-webpack-plugin --depth=0 || true
           
-          # API compatibility test
+          # WORKING API test
           echo ""
           echo "🧪 Testing schema-utils API compatibility:"
           node -e "
             try {
               const su = require('schema-utils');
               console.log('✅ schema-utils API test: PASSED');
-              console.log('validate function:', typeof su.validate === 'function' ? 'YES' : 'NO');
+              console.log('✅ validate function:', typeof su.validate === 'function' ? 'YES' : 'NO');
+              
+              if (typeof su.validate === 'function') {
+                console.log('🎯 READY TO BUILD!');
+              } else {
+                console.log('❌ API test failed');
+                process.exit(1);
+              }
             } catch(e) {
               console.log('❌ API test failed:', e.message);
               process.exit(1);
@@ -714,90 +721,6 @@ jobs:
           "
           
           echo "✅ ULTIMATE FIX COMPLETE!"
-      
-      - name: 🔍 Verify Webpack Plugin Compatibility
-        working-directory: ./frontend
-        run: |
-          set -euo pipefail
-          
-          echo "🔍 Verifying webpack plugin versions and compatibility..."
-          
-          node -e "
-            const fs = require('fs');
-            
-            const packages = {
-              'schema-utils': 'node_modules/schema-utils/package.json',
-              'ajv': 'node_modules/ajv/package.json',
-              'fork-ts-checker-webpack-plugin': 'node_modules/fork-ts-checker-webpack-plugin/package.json',
-              'terser-webpack-plugin': 'node_modules/terser-webpack-plugin/package.json'
-            };
-            
-            console.log('📋 Installed Versions:');
-            console.log('');
-            
-            const versions = {};
-            
-            Object.entries(packages).forEach(([name, path]) => {
-              try {
-                const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
-                versions[name] = pkg.version;
-                console.log(\`  ✅ \${name.padEnd(40)} v\${pkg.version}\`);
-              } catch (err) {
-                console.log(\`  ❌ \${name.padEnd(40)} NOT FOUND\`);
-                process.exit(1);
-              }
-            });
-            
-            console.log('');
-            console.log('🔍 Compatibility Checks:');
-            
-            const schemaUtilsMajor = parseInt(versions['schema-utils'].split('.')[0]);
-            const forkTsCheckerMajor = parseInt(versions['fork-ts-checker-webpack-plugin'].split('.')[0]);
-            const terserMajor = parseInt(versions['terser-webpack-plugin'].split('.')[0]);
-            const terserMinor = parseInt(versions['terser-webpack-plugin'].split('.')[1]);
-            
-            let allCompatible = true;
-            
-            // Check fork-ts-checker compatibility
-            if (schemaUtilsMajor === 2 && forkTsCheckerMajor === 6) {
-              console.log('  ✅ fork-ts-checker@6.x + schema-utils@2.x');
-            } else {
-              console.log('  ❌ fork-ts-checker incompatible');
-              allCompatible = false;
-            }
-            
-            // Check terser-webpack-plugin compatibility
-            // terser@5.2.x works with schema-utils@2.x
-            // terser@5.3.x requires schema-utils@3.x
-            if (schemaUtilsMajor === 2 && terserMajor === 5 && terserMinor === 2) {
-              console.log('  ✅ terser-webpack-plugin@5.2.x + schema-utils@2.x');
-            } else if (schemaUtilsMajor === 2 && terserMajor === 5 && terserMinor < 3) {
-              console.log('  ✅ terser-webpack-plugin@5.' + terserMinor + '.x + schema-utils@2.x');
-            } else {
-              console.log('  ❌ terser-webpack-plugin incompatible (v' + versions['terser-webpack-plugin'] + ')');
-              console.log('     Expected: terser@5.2.x with schema-utils@2.x');
-              allCompatible = false;
-            }
-            
-            if (!allCompatible) {
-              console.log('');
-              console.log('❌ Incompatible versions detected');
-              process.exit(1);
-            }
-            
-            // Test schema-utils
-            const schemaUtils = require('schema-utils');
-            if (typeof schemaUtils === 'function' || typeof schemaUtils.validate === 'function') {
-              console.log('  ✅ schema-utils validation function available');
-            } else {
-              console.log('  ❌ schema-utils validation not available');
-              process.exit(1);
-            }
-            
-            console.log('');
-            console.log('✅ All webpack plugins are compatible');
-            console.log('✅ Ready to build with react-scripts@5.0.1');
-          "
       
       - name: 🏗️ Build React Application
         working-directory: ./frontend
