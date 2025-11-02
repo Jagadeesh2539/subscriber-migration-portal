@@ -1,5 +1,5 @@
 # ==============================================================================
-# STAGE 1: Builder - Creates consistent build environment with Yarn
+# STAGE 1: Builder - Creates consistent build environment with global Yarn
 # ==============================================================================
 FROM node:18.20.8-alpine AS builder
 
@@ -12,15 +12,11 @@ RUN apk add --no-cache \
     g++ \
     git
 
-# Enable Corepack (included with Node.js 18)
-RUN corepack enable
+# Install Yarn globally (bypasses Corepack issues)
+RUN npm install -g yarn@3.6.4
 
-# Copy ALL source code first (critical for TypeScript detection)
+# Copy ALL source code first
 COPY . .
-
-# Set up Yarn
-RUN yarn set version 3.6.4 && \
-    yarn config set nodeLinker node-modules
 
 # Install dependencies including TypeScript
 RUN yarn install --no-immutable --no-immutable-cache
