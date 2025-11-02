@@ -683,6 +683,7 @@ jobs:
           echo "   Build Version: ${{ steps.metadata.outputs.version }}"
           echo "   Build Time: ${{ steps.metadata.outputs.build_time }}"
           
+          # Build using Docker with build arguments
           docker build \
             --target artifact \
             --output build/ \
@@ -695,22 +696,6 @@ jobs:
           echo "✅ Docker build completed successfully"
           echo "📦 Build statistics:"
           du -sh build/
-          echo "   Files in build directory:"
-          find build -type f | sed 's/^/   • /' | head -15
-          
-          if [ ! -f build/index.html ]; then
-            echo "❌ CRITICAL FAILURE: build/index.html not found"
-            exit 1
-          fi
-          
-          MAIN_JS=$(find build/static/js -name "main.*.js" 2>/dev/null | head -1)
-          if [ -z "$MAIN_JS" ] || [ ! -f "$MAIN_JS" ]; then
-            echo "❌ CRITICAL FAILURE: Main JavaScript bundle not found"
-            ls -la build/static/js/ 2>/dev/null || echo "Directory not found"
-            exit 1
-          fi
-          
-          echo "✅ All critical files present"
 
       - name: 🚀 Deploy to S3
         timeout-minutes: 10

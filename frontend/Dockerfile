@@ -29,16 +29,26 @@ ARG BUILD_TIME=build-time
 RUN echo "REACT_APP_API_URL=$API_ENDPOINT" > .env.production && \
     echo "REACT_APP_STAGE=prod" >> .env.production && \
     echo "REACT_APP_VERSION=$BUILD_VERSION" >> .env.production && \
-    echo "REACT_APP_BUILD_TIME=$BUILD_TIME" >> .env.production
+    echo "REACT_APP_BUILD_TIME=$BUILD_TIME" >> .env.production && \
+    echo "✅ Generated .env.production:" && \
+    cat .env.production
 
-# Build the application
+# Build the application (NO openssl-legacy-provider needed with Webpack 5)
 RUN CI=true \
     GENERATE_SOURCEMAP=false \
     npm run build
 
-# Verify build output (FIXED for webpack 5)
-RUN if [ ! -f build/index.html ]; then exit 1; fi && \
-    if [ -z "$(find build/static/js -name '*.js' -print -quit 2>/dev/null)" ]; then exit 1; fi
+# Verify build output
+RUN if [ ! -f build/index.html ]; then \
+        echo "❌ CRITICAL FAILURE: build/index.html not found"; \
+        exit 1; \
+    fi && \
+    if [ -z "$(find build/static/js -name '*.js' -print -quit 2>/dev/null)" ]; then \
+        echo "❌ CRITICAL FAILURE: No JavaScript bundles found"; \
+        exit 1; \
+    fi && \
+    echo "✅ Build validation successful:" && \
+    du -sh build/
 
 # ==============================================================================
 # STAGE 2: Artifact - Minimal output for deployment
