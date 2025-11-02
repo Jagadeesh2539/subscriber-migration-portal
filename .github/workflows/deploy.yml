@@ -331,7 +331,7 @@ jobs:
           PARAMS=(
             "Stage=prod"
             "JwtSecret=$JWT_SECRET"
-            "CorsOrigins=https://yourdomain.com"
+            "CorsOrigins=http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com"
             "VpcId=$VPC_ID"
             "PrivateSubnetId1=$PRIVATE_1"
             "PrivateSubnetId2=$PRIVATE_2"
@@ -347,6 +347,7 @@ jobs:
           
           echo ""
           echo "📦 Deploying stack with ${#PARAMS[@]} parameters..."
+          echo "🌐 CORS Origins: http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com"
           
           MAX_DEPLOY_RETRIES=3
           DEPLOY_ATTEMPT=1
@@ -814,9 +815,9 @@ jobs:
                 if curl -s "$WEBSITE_URL" | grep -q "Subscriber Migration Portal"; then
                   echo "✅ Portal content verified!"
                   echo ""
-                  echo "🎉 =============================================="
+                  echo "🎉 ==============================================="
                   echo "🎉  FRONTEND DEPLOYMENT COMPLETE"
-                  echo "🎉 =============================================="
+                  echo "🎉 ==============================================="
                   echo "🌐 URL: $WEBSITE_URL"
                   echo "📄 MIME: text/html (correct)"
                   echo "🎯 Status: Ready for use!"
@@ -890,9 +891,9 @@ jobs:
           
           if [ "$SUCCESS" = true ]; then
             echo ""
-            echo "✅ =============================================="
+            echo "✅ ==============================================="
             echo "✅  FRONTEND DEPLOYMENT SUCCESSFUL!"
-            echo "✅ =============================================="
+            echo "✅ ==============================================="
             echo "🌐 Website URL: $WEBSITE_URL"
             echo "📄 MIME Type: Correct (text/html)"
             echo "🎉 Ready for use!"
@@ -1021,9 +1022,9 @@ jobs:
           
           # Final Results
           echo ""
-          echo "📊 =============================================="
+          echo "📊 ==============================================="
           echo "📊  SMOKE TEST RESULTS SUMMARY"
-          echo "📊 =============================================="
+          echo "📊 ==============================================="
           echo "🏗️ Infrastructure:     ✅ DEPLOYED ($LAMBDA_COUNT functions)"
           echo "🗄️ Database:          ✅ INITIALIZED"
           
@@ -1036,17 +1037,17 @@ jobs:
           if [ "$FRONTEND_SUCCESS" = true ]; then
             echo "🌐 Frontend:          ✅ ACCESSIBLE"
             echo ""
-            echo "🎉 =============================================="
+            echo "🎉 ==============================================="
             echo "🎉  DEPLOYMENT SUCCESSFUL!"
-            echo "🎉 =============================================="
+            echo "🎉 ==============================================="
             echo "🌐 Access your application: $FRONTEND_URL"
             exit 0
           else
             echo "🌐 Frontend:          ❌ ACCESSIBILITY ISSUES"
             echo ""
-            echo "⚠️ =============================================="
+            echo "⚠️ ==============================================="
             echo "⚠️  PARTIAL DEPLOYMENT - FRONTEND ISSUE"
-            echo "⚠️ =============================================="
+            echo "⚠️ ==============================================="
             echo "📝 Infrastructure deployed but frontend has accessibility issues"
             echo "🔍 Check S3 bucket configuration and MIME types"
             exit 1
