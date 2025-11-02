@@ -2,9 +2,13 @@
   "name": "subscriber-portal-enhanced",
   "version": "3.0.0",
   "private": true,
+  "packageManager": "yarn@3.6.4",
   "engines": {
-    "node": ">=18.20.0 <25.0.0",
-    "npm": ">=10.0.0"
+    "node": ">=18.20.0 <25.0.0"
+  },
+  "resolutions": {
+    "ajv": "6.12.6",
+    "ajv-keywords": "3.5.2"
   },
   "dependencies": {
     "react": "18.2.0",
@@ -56,8 +60,8 @@
     "lint:fix": "eslint \"src/**/*.{js,jsx,ts,tsx}\" --fix",
     "analyze": "source-map-explorer 'build/static/js/*.js'",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf node_modules package-lock.json build",
-    "reinstall": "npm run clean && npm install",
+    "clean": "rm -rf node_modules .yarn .pnp.* build",
+    "reinstall": "yarn install --immutable",
     "build:docker": "docker build --target artifact --output ./build/ -f Dockerfile ."
   },
   "eslintConfig": {
