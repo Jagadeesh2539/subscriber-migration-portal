@@ -646,16 +646,37 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
 
-      - name: 🚀 Deploy Static Frontend
+      - name: 🔍 Calculate build metadata
+        id: metadata
+        run: |
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          echo "commit_short=$COMMIT_SHORT" >> $GITHUB_OUTPUT
+          
+          BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
+          
+          VERSION="v$(date -u +%Y%m%d)-${COMMIT_SHORT}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: 🚀 Deploy Static Frontend (NO DOCKER)
         working-directory: frontend
         env:
           FRONTEND_BUCKET: ${{ env.STACK_NAME }}-frontend
           API_ENDPOINT: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
+          BUILD_VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
         run: |
-          echo "🚀 Deploying static frontend..."
+          echo "🚀 Deploying static frontend without Docker..."
+          echo "   API Endpoint: $API_ENDPOINT"
+          echo "   Build Version: $BUILD_VERSION" 
+          echo "   Build Time: $BUILD_TIME"
           
-          # Update config.js with actual API endpoint
-          sed -i "s|API_BASE:.*|API_BASE: '${API_ENDPOINT}',|g" utils/config.js
+          # Update config.js with actual values
+          if [ -f utils/config.js ]; then
+            sed -i "s|API_BASE:.*|API_BASE: '$API_ENDPOINT',|g" utils/config.js
+            sed -i "s|VERSION:.*|VERSION: '$BUILD_VERSION',|g" utils/config.js
+            sed -i "s|BUILD_TIME:.*|BUILD_TIME: '$BUILD_TIME',|g" utils/config.js
+          fi
           
           # Create bucket if needed
           if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
@@ -663,19 +684,93 @@ jobs:
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
               aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
             else
-              aws s3api create-bucket --bucket "$FRONTEND_BUCKET" --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
+              aws s3api create-bucket \
+                --bucket "$FRONTEND_BUCKET" \
+                --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
             fi
             
-            aws s3api put-bucket-website --bucket "$FRONTEND_BUCKET" --website-configuration '{"IndexDocument": {"Suffix": "index.html"}}'
-            aws s3api put-bucket-policy --bucket "$FRONTEND_BUCKET" --policy "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::$FRONTEND_BUCKET/*\"}]}"
-            aws s3api put-public-access-block --bucket "$FRONTEND_BUCKET" --public-access-block-configuration "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+            # Configure static website hosting
+            aws s3api put-bucket-website \
+              --bucket "$FRONTEND_BUCKET" \
+              --website-configuration '{
+                "IndexDocument": {"Suffix": "index.html"},
+                "ErrorDocument": {"Key": "index.html"}
+              }'
+            
+            # Set bucket policy for public access
+            cat > bucket-policy.json << 'EOF'
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "PublicReadGetObject",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::${FRONTEND_BUCKET}/*"
+            }]
+          }
+          EOF
+            
+            envsubst < bucket-policy.json > bucket-policy-final.json
+            aws s3api put-bucket-policy \
+              --bucket "$FRONTEND_BUCKET" \
+              --policy file://bucket-policy-final.json
+            
+            # Configure public access block
+            aws s3api put-public-access-block \
+              --bucket "$FRONTEND_BUCKET" \
+              --public-access-block-configuration \
+              "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+            
+            echo "✅ S3 bucket configured for static hosting"
           fi
           
           # Upload all static files
-          aws s3 sync . "s3://$FRONTEND_BUCKET/" --delete --exclude "*.md" --exclude "Dockerfile*"
+          echo "📤 Uploading static files..."
+          aws s3 sync . "s3://$FRONTEND_BUCKET/" \
+            --delete \
+            --exclude "*.md" \
+            --exclude "Dockerfile*" \
+            --exclude "package*.json" \
+            --exclude "node_modules/*" \
+            --exclude ".git/*"
           
-          echo "✅ Static frontend deployed!"
+          # Set cache headers
+          aws s3 cp "s3://$FRONTEND_BUCKET/" "s3://$FRONTEND_BUCKET/" \
+            --recursive \
+            --exclude "*.html" \
+            --cache-control "public,max-age=31536000,immutable" \
+            --metadata-directive REPLACE
+          
+          aws s3 cp "s3://$FRONTEND_BUCKET/" "s3://$FRONTEND_BUCKET/" \
+            --recursive \
+            --exclude "*" \
+            --include "*.html" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --metadata-directive REPLACE
+          
+          echo ""
+          echo "✅ Static frontend deployed successfully!"
           echo "🌐 Website URL: http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+
+      - name: 🧪 Validate Deployment
+        timeout-minutes: 5
+        run: |
+          WEBSITE_URL="http://${{ env.STACK_NAME }}-frontend.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          
+          echo "🧪 Testing frontend accessibility..."
+          echo "URL: $WEBSITE_URL"
+          
+          for i in {1..10}; do
+            if curl -sf "$WEBSITE_URL" >/dev/null 2>&1; then
+              echo "✅ Frontend is accessible!"
+              echo "🎉 Deployment completed successfully!"
+              break
+            else
+              echo "⏳ Retry $i/10 - waiting 10s..."
+              sleep 10
+            fi
+          done
 
   smoke-tests:
     name: 🧪 Smoke Tests & Validation
