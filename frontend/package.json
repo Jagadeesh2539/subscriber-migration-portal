@@ -6,6 +6,10 @@
     "node": ">=18.20.0 <25.0.0",
     "npm": ">=10.0.0"
   },
+  "resolutions": {
+    "ajv": "6.12.6",
+    "ajv-keywords": "3.5.2"
+  },
   "dependencies": {
     "react": "18.2.0",
     "react-dom": "18.2.0",
@@ -44,9 +48,11 @@
     "@types/node": "18.19.31",
     "@types/lodash": "4.17.13",
     "@types/react-window": "1.8.8",
-    "cross-env": "7.0.3"
+    "cross-env": "7.0.3",
+    "npm-force-resolutions": "0.0.10"
   },
   "scripts": {
+    "preinstall": "npx npm-force-resolutions",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

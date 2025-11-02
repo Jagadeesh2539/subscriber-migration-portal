@@ -11,11 +11,15 @@ RUN apk add --no-cache \
     make \
     g++ \
     git \
-    && npm install -g npm@10.8.2
+    && npm install -g npm@10.8.2 \
+    && npm install -g npm-force-resolutions@0.0.10
 
 # Copy package files and install dependencies
 COPY package*.json ./
 RUN npm install --no-fund --no-audit --no-progress --legacy-peer-deps
+
+# Apply resolutions to fix ajv conflict
+RUN npx npm-force-resolutions
 
 # Copy application source code
 COPY . .
