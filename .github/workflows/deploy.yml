@@ -677,152 +677,104 @@ jobs:
           echo "✅ Configuration updated"
           ls -la index.html
 
-      - name: 🚀 Deploy Static Frontend with Fixed S3 Permissions
+      - name: 🚀 Deploy Static Frontend to S3
         working-directory: frontend
-        env:
-          FRONTEND_BUCKET: ${{ env.STACK_NAME }}-frontend
-          API_ENDPOINT: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
-          BUILD_VERSION: ${{ steps.metadata.outputs.version }}
-          BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
+        timeout-minutes: 10
         run: |
-          echo "🚀 Deploying static frontend with corrected S3 permissions..."
-          echo "   API Endpoint: $API_ENDPOINT"
-          echo "   Build Version: $BUILD_VERSION" 
-          echo "   Build Time: $BUILD_TIME"
-          echo "   S3 Bucket: $FRONTEND_BUCKET"
+          set -euo pipefail
+          FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
           
-          # Create bucket if needed with proper permissions
+          echo "🚀 Deploying static frontend to S3..."
+          echo "🪣 Bucket: $FRONTEND_BUCKET"
+          echo "📁 Working directory: $(pwd)"
+          echo "📋 Files to upload: $(ls -la)"
+          
+          # Create bucket if it doesn't exist (with proper region handling)
           if ! aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
-            echo "🆕 Creating S3 bucket: $FRONTEND_BUCKET"
+            echo "🆕 Creating S3 bucket..."
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
               aws s3api create-bucket --bucket "$FRONTEND_BUCKET"
             else
               aws s3api create-bucket \
                 --bucket "$FRONTEND_BUCKET" \
-                --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
+                --region ${{ env.AWS_DEFAULT_REGION }} \
+                --create-bucket-configuration LocationConstraint=${{ env.AWS_DEFAULT_REGION }}
             fi
-            
-            # CRITICAL: First disable the public access block
-            echo "🔓 Disabling public access block..."
-            aws s3api put-public-access-block \
-              --bucket "$FRONTEND_BUCKET" \
-              --public-access-block-configuration \
-              "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
-            
-            # Wait a moment for the access block to take effect
             sleep 5
-            
-            # Configure static website hosting
-            echo "🌐 Configuring static website hosting..."
-            aws s3api put-bucket-website \
-              --bucket "$FRONTEND_BUCKET" \
-              --website-configuration '{
-                "IndexDocument": {"Suffix": "index.html"},
-                "ErrorDocument": {"Key": "index.html"}
-              }'
-            
-            # Set bucket policy for public read access
-            echo "📜 Setting bucket policy for public access..."
-            cat > bucket-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
+          fi
+          
+          # Configure static website hosting FIRST
+          echo "🌐 Configuring static website hosting..."
+          aws s3api put-bucket-website \
+            --bucket "$FRONTEND_BUCKET" \
+            --website-configuration '{
+              "IndexDocument": {"Suffix": "index.html"},
+              "ErrorDocument": {"Key": "index.html"}
+            }'
+          
+          # Disable S3 block public access BEFORE policy
+          echo "🔓 Configuring public access..."
+          aws s3api put-public-access-block \
+            --bucket "$FRONTEND_BUCKET" \
+            --public-access-block-configuration \
+            "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
+          
+          # Wait for access block to take effect
+          sleep 3
+          
+          # Set bucket policy for public read
+          echo "📜 Setting bucket policy..."
+          aws s3api put-bucket-policy \
+            --bucket "$FRONTEND_BUCKET" \
+            --policy '{
+              "Version": "2012-10-17",
+              "Statement": [{
                 "Sid": "PublicReadGetObject",
                 "Effect": "Allow",
                 "Principal": "*",
                 "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::${FRONTEND_BUCKET}/*"
-              }
-            ]
-          }
-          EOF
-            
-            aws s3api put-bucket-policy \
-              --bucket "$FRONTEND_BUCKET" \
-              --policy file://bucket-policy.json
-            
-            echo "✅ S3 bucket created and configured for public static website hosting"
-            
+                "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
+              }]
+            }'
+          
+          # Upload HTML file with correct MIME type
+          echo "📤 Uploading index.html with text/html content-type..."
+          if [[ -f "index.html" ]]; then
+            aws s3 cp index.html \
+              "s3://$FRONTEND_BUCKET/index.html" \
+              --content-type "text/html; charset=utf-8" \
+              --cache-control "no-cache, no-store, must-revalidate" \
+              --metadata-directive REPLACE
+            echo "✅ index.html uploaded successfully"
           else
-            echo "✅ S3 bucket already exists: $FRONTEND_BUCKET"
-            
-            # Ensure permissions are correct even if bucket exists
-            echo "🔓 Ensuring correct public access settings..."
-            aws s3api put-public-access-block \
-              --bucket "$FRONTEND_BUCKET" \
-              --public-access-block-configuration \
-              "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false" || true
-            
-            # Update bucket policy to ensure public access
-            echo "📜 Updating bucket policy for public access..."
-            cat > bucket-policy.json << EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "PublicReadGetObject",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::${FRONTEND_BUCKET}/*"
-              }
-            ]
-          }
-          EOF
-            
-            aws s3api put-bucket-policy \
-              --bucket "$FRONTEND_BUCKET" \
-              --policy file://bucket-policy.json || true
-              
-            # Ensure website configuration
-            aws s3api put-bucket-website \
-              --bucket "$FRONTEND_BUCKET" \
-              --website-configuration '{
-                "IndexDocument": {"Suffix": "index.html"},
-                "ErrorDocument": {"Key": "index.html"}
-              }' || true
-              
-            echo "✅ Public access permissions verified and updated"
+            echo "❌ ERROR: index.html not found in $(pwd)"
+            ls -la
+            exit 1
           fi
           
-          # Upload all static files with correct MIME types
-          echo "📤 Uploading static files with correct MIME types..."
-          
-          # Upload HTML files with correct MIME type first (CRITICAL FIX)
-          if ls *.html >/dev/null 2>&1; then
-            for file in *.html; do
-              echo "📄 Uploading $file as text/html with correct MIME type"
-              aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
-                --content-type "text/html; charset=utf-8" \
-                --cache-control "no-cache,no-store,must-revalidate" \
-                --metadata-directive REPLACE
-            done
-          fi
-          
-          # Upload CSS files with correct MIME type
-          if ls *.css >/dev/null 2>&1; then
-            for file in *.css; do
-              echo "🎨 Uploading $file as text/css"
-              aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
+          # Upload any CSS files if they exist
+          if ls *.css 1> /dev/null 2>&1; then
+            echo "📤 Uploading CSS files..."
+            for css_file in *.css; do
+              aws s3 cp "$css_file" \
+                "s3://$FRONTEND_BUCKET/$css_file" \
                 --content-type "text/css" \
-                --cache-control "public,max-age=31536000" \
-                --metadata-directive REPLACE
+                --cache-control "public, max-age=31536000"
             done
           fi
           
-          # Upload JS files with correct MIME type
-          if ls *.js >/dev/null 2>&1; then
-            for file in *.js; do
-              echo "📜 Uploading $file as application/javascript"
-              aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
+          # Upload any JS files if they exist
+          if ls *.js 1> /dev/null 2>&1; then
+            echo "📤 Uploading JavaScript files..."
+            for js_file in *.js; do
+              aws s3 cp "$js_file" \
+                "s3://$FRONTEND_BUCKET/$js_file" \
                 --content-type "application/javascript" \
-                --cache-control "public,max-age=31536000" \
-                --metadata-directive REPLACE
+                --cache-control "public, max-age=31536000"
             done
           fi
           
-          # Upload any remaining files (images, fonts, etc.)
+          # Upload any other files
           aws s3 sync . "s3://$FRONTEND_BUCKET/" \
             --delete \
             --exclude "*.html" \
@@ -832,36 +784,68 @@ jobs:
             --exclude "Dockerfile*" \
             --exclude "package*.json" \
             --exclude "node_modules/*" \
-            --exclude ".git/*" \
-            --exclude "bucket-policy.json"
+            --exclude ".git/*"
           
-          echo "✅ All files uploaded with correct MIME types"
-          
-          # Set cache headers for optimal performance
-          echo "⚡ Setting cache headers..."
-          
-          # Cache static assets for 1 year
-          aws s3 cp "s3://$FRONTEND_BUCKET/" "s3://$FRONTEND_BUCKET/" \
-            --recursive \
-            --exclude "*.html" \
-            --cache-control "public,max-age=31536000,immutable" \
-            --metadata-directive REPLACE || true
-          
-          # No cache for HTML files (always fresh)
-          aws s3 cp "s3://$FRONTEND_BUCKET/" "s3://$FRONTEND_BUCKET/" \
-            --recursive \
-            --exclude "*" \
-            --include "*.html" \
-            --cache-control "no-cache,no-store,must-revalidate" \
-            --metadata-directive REPLACE || true
+          WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
           echo ""
-          echo "✅ =============================================="
-          echo "✅  FRONTEND DEPLOYMENT COMPLETE"
-          echo "✅ =============================================="
-          echo "🌐 Website URL: http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
-          echo "📁 Bucket: $FRONTEND_BUCKET"
-          echo "🌍 Region: ${{ env.AWS_DEFAULT_REGION }}"
+          echo "✅ Static frontend deployed successfully!"
+          echo "🌐 Website URL: $WEBSITE_URL"
+          
+          # Wait for S3 to propagate
+          echo "⏳ Waiting for S3 propagation..."
+          sleep 10
+          
+          # Enhanced MIME type verification
+          echo ""
+          echo "🔍 Verifying deployment and MIME type..."
+          
+          for i in {1..5}; do
+            echo "🔍 Verification attempt $i/5..."
+            
+            if RESPONSE=$(curl -s -I "$WEBSITE_URL" 2>/dev/null); then
+              CONTENT_TYPE=$(echo "$RESPONSE" | grep -i "content-type:" | awk '{print $2}' | tr -d '\r\n')
+              echo "📄 Content-Type: $CONTENT_TYPE"
+              
+              if echo "$CONTENT_TYPE" | grep -q "text/html"; then
+                echo "✅ SUCCESS: Correct MIME type confirmed!"
+                
+                # Test actual content
+                if curl -s "$WEBSITE_URL" | grep -q "Subscriber Migration Portal"; then
+                  echo "✅ Portal content verified!"
+                  echo ""
+                  echo "🎉 =============================================="
+                  echo "🎉  FRONTEND DEPLOYMENT COMPLETE"
+                  echo "🎉 =============================================="
+                  echo "🌐 URL: $WEBSITE_URL"
+                  echo "📄 MIME: text/html (correct)"
+                  echo "🎯 Status: Ready for use!"
+                  break
+                else
+                  echo "⚠️ MIME type correct but content not found"
+                fi
+              else
+                echo "❌ Wrong MIME type: $CONTENT_TYPE"
+                
+                if [ $i -eq 5 ]; then
+                  echo "🔧 Final attempt: Force MIME type correction..."
+                  aws s3 cp "s3://$FRONTEND_BUCKET/index.html" \
+                    "s3://$FRONTEND_BUCKET/index.html" \
+                    --content-type "text/html; charset=utf-8" \
+                    --cache-control "no-cache, no-store, must-revalidate" \
+                    --metadata-directive REPLACE
+                fi
+              fi
+            else
+              echo "❌ Connection failed to $WEBSITE_URL"
+            fi
+            
+            if [ $i -lt 5 ]; then
+              echo "⏳ Waiting 15 seconds before retry..."
+              sleep 15
+            fi
+          done
+
 
       - name: 🧪 Validate Deployment with MIME Type Check
         timeout-minutes: 8
