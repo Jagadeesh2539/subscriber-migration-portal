@@ -10,29 +10,28 @@ RUN apk add --no-cache \
     python3 \
     make \
     g++ \
-    git \
-    corepack
+    git
 
-# Enable corepack for Yarn
+# Enable Corepack (included with Node.js 18)
 RUN corepack enable
 
-# Copy package files
+# Copy package file
 COPY package.json ./
 
-# Install Yarn globally and set up project
+# Set up Yarn
 RUN yarn set version 3.6.4 && \
     yarn config set nodeLinker node-modules
 
-# Install dependencies with resolutions
+# Install dependencies
 RUN yarn install --no-immutable --no-immutable-cache
+
+# Force resolve critical ajv versions
+RUN yarn add ajv@6.12.6 ajv-keywords@3.5.2 --exact
 
 # Copy application source code
 COPY . .
 
-# Force resolve ajv versions (critical fix)
-RUN yarn add ajv@6.12.6 ajv-keywords@3.5.2 --exact
-
-# Build arguments (set by CI/CD pipeline)
+# Build arguments
 ARG API_ENDPOINT=https://bhgplw8pyk.execute-api.us-east-1.amazonaws.com/prod
 ARG BUILD_VERSION=local-build
 ARG BUILD_TIME=build-time
