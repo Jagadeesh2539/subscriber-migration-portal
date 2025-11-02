@@ -662,58 +662,58 @@ jobs:
           echo "✅ Cleanup complete"
       
       - name: 🚨 ULTIMATE WEBPACK COMPATIBILITY FIX
-  working-directory: ./frontend
-  timeout-minutes: 15
-  run: |
-    set -euo pipefail
-    
-    echo "🚨 APPLYING ULTIMATE WEBPACK COMPATIBILITY FIX..."
-    
-    # Complete nuclear cleanup
-    rm -rf node_modules package-lock.json build .npm .env.production
-    npm cache clean --force
-    
-    # Create optimized npm configuration
-    cat > .npmrc << 'EOF'
-    legacy-peer-deps=true
-    strict-peer-dependencies=false
-    auto-install-peers=true
-    fund=false
-    audit=false
-    EOF
-    
-    echo "📦 Installing base dependencies..."
-    npm install --legacy-peer-deps
-    
-    echo "🔧 Force installing battle-tested webpack ecosystem..."
-    npm install --save-dev --force --legacy-peer-deps \
-      schema-utils@2.7.1 \
-      ajv@6.12.6 \
-      ajv-keywords@3.5.2 \
-      fork-ts-checker-webpack-plugin@6.5.3 \
-      terser-webpack-plugin@5.2.5 \
-      webpack@5.88.2
-    
-    # Verification step
-    echo ""
-    echo "🔍 Verifying critical package versions:"
-    npm list schema-utils terser-webpack-plugin --depth=0 || true
-    
-    # API compatibility test
-    echo ""
-    echo "🧪 Testing schema-utils API compatibility:"
-    node -e "
-      try {
-        const su = require('schema-utils');
-        console.log('✅ schema-utils API test: PASSED');
-        console.log('validate function:', typeof su.validate === 'function' ? 'YES' : 'NO');
-      } catch(e) {
-        console.log('❌ API test failed:', e.message);
-        process.exit(1);
-      }
-    "
-    
-    echo "✅ ULTIMATE FIX COMPLETE!"
+        working-directory: ./frontend
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          
+          echo "🚨 APPLYING ULTIMATE WEBPACK COMPATIBILITY FIX..."
+          
+          # Complete nuclear cleanup
+          rm -rf node_modules package-lock.json build .npm .env.production
+          npm cache clean --force
+          
+          # Create optimized npm configuration
+          cat > .npmrc << 'EOF'
+          legacy-peer-deps=true
+          strict-peer-dependencies=false
+          auto-install-peers=true
+          fund=false
+          audit=false
+          EOF
+          
+          echo "📦 Installing base dependencies..."
+          npm install --legacy-peer-deps
+          
+          echo "🔧 Force installing battle-tested webpack ecosystem..."
+          npm install --save-dev --force --legacy-peer-deps \
+            schema-utils@2.7.1 \
+            ajv@6.12.6 \
+            ajv-keywords@3.5.2 \
+            fork-ts-checker-webpack-plugin@6.5.3 \
+            terser-webpack-plugin@5.2.5 \
+            webpack@5.88.2
+          
+          # Verification step
+          echo ""
+          echo "🔍 Verifying critical package versions:"
+          npm list schema-utils terser-webpack-plugin --depth=0 || true
+          
+          # API compatibility test
+          echo ""
+          echo "🧪 Testing schema-utils API compatibility:"
+          node -e "
+            try {
+              const su = require('schema-utils');
+              console.log('✅ schema-utils API test: PASSED');
+              console.log('validate function:', typeof su.validate === 'function' ? 'YES' : 'NO');
+            } catch(e) {
+              console.log('❌ API test failed:', e.message);
+              process.exit(1);
+            }
+          "
+          
+          echo "✅ ULTIMATE FIX COMPLETE!"
       
       - name: 🔍 Verify Webpack Plugin Compatibility
         working-directory: ./frontend
