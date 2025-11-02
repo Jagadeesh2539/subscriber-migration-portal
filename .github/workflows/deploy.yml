@@ -657,6 +657,25 @@ jobs:
           
           VERSION="v$(date -u +%Y%m%d)-${COMMIT_SHORT}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+      - name: 🔧 Update API Configuration    # <-- NEW SIMPLE STEP (REPLACE THE BIG ONE)
+        working-directory: frontend
+        env:
+          API_ENDPOINT: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
+          BUILD_VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
+        run: |
+          echo "🔧 Updating API configuration..."
+          echo "   API: ${API_ENDPOINT}"
+          echo "   Version: ${BUILD_VERSION}"
+          echo "   Time: ${BUILD_TIME}"
+          
+          sed -i "s|PLACEHOLDER_API|${API_ENDPOINT}|g" index.html
+          sed -i "s|PLACEHOLDER_VERSION|${BUILD_VERSION}|g" index.html
+          sed -i "s|PLACEHOLDER_TIME|${BUILD_TIME}|g" index.html
+          
+          echo "✅ Configuration updated"
+          ls -la index.html
 
       - name: 🚀 Deploy Static Frontend (NO DOCKER)
         working-directory: frontend
