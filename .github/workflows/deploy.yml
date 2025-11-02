@@ -789,13 +789,14 @@ jobs:
           # Upload all static files with correct MIME types
           echo "📤 Uploading static files with correct MIME types..."
           
-          # Upload HTML files with correct MIME type first
+          # Upload HTML files with correct MIME type first (CRITICAL FIX)
           if ls *.html >/dev/null 2>&1; then
             for file in *.html; do
-              echo "📄 Uploading $file as text/html"
+              echo "📄 Uploading $file as text/html with correct MIME type"
               aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
                 --content-type "text/html; charset=utf-8" \
-                --cache-control "no-cache,no-store,must-revalidate"
+                --cache-control "no-cache,no-store,must-revalidate" \
+                --metadata-directive REPLACE
             done
           fi
           
@@ -805,7 +806,8 @@ jobs:
               echo "🎨 Uploading $file as text/css"
               aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
                 --content-type "text/css" \
-                --cache-control "public,max-age=31536000"
+                --cache-control "public,max-age=31536000" \
+                --metadata-directive REPLACE
             done
           fi
           
@@ -815,11 +817,12 @@ jobs:
               echo "📜 Uploading $file as application/javascript"
               aws s3 cp "$file" "s3://$FRONTEND_BUCKET/$file" \
                 --content-type "application/javascript" \
-                --cache-control "public,max-age=31536000"
+                --cache-control "public,max-age=31536000" \
+                --metadata-directive REPLACE
             done
           fi
           
-          # Upload remaining files (images, etc.)
+          # Upload any remaining files (images, fonts, etc.)
           aws s3 sync . "s3://$FRONTEND_BUCKET/" \
             --delete \
             --exclude "*.html" \
@@ -831,7 +834,8 @@ jobs:
             --exclude "node_modules/*" \
             --exclude ".git/*" \
             --exclude "bucket-policy.json"
-
+          
+          echo "✅ All files uploaded with correct MIME types"
           
           # Set cache headers for optimal performance
           echo "⚡ Setting cache headers..."
@@ -859,59 +863,61 @@ jobs:
           echo "📁 Bucket: $FRONTEND_BUCKET"
           echo "🌍 Region: ${{ env.AWS_DEFAULT_REGION }}"
 
-      - name: 🧪 Validate Deployment with Better Error Handling
+      - name: 🧪 Validate Deployment with MIME Type Check
         timeout-minutes: 8
         run: |
           WEBSITE_URL="http://${{ env.STACK_NAME }}-frontend.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
-          echo "🧪 Testing frontend accessibility..."
+          echo "🧪 Testing frontend accessibility and MIME types..."
           echo "URL: $WEBSITE_URL"
-          echo "Expected: Working static website with API integration"
-          echo ""
           
-          # Test with more detailed output
           SUCCESS=false
-          for i in {1..15}; do
-            echo "🔍 Attempt $i/15: Testing website accessibility..."
+          for i in {1..12}; do
+            echo "🔍 Attempt $i/12: Testing website..."
             
-            # Test with curl and capture response
-            if RESPONSE=$(curl -s -w "HTTP_CODE:%{http_code}" "$WEBSITE_URL" 2>&1); then
-              HTTP_CODE=$(echo "$RESPONSE" | grep -o 'HTTP_CODE:[0-9]*' | cut -d: -f2)
+            # Test with curl and check Content-Type header
+            if RESPONSE=$(curl -s -I "$WEBSITE_URL" 2>&1); then
+              CONTENT_TYPE=$(echo "$RESPONSE" | grep -i "content-type" | head -1)
+              echo "📄 Content-Type: $CONTENT_TYPE"
               
-              if [[ "$HTTP_CODE" == "200" ]]; then
-                echo "✅ SUCCESS: Website is accessible!"
-                echo "✅ HTTP Status: 200 OK"
-                echo "🎉 Frontend deployment completed successfully!"
-                SUCCESS=true
-                break
+              if echo "$CONTENT_TYPE" | grep -q "text/html"; then
+                echo "✅ SUCCESS: Correct MIME type (text/html) detected!"
+                
+                # Test actual content
+                if curl -s "$WEBSITE_URL" | grep -q "Subscriber Migration Portal"; then
+                  echo "✅ Portal content verified!"
+                  SUCCESS=true
+                  break
+                else
+                  echo "⚠️ MIME type correct but content issue"
+                fi
               else
-                echo "⚠️ HTTP Status: $HTTP_CODE"
-                echo "   Response preview: $(echo "$RESPONSE" | head -c 200)..."
+                echo "❌ Wrong MIME type - will cause download instead of display"
               fi
             else
               echo "❌ Connection failed"
             fi
             
-            if [ $i -lt 15 ]; then
-              echo "⏳ Waiting 15 seconds before retry..."
-              sleep 15
+            if [ $i -lt 12 ]; then
+              echo "⏳ Waiting 10 seconds before retry..."
+              sleep 10
             fi
           done
           
-          if [ "$SUCCESS" = false ]; then
+          if [ "$SUCCESS" = true ]; then
             echo ""
-            echo "⚠️ =============================================="
-            echo "⚠️  FRONTEND VALIDATION TIMEOUT"
-            echo "⚠️ =============================================="
-            echo "🌐 URL: $WEBSITE_URL"
-            echo "📝 Note: The deployment may still be successful"
-            echo "🔍 Please check the URL manually in your browser"
-            echo "⏳ DNS propagation can take up to 5-10 minutes"
-            
-            # Don't fail the deployment, just warn
-            exit 0
+            echo "✅ =============================================="
+            echo "✅  FRONTEND DEPLOYMENT SUCCESSFUL!"
+            echo "✅ =============================================="
+            echo "🌐 Website URL: $WEBSITE_URL"
+            echo "📄 MIME Type: Correct (text/html)"
+            echo "🎉 Ready for use!"
+          else
+            echo ""
+            echo "⚠️ Frontend accessibility issues detected"
+            echo "🔧 Check MIME types and S3 configuration"
+            exit 1
           fi
-
 
   smoke-tests:
     name: 🧪 Smoke Tests & Validation
@@ -919,6 +925,13 @@ jobs:
     needs: [cleanup-and-deploy, initialize-database, deploy-frontend]
     timeout-minutes: 10
     steps:
+      - name: 🔐 Configure AWS credentials  # ADD THIS STEP
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+      
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
