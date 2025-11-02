@@ -15,7 +15,7 @@ RUN apk add --no-cache \
 
 # Copy package files and install dependencies
 COPY package*.json ./
-RUN npm install --no-fund --no-audit --no-progress
+RUN npm install --no-fund --no-audit --no-progress --legacy-peer-deps
 
 # Copy application source code
 COPY . .
@@ -33,7 +33,7 @@ RUN echo "REACT_APP_API_URL=$API_ENDPOINT" > .env.production && \
     echo "✅ Generated .env.production:" && \
     cat .env.production
 
-# Build the application (NO openssl-legacy-provider needed with Webpack 5)
+# Build the application
 RUN CI=true \
     GENERATE_SOURCEMAP=false \
     npm run build
