@@ -261,7 +261,7 @@ Resources:
         SecretStringTemplate: '{"username":"admin","dbname":"legacydb"}'
         GenerateStringKey: 'password'
         PasswordLength: 32
-        ExcludeCharacters: '"@/\''
+        ExcludeCharacters: '"@/\'
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-db-secret'
