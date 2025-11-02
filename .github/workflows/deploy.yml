@@ -101,7 +101,6 @@ jobs:
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          # ⚠️ RECOMMENDATION: Replace with OIDC Role ARN
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
@@ -217,7 +216,6 @@ jobs:
       
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          # ⚠️ RECOMMENDATION: Replace with OIDC Role ARN
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
@@ -229,20 +227,13 @@ jobs:
       - name: Install Tools
         run: pip install aws-sam-cli boto3 jq
 
-      #
-      # ✅ FIX: All steps below were incorrectly indented
-      # and are now moved inside the 'steps:' block
-      #
       - name: 🔥 Execute Comprehensive Cleanup
         id: cleanup
         timeout-minutes: 25
         continue-on-error: false
         run: |
-          # Make script executable
-          # Make sure your script is at 'scripts/cleanup.sh'
           chmod +x scripts/cleanup.sh
           
-          # Export environment variables for script
           export STACK_NAME="${{ env.STACK_NAME }}"
           export AWS_DEFAULT_REGION="${{ env.AWS_DEFAULT_REGION }}"
           export RDS_DELETE_TIMEOUT_MINUTES="${{ env.RDS_DELETE_TIMEOUT_MINUTES }}"
@@ -250,10 +241,8 @@ jobs:
           export MAX_RETRY_ATTEMPTS="${{ env.MAX_RETRY_ATTEMPTS }}"
           export CLEANUP_TIMEOUT_MINUTES="${{ env.CLEANUP_TIMEOUT_MINUTES }}"
           
-          # Run cleanup script
           ./scripts/cleanup.sh
 
-      # Add this step in your cleanup-and-deploy job, after the cleanup script step
       - name: 🔨 Build PyMySQL Lambda Layer
         id: build-layer
         run: |
@@ -262,13 +251,11 @@ jobs:
           echo "🔨 Building PyMySQL Lambda Layer..."
           cd aws
       
-          # Ensure layer directory structure exists
           mkdir -p layers/pymysql/python
       
-          # Verify requirements.txt
           if [[ ! -f layers/pymysql/requirements.txt ]]; then
-          echo "📝 Creating requirements.txt..."
-          cat > layers/pymysql/requirements.txt << 'EOF'
+            echo "📝 Creating requirements.txt..."
+            cat > layers/pymysql/requirements.txt << 'EOF'
           pymysql==1.1.0
           cryptography>=3.4.8
           EOF
@@ -276,33 +263,30 @@ jobs:
       
           echo "📦 Installing dependencies for Lambda layer..."
       
-          # Install with proper flags for Lambda runtime
           pip install \
-          -r layers/pymysql/requirements.txt \
-          -t layers/pymysql/python \
-          --upgrade \
-          --no-cache-dir \
-          --platform manylinux2014_x86_64 \
-          --only-binary=:all: \
-          --python-version 3.11
+            -r layers/pymysql/requirements.txt \
+            -t layers/pymysql/python \
+            --upgrade \
+            --no-cache-dir \
+            --platform manylinux2014_x86_64 \
+            --only-binary=:all: \
+            --python-version 3.11
       
-           # Clean up unnecessary files to reduce layer size
           echo "🧹 Cleaning up unnecessary files..."
           find layers/pymysql/python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
           find layers/pymysql/python -type f -name "*.pyc" -delete 2>/dev/null || true
           find layers/pymysql/python -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true
           find layers/pymysql/python -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
       
-          # Verify layer structure
           if [ -d "layers/pymysql/python/pymysql" ]; then
-          echo "✅ PyMySQL layer built successfully"
-          echo "📊 Layer size: $(du -sh layers/pymysql/python | cut -f1)"
-          echo "📋 PyMySQL version: $(python -c "import sys; sys.path.insert(0, 'layers/pymysql/python'); import pymysql; print(pymysql.__version__)")"
+            echo "✅ PyMySQL layer built successfully"
+            echo "📊 Layer size: $(du -sh layers/pymysql/python | cut -f1)"
+            echo "📋 PyMySQL version: $(python -c "import sys; sys.path.insert(0, 'layers/pymysql/python'); import pymysql; print(pymysql.__version__)")"
           else
-          echo "❌ CRITICAL: PyMySQL not found in layer"
-          echo "Layer contents:"
-          ls -la layers/pymysql/python/ || true
-          exit 1
+            echo "❌ CRITICAL: PyMySQL not found in layer"
+            echo "Layer contents:"
+            ls -la layers/pymysql/python/ || true
+            exit 1
           fi
       
           cd ..
@@ -315,7 +299,6 @@ jobs:
           set -euo pipefail
           cd aws
           
-          # Setup deployment bucket
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           BUCKET="sam-deployment-${ACCOUNT_ID}-${{ env.AWS_DEFAULT_REGION }}"
           
@@ -331,7 +314,6 @@ jobs:
                 --create-bucket-configuration LocationConstraint="${{ env.AWS_DEFAULT_REGION }}"
             fi
             
-            # Enable versioning for safety
             aws s3api put-bucket-versioning \
               --bucket "$BUCKET" \
               --versioning-configuration Status=Enabled
@@ -341,10 +323,8 @@ jobs:
             echo "✅ Deployment bucket exists"
           fi
           
-          # Generate secure JWT secret
           JWT_SECRET=$(openssl rand -base64 48)
           
-          # Get infrastructure from discovery
           VPC_ID="${{ needs.discover-infrastructure.outputs.vpc-id }}"
           PRIVATE_1="${{ needs.discover-infrastructure.outputs.private-subnet-1 }}"
           PRIVATE_2="${{ needs.discover-infrastructure.outputs.private-subnet-2 }}"
@@ -359,7 +339,6 @@ jobs:
           echo "  Public 1:   ${PUBLIC_1:-<none>}"
           echo "  Public 2:   ${PUBLIC_2:-<none>}"
           
-          # Build parameter overrides
           PARAMS=(
             "Stage=prod"
             "JwtSecret=$JWT_SECRET"
@@ -380,7 +359,6 @@ jobs:
           echo ""
           echo "📦 Deploying stack with ${#PARAMS[@]} parameters..."
           
-          # Deploy with retries
           MAX_DEPLOY_RETRIES=3
           DEPLOY_ATTEMPT=1
           
@@ -425,7 +403,6 @@ jobs:
           
           echo "📤 Fetching CloudFormation outputs..."
           
-          # Wait for stack to be in stable state
           for i in {1..30}; do
             STATUS=$(aws cloudformation describe-stacks \
               --stack-name "$STACK" \
@@ -444,7 +421,6 @@ jobs:
             sleep 10
           done
           
-          # Get outputs
           API_ENDPOINT=$(aws cloudformation describe-stacks \
             --stack-name "$STACK" \
             --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
@@ -488,7 +464,6 @@ jobs:
       
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          # ⚠️ RECOMMENDATION: Replace with OIDC Role ARN
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
@@ -516,7 +491,6 @@ jobs:
               with open('database/rds_schema_update.sql', 'r', encoding='utf-8') as f:
                   sql = f.read()
               
-              # Split by semicolon and filter out comments and empty statements
               statements = [
                   s.strip() 
                   for s in sql.split(';') 
@@ -562,7 +536,6 @@ jobs:
           
           echo "✅ Found function: $FUNCTION_NAME"
           
-          # Verify function exists and is active
           FUNCTION_STATE=$(aws lambda get-function \
             --function-name "$FUNCTION_NAME" \
             --query 'Configuration.State' \
@@ -588,16 +561,13 @@ jobs:
             done
           fi
           
-          # Load and validate SQL statements
           SQL_STATEMENTS=$(cat sql_statements.json)
           STMT_COUNT=$(echo "$SQL_STATEMENTS" | jq 'length')
           
           echo "📝 Prepared payload with $STMT_COUNT SQL statements"
           
-          # Create Lambda payload
           PAYLOAD=$(jq -n --argjson stmts "$SQL_STATEMENTS" '{sql_statements: $stmts}')
           
-          # Invoke Lambda with retry
           MAX_RETRIES=3
           RETRY_COUNT=0
           
@@ -625,12 +595,10 @@ jobs:
             fi
           done
           
-          # Parse and validate response
           echo ""
           echo "📥 Lambda Response:"
           cat response.json | jq '.' || cat response.json
           
-          # Check for Lambda execution errors
           if jq -e '.errorMessage' response.json >/dev/null 2>&1; then
             echo ""
             echo "❌ Lambda execution error:"
@@ -638,7 +606,6 @@ jobs:
             exit 1
           fi
           
-          # Parse response body
           BODY=$(jq -r '.body' response.json 2>/dev/null || echo "null")
           
           if [[ "$BODY" == "null" || -z "$BODY" ]]; then
@@ -646,7 +613,6 @@ jobs:
             exit 1
           fi
           
-          # Extract execution summary
           SUCCESS=$(echo "$BODY" | jq -r '.success // false')
           ERRORS=$(echo "$BODY" | jq -r '.summary.errors // 0')
           EXECUTED=$(echo "$BODY" | jq -r '.summary.executed // 0')
@@ -660,12 +626,10 @@ jobs:
           echo "  ❌ Errors:   $ERRORS"
           echo "  📊 Total:    $TOTAL"
           
-          # Determine overall success
           if [[ "$SUCCESS" == "true" ]]; then
             echo ""
             echo "✅ Schema initialization completed successfully!"
             exit 0
-          # Allow non-zero errors if at least one statement executed (for idempotent runs)
           elif [[ "$ERRORS" -gt 0 && "$EXECUTED" -gt 0 ]]; then
             echo ""
             echo "✅ Schema initialization completed (with non-fatal 'already exists' errors)."
@@ -702,202 +666,195 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       
-      - name: 🧹 Clean npm Cache and Old Dependencies
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "🧹 ============================================"
-          echo "🧹  CLEANING OLD DEPENDENCIES"
-          echo "🧹 ============================================"
-          echo ""
-          
-          # Clean npm cache
-          echo "🗑️  Cleaning npm cache..."
-          npm cache clean --force
-          
-          # Remove old node_modules and lockfile
-          echo "🗑️  Removing old node_modules..."
-          rm -rf node_modules package-lock.json build
-          
-          echo "✅ Cleanup complete"
-          echo ""
-      
-      - name: 📦 Install Dependencies with Correct Overrides
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "📦 ============================================"
-          echo "📦  FRONTEND DEPENDENCY INSTALLATION"
-          echo "📦 ============================================"
-          echo ""
-          
-          # Display Node/npm versions
-          echo "Node version: $(node --version)"
-          echo "npm version: $(npm --version)"
-          echo ""
-          
-          # Show configured overrides
-          echo "📋 Configured dependency overrides:"
-          if grep -q '"overrides"' package.json; then
-            node -e "
-              const pkg = require('./package.json');
-              if (pkg.overrides) {
-                Object.entries(pkg.overrides).forEach(([k,v]) => {
-                  console.log('  ✓', k + ':', v);
-                });
-              }
-            "
-          else
-            echo "  ⚠️  No overrides found"
-          fi
-          echo ""
-          
-          # Install with legacy peer deps
-          echo "📦 Installing dependencies..."
-          npm install --legacy-peer-deps
-          
-          echo ""
-          echo "✅ Dependencies installed"
-          echo ""
-      
-      - name: 🔍 Verify Critical Package Versions
-        run: |
-          set -euo pipefail
-          cd frontend
-          
-          echo "🔍 ============================================"
-          echo "🔍  VERIFYING INSTALLED VERSIONS"
-          echo "🔍 ============================================"
-          echo ""
-          
-          # Verify critical packages using Node.js
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
-            
-            const packages = ['ajv', 'ajv-keywords', 'schema-utils'];
-            
-            console.log('Critical packages:');
-            packages.forEach(pkg => {
-              const pkgPath = path.join('node_modules', pkg, 'package.json');
-              if (fs.existsSync(pkgPath)) {
-                const pkgJson = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-                console.log('  ✅', pkg + ':', pkgJson.version);
-              } else {
-                console.log('  ❌', pkg + ': NOT FOUND');
-                process.exit(1);
-              }
-            });
-          "
-          
-          echo ""
-          echo "✅ Version verification complete"
-          echo ""
-      
-      - name: 🔧 Fix AJV Compatibility Issues
+      - name: 🧹 Complete Cleanup
         working-directory: ./frontend
         run: |
           set -euo pipefail
           
-          echo "🔧 ============================================"
-          echo "🔧  AJV COMPATIBILITY FIX"
-          echo "🔧 ============================================"
+          echo "🧹 Performing complete cleanup..."
+          
+          rm -rf node_modules
+          rm -rf build
+          rm -rf .npm
+          rm -rf ~/.npm
+          rm -f package-lock.json
+          rm -f .env.production
+          
+          npm cache clean --force
+          npm cache verify
+          
+          echo "✅ Cleanup complete"
+      
+      - name: 📦 Install Dependencies with Version Locks
+        working-directory: ./frontend
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          
+          echo "📦 Installing dependencies with version locks..."
+          
+          cat > .npmrc << 'EOF'
+          legacy-peer-deps=true
+          strict-peer-dependencies=false
+          auto-install-peers=true
+          EOF
+          
+          npm install --legacy-peer-deps
+          
           echo ""
+          echo "🔧 Installing fixed versions of critical packages..."
           
-          # Check current AJV structure
-          echo "🔍 Checking AJV directory structure..."
+          npm install --save-dev --legacy-peer-deps --force \
+            schema-utils@3.3.0 \
+            ajv@6.12.6 \
+            ajv-keywords@3.5.2
           
-          if [ -d "node_modules/ajv" ]; then
-            echo "📁 AJV package found"
+          echo "✅ Dependencies installed"
+      
+      - name: 🔍 Verify Package Versions
+        working-directory: ./frontend
+        run: |
+          set -euo pipefail
+          
+          echo "🔍 Verifying critical package versions..."
+          
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
             
-            # Check if lib directory exists (AJV 6.x structure)
-            if [ -d "node_modules/ajv/lib" ]; then
-              echo "✅ Found AJV lib directory (6.x structure)"
+            const criticalPackages = {
+              'schema-utils': { expected: '3', module: 'schema-utils' },
+              'ajv': { expected: '6', module: 'ajv' },
+              'ajv-keywords': { expected: '3', module: 'ajv-keywords' }
+            };
+            
+            let hasErrors = false;
+            
+            console.log('📋 Package Verification:');
+            console.log('');
+            
+            Object.entries(criticalPackages).forEach(([name, config]) => {
+              try {
+                const pkgPath = path.join('node_modules', name, 'package.json');
+                
+                if (!fs.existsSync(pkgPath)) {
+                  console.log(\`❌ \${name}: NOT FOUND\`);
+                  hasErrors = true;
+                  return;
+                }
+                
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const major = pkg.version.split('.')[0];
+                
+                if (major === config.expected) {
+                  console.log(\`✅ \${name}: v\${pkg.version}\`);
+                } else {
+                  console.log(\`❌ \${name}: v\${pkg.version} (expected v\${config.expected}.x)\`);
+                  hasErrors = true;
+                }
+              } catch (err) {
+                console.log(\`❌ \${name}: ERROR - \${err.message}\`);
+                hasErrors = true;
+              }
+            });
+            
+            console.log('');
+            
+            try {
+              const schemaUtils = require('schema-utils');
               
-              # Create dist symlink if missing
-              if [ ! -d "node_modules/ajv/dist" ]; then
-                echo "🔗 Creating dist symlink for compatibility..."
-                cd node_modules/ajv
-                ln -sf lib dist
-                cd ../..
-              fi
-              
-              # Ensure specific paths exist
-              if [ ! -f "node_modules/ajv/dist/compile/codegen/index.js" ]; then
-                if [ -f "node_modules/ajv/lib/compile/codegen/index.js" ]; then
-                  echo "🔗 Creating codegen compatibility path..."
-                  mkdir -p node_modules/ajv/dist/compile
-                  cd node_modules/ajv/dist/compile
-                  ln -sf ../../lib/compile/codegen codegen
-                  cd ../../../..
-                fi
-              fi
-              
-              if [ ! -f "node_modules/ajv/dist/compile/context.js" ]; then
-                if [ -f "node_modules/ajv/lib/compile/context.js" ]; then
-                  echo "🔗 Creating context compatibility path..."
-                  mkdir -p node_modules/ajv/dist/compile
-                  cd node_modules/ajv/dist/compile
-                  ln -sf ../../lib/compile/context.js context.js
-                  cd ../../../..
-                fi
-              fi
-              
-            else
-              echo "⚠️  AJV lib directory not found"
-            fi
-          else
-            echo "❌ AJV package not found"
-            exit 1
-          fi
+              if (typeof schemaUtils.validate === 'function') {
+                console.log('✅ schema-utils.validate function is available');
+              } else if (typeof schemaUtils.default?.validate === 'function') {
+                console.log('✅ schema-utils.default.validate function is available');
+              } else {
+                console.log('❌ schema-utils validate function NOT FOUND');
+                console.log('Available exports:', Object.keys(schemaUtils));
+                hasErrors = true;
+              }
+            } catch (err) {
+              console.log(\`❌ schema-utils test failed: \${err.message}\`);
+              hasErrors = true;
+            }
+            
+            if (hasErrors) {
+              console.log('');
+              console.log('❌ Package verification FAILED');
+              process.exit(1);
+            }
+            
+            console.log('');
+            console.log('✅ All packages verified successfully');
+          "
+      
+      - name: 🔧 Apply Webpack Compatibility Patches
+        working-directory: ./frontend
+        run: |
+          set -euo pipefail
           
-          # Final verification
-          echo ""
-          echo "📋 AJV structure verification:"
-          echo "  ajv/lib exists: $([ -d node_modules/ajv/lib ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist exists: $([ -d node_modules/ajv/dist ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist/compile/codegen exists: $([ -f node_modules/ajv/dist/compile/codegen/index.js ] && echo 'YES' || echo 'NO')"
-          echo "  ajv/dist/compile/context exists: $([ -f node_modules/ajv/dist/compile/context.js ] && echo 'YES' || echo 'NO')"
+          echo "🔧 Applying webpack compatibility patches..."
           
-          echo ""
-          echo "✅ AJV compatibility fix complete"
-          echo ""
+          cat > patch-schema-utils.js << 'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          
+          const schemaUtilsPath = path.join('node_modules', 'schema-utils');
+          
+          if (!fs.existsSync(schemaUtilsPath)) {
+            console.log('⚠️  schema-utils not found, skipping patch');
+            process.exit(0);
+          }
+          
+          const pkgPath = path.join(schemaUtilsPath, 'package.json');
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          
+          console.log(`Found schema-utils v${pkg.version}`);
+          
+          const mainPath = path.join(schemaUtilsPath, pkg.main || 'dist/index.js');
+          
+          if (fs.existsSync(mainPath)) {
+            console.log('✅ Main entry point exists:', pkg.main || 'dist/index.js');
+          } else {
+            console.log('❌ Main entry point missing:', pkg.main || 'dist/index.js');
+            process.exit(1);
+          }
+          
+          console.log('✅ schema-utils structure validated');
+          EOF
+          
+          node patch-schema-utils.js
+          
+          echo "✅ Patches applied"
       
       - name: 🏗️ Build React Application
+        working-directory: ./frontend
         timeout-minutes: 10
         env:
           REACT_APP_API_URL: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
           REACT_APP_STAGE: prod
           REACT_APP_VERSION: ${{ github.sha }}
-          REACT_APP_BUILD_TIME: ${{ github.event.head_commit.timestamp }}
           CI: false
+          NODE_OPTIONS: "--max_old_space_size=4096"
+          SKIP_PREFLIGHT_CHECK: true
         run: |
           set -euo pipefail
-          cd frontend
           
           echo "🏗️ ============================================"
-          echo "🏗️  FRONTEND BUILD PROCESS"
+          echo "🏗️  STARTING REACT BUILD"
           echo "🏗️ ============================================"
           echo ""
           
-          # Validate API endpoint
           API_ENDPOINT="${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
           
-          if [[ -z "$API_ENDPOINT" || "$API_ENDPOINT" == "None" || "$API_ENDPOINT" == "null" ]]; then
-            echo "❌ CRITICAL: API endpoint not available"
-            echo "Received value: '$API_ENDPOINT'"
+          if [[ -z "$API_ENDPOINT" || "$API_ENDPOINT" == "None" ]]; then
+            echo "❌ Invalid API endpoint: '$API_ENDPOINT'"
             exit 1
           fi
           
-          echo "✅ API endpoint validated: $API_ENDPOINT"
-          
-          # Create environment configuration
+          echo "✅ API Endpoint: $API_ENDPOINT"
           echo ""
-          echo "📝 Creating production environment configuration..."
           
+          echo "📝 Creating .env.production..."
           cat > .env.production << EOF
           REACT_APP_API_URL=$API_ENDPOINT
           REACT_APP_STAGE=prod
@@ -905,34 +862,32 @@ jobs:
           REACT_APP_BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
           
-          echo "📋 Environment configuration:"
+          echo "Environment configuration:"
           cat .env.production
           echo ""
           
-          # Pre-build checks
-          echo "🔍 Pre-build validation..."
+          echo "🔍 Build environment:"
+          echo "  Node: $(node --version)"
+          echo "  npm: $(npm --version)"
+          echo "  Working directory: $(pwd)"
+          echo ""
           
           if [[ ! -d node_modules ]]; then
-            echo "❌ node_modules directory missing"
+            echo "❌ node_modules not found"
             exit 1
           fi
           
           if [[ ! -f package.json ]]; then
-            echo "❌ package.json missing"
-            exit 1
-          fi
-          
-          # Check if build script exists
-          if ! grep -q '"build"' package.json; then
-            echo "❌ No build script found in package.json"
+            echo "❌ package.json not found"
             exit 1
           fi
           
           echo "✅ Pre-build validation passed"
           echo ""
           
-          # Execute build
-          echo "🔨 Starting React build process..."
+          echo "🔨 Executing npm run build..."
+          echo ""
+          
           BUILD_START=$(date +%s)
           
           if npm run build 2>&1 | tee build.log; then
@@ -940,62 +895,65 @@ jobs:
             BUILD_DURATION=$((BUILD_END - BUILD_START))
             
             echo ""
-            echo "✅ Build completed in ${BUILD_DURATION}s"
+            echo "✅ ============================================"
+            echo "✅  BUILD COMPLETED SUCCESSFULLY"
+            echo "✅  Duration: ${BUILD_DURATION}s"
+            echo "✅ ============================================"
           else
-            echo ""
-            echo "❌ Build failed - checking logs..."
+            BUILD_EXIT_CODE=$?
             
-            if [[ -f build.log ]]; then
+            echo ""
+            echo "❌ ============================================"
+            echo "❌  BUILD FAILED (exit code: $BUILD_EXIT_CODE)"
+            echo "❌ ============================================"
+            echo ""
+            
+            echo "📋 Last 100 lines of build output:"
+            echo "--------------------------------------------"
+            tail -100 build.log
+            echo "--------------------------------------------"
+            echo ""
+            
+            if grep -q "validateOptions is not a function" build.log; then
+              echo "🔍 Detected: validateOptions error"
               echo ""
-              echo "Last 50 lines of build output:"
-              tail -50 build.log
+              echo "📦 Installed package versions:"
+              npm list schema-utils ajv ajv-keywords --depth=0 || true
+              echo ""
+              echo "🔍 schema-utils location:"
+              find node_modules -name "schema-utils" -type d || true
             fi
             
             exit 1
           fi
           
-          # Post-build validation
           echo ""
-          echo "🔍 Post-build validation..."
+          echo "🔍 Validating build output..."
           
           if [[ ! -d build ]]; then
-            echo "❌ build directory was not created"
+            echo "❌ Build directory not created"
             exit 1
           fi
           
           if [[ ! -f build/index.html ]]; then
-            echo "❌ build/index.html not found"
-            echo "Build directory contents:"
+            echo "❌ index.html not found in build"
             ls -la build/ || true
             exit 1
           fi
           
-          # Check for critical files
-          CRITICAL_FILES=("index.html" "static")
-          for file in "${CRITICAL_FILES[@]}"; do
-            if [[ ! -e "build/$file" ]]; then
-              echo "⚠️ Warning: build/$file not found"
-            else
-              echo "✅ Found: build/$file"
-            fi
-          done
-          
-          # Build size analysis
           echo ""
-          echo "📊 Build Analysis:"
-          echo "  Total size: $(du -sh build/ | cut -f1)"
+          echo "📊 Build Statistics:"
+          echo "  Total size: $(du -sh build | cut -f1)"
+          echo "  File count: $(find build -type f | wc -l)"
           
           if [[ -d build/static ]]; then
-            echo "  Static files: $(du -sh build/static/ | cut -f1)"
+            echo "  Static size: $(du -sh build/static | cut -f1)"
+            echo "  JS files: $(find build/static -name "*.js" | wc -l)"
+            echo "  CSS files: $(find build/static -name "*.css" | wc -l)"
           fi
           
-          FILE_COUNT=$(find build -type f | wc -l)
-          echo "  File count: $FILE_COUNT files"
-          
           echo ""
-          echo "✅ ============================================"
-          echo "✅  BUILD VALIDATION COMPLETE"
-          echo "✅ ============================================"
+          echo "✅ Build validation complete"
       
       - name: 🚀 Deploy to S3 with enhanced reliability
         timeout-minutes: 10
@@ -1012,7 +970,6 @@ jobs:
           echo "📍 Region: ${{ env.AWS_DEFAULT_REGION }}"
           echo ""
           
-          # Check if bucket exists
           echo "🔍 Checking if bucket exists..."
           
           if aws s3api head-bucket --bucket "$FRONTEND_BUCKET" 2>/dev/null; then
@@ -1020,7 +977,6 @@ jobs:
           else
             echo "🆕 Creating S3 bucket: $FRONTEND_BUCKET"
             
-            # Create bucket with region-specific configuration
             if [[ "${{ env.AWS_DEFAULT_REGION }}" == "us-east-1" ]]; then
               if aws s3api create-bucket --bucket "$FRONTEND_BUCKET"; then
                 echo "✅ Bucket created in us-east-1"
@@ -1039,12 +995,10 @@ jobs:
               fi
             fi
             
-            # Wait for bucket to be available
             echo "⏳ Waiting for bucket to be available..."
             sleep 5
           fi
           
-          # Upload static assets (JS, CSS, images) with long-term caching
           echo ""
           echo "📤 Uploading static assets with cache optimization..."
           
@@ -1066,7 +1020,6 @@ jobs:
             exit 1
           fi
           
-          # Upload HTML and dynamic files with no-cache
           echo ""
           echo "📤 Uploading HTML and dynamic files with no-cache..."
           
@@ -1089,7 +1042,6 @@ jobs:
             exit 1
           fi
           
-          # Configure static website hosting
           echo ""
           echo "🌐 Configuring static website hosting..."
           
@@ -1105,7 +1057,6 @@ jobs:
             exit 1
           fi
           
-          # Configure CORS (if needed for API calls)
           echo ""
           echo "🔗 Configuring CORS..."
           
@@ -1120,7 +1071,6 @@ jobs:
               }]
             }' 2>/dev/null || echo "⚠️ CORS configuration skipped"
           
-          # Set bucket policy for public read access
           echo ""
           echo "🔓 Configuring public access policy..."
           
@@ -1142,7 +1092,6 @@ jobs:
             exit 1
           fi
           
-          # Disable block public access
           echo ""
           echo "🔓 Disabling block public access settings..."
           
@@ -1156,14 +1105,12 @@ jobs:
             exit 1
           fi
           
-          # Generate website URL
           WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
           
-          # Verify deployment
           echo ""
           echo "🔍 Verifying deployment..."
           
-          sleep 5  # Wait for S3 to propagate
+          sleep 5
           
           if curl -sf "$WEBSITE_URL" >/dev/null 2>&1; then
             echo "✅ Website is accessible"
@@ -1171,7 +1118,6 @@ jobs:
             echo "⚠️ Website may need a few moments to propagate"
           fi
           
-          # List uploaded files
           echo ""
           echo "📋 Uploaded files summary:"
           FILE_COUNT=$(aws s3 ls "s3://$FRONTEND_BUCKET" --recursive | wc -l)
@@ -1208,11 +1154,9 @@ jobs:
             if curl -sf -o /tmp/index.html "$WEBSITE_URL" 2>/dev/null; then
               echo "✅ Frontend is accessible!"
               
-              # Verify it's HTML content
               if grep -q "<!DOCTYPE html>" /tmp/index.html || grep -q "<html" /tmp/index.html; then
                 echo "✅ Valid HTML content detected"
                 
-                # Check for React app
                 if grep -q "root" /tmp/index.html; then
                   echo "✅ React root element found"
                 fi
@@ -1258,18 +1202,16 @@ jobs:
           echo "API Endpoint: $API_ENDPOINT"
           echo "======================================"
           
-          # Test 1: Health Check with retry
           echo ""
           echo "🏥 Test 1: API Health Check"
           RETRY_COUNT=0
-          MAX_RETRIES=24  # 4 minutes max
+          MAX_RETRIES=24
           RETRY_DELAY=10
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             if curl -sf "${API_ENDPOINT}/health" -o health_response.txt 2>/dev/null; then
               echo "✅ Health check passed (attempt $((RETRY_COUNT + 1)))"
               
-              # Validate JSON response
               if python3 -m json.tool < health_response.txt >/dev/null 2>&1; then
                 echo "✅ Valid JSON response"
                 cat health_response.txt | python3 -m json.tool
@@ -1289,7 +1231,6 @@ jobs:
             fi
           done
           
-          # Test 2: API Gateway Connectivity
           echo ""
           echo "🌐 Test 2: API Gateway Status"
           if curl -I "${API_ENDPOINT}/health" 2>/dev/null | head -1; then
@@ -1298,7 +1239,6 @@ jobs:
             echo "⚠️ API Gateway check inconclusive"
           fi
           
-          # Test 3: Frontend Accessibility
           echo ""
           echo "🌐 Test 3: Frontend Website"
           FRONTEND_URL="http://${{ env.STACK_NAME }}-frontend.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
@@ -1358,7 +1298,6 @@ jobs:
           echo ""
           echo "🎯 Deployment Status:"
           
-          # Check all job statuses
           CLEANUP_STATUS="${{ needs.cleanup-and-deploy.result }}"
           DB_STATUS="${{ needs.initialize-database.result }}"
           FRONTEND_STATUS="${{ needs.deploy-frontend.result }}"

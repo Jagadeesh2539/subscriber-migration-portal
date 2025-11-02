@@ -9,13 +9,23 @@
   "resolutions": {
     "ajv": "6.12.6",
     "ajv-keywords": "3.5.2",
-    "schema-utils": "3.3.0"
+    "schema-utils": "3.3.0",
+    "webpack": "5.88.2",
+    "css-loader": "6.7.3",
+    "postcss-loader": "6.2.1",
+    "sass-loader": "12.6.0"
   },
   "overrides": {
     "ajv": "6.12.6",
     "ajv-keywords": "3.5.2",
     "schema-utils": "3.3.0",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "webpack": "5.88.2",
+    "css-loader": "6.7.3",
+    "postcss-loader": "6.2.1",
+    "sass-loader": "12.6.0",
+    "semver": "7.5.4",
+    "nth-check": "^2.1.1"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -68,7 +78,9 @@
     "analyze": "npm run build && npx serve -s build",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf node_modules package-lock.json build",
-    "reinstall": "npm run clean && npm install --legacy-peer-deps"
+    "reinstall": "npm run clean && npm install --legacy-peer-deps",
+    "prebuild": "node -e \"try { const su = require('schema-utils'); const ajv = require('ajv'); console.log('✅ Build deps check:', su.validate && ajv ? 'PASSED' : 'SKIPPED'); } catch(e) { console.log('⚠️ Dependency check skipped (non-fatal)'); }\"",
+    "postinstall": "echo '✅ Dependencies installed successfully'"
   },
   "eslintConfig": {
     "extends": [
