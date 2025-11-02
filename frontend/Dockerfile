@@ -22,7 +22,7 @@ COPY package.json ./
 RUN yarn set version 3.6.4 && \
     yarn config set nodeLinker node-modules
 
-# Install dependencies
+# Install dependencies including TypeScript
 RUN yarn install --no-immutable --no-immutable-cache
 
 # Force resolve critical ajv versions
