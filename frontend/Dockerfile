@@ -16,15 +16,21 @@ RUN apk add --no-cache \
 # Enable corepack for Yarn
 RUN corepack enable
 
-# Copy package files and Yarn configuration
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn/ .yarn/
+# Copy package files
+COPY package.json ./
 
-# Install dependencies with Yarn (deterministic)
-RUN yarn install --immutable --immutable-cache --check-cache
+# Install Yarn globally and set up project
+RUN yarn set version 3.6.4 && \
+    yarn config set nodeLinker node-modules
+
+# Install dependencies with resolutions
+RUN yarn install --no-immutable --no-immutable-cache
 
 # Copy application source code
 COPY . .
+
+# Force resolve ajv versions (critical fix)
+RUN yarn add ajv@6.12.6 ajv-keywords@3.5.2 --exact
 
 # Build arguments (set by CI/CD pipeline)
 ARG API_ENDPOINT=https://bhgplw8pyk.execute-api.us-east-1.amazonaws.com/prod
