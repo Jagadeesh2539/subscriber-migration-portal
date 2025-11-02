@@ -212,7 +212,7 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          
+      
       - name: Install Tools
         run: pip install aws-sam-cli boto3 jq
 
@@ -631,174 +631,93 @@ jobs:
           fi
 
   deploy-frontend:
-    name: 🌐 Deploy Frontend - Conservative Stack
-    runs-on: ubuntu-latest
+    name: 🐳 Deploy Frontend with Docker
+    runs-on: ubuntu-22.04
     needs: [cleanup-and-deploy, initialize-database]
-    timeout-minutes: 20
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: aws-actions/configure-aws-credentials@v4
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 🔧 Install Required Tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq curl
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_DEFAULT_REGION }}
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      
-      - name: 🧹 Complete Cleanup
-        working-directory: ./frontend
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🔍 Calculate build metadata
+        id: metadata
         run: |
-          set -euo pipefail
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          echo "commit_short=$COMMIT_SHORT" >> $GITHUB_OUTPUT
           
-          echo "🧹 Performing complete cleanup..."
+          BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          echo "build_time=$BUILD_TIME" >> $GITHUB_OUTPUT
           
-          rm -rf node_modules build .npm package-lock.json .env.production
-          npm cache clean --force
+          VERSION="v$(date -u +%Y%m%d)-${COMMIT_SHORT}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           
-          echo "✅ Cleanup complete"
-      
-      - name: 🚨 MANUAL WEBPACK PLUGIN REPLACEMENT
-        working-directory: ./frontend
-        timeout-minutes: 10
+          echo "🚀 Build metadata:"
+          echo "   Commit: ${COMMIT_SHORT}"
+          echo "   Version: ${VERSION}"
+          echo "   Time: ${BUILD_TIME}"
+
+      - name: 🏗️ Build React application with Docker
+        working-directory: frontend
         run: |
-          set -euo pipefail
+          echo "🐳 Starting Docker build..."
+          echo "   API Endpoint: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
+          echo "   Build Version: ${{ steps.metadata.outputs.version }}"
+          echo "   Build Time: ${{ steps.metadata.outputs.build_time }}"
           
-          echo "🚨 MANUALLY PATCHING WEBPACK PLUGINS..."
+          docker build \
+            --target artifact \
+            --output build/ \
+            --build-arg API_ENDPOINT=${{ needs.cleanup-and-deploy.outputs.api-endpoint }} \
+            --build-arg BUILD_VERSION=${{ steps.metadata.outputs.version }} \
+            --build-arg BUILD_TIME="${{ steps.metadata.outputs.build_time }}" \
+            -f Dockerfile \
+            .
           
-          # Complete nuclear cleanup
-          rm -rf node_modules package-lock.json build .npm .env.production
-          npm cache clean --force
+          echo "✅ Docker build completed successfully"
+          echo "📦 Build statistics:"
+          du -sh build/
+          echo "   Files in build directory:"
+          find build -type f | sed 's/^/   • /' | head -15
           
-          # Install base dependencies  
-          npm install --legacy-peer-deps
-          
-          echo "🔧 MANUALLY REPLACING PROBLEMATIC WEBPACK PLUGINS..."
-          
-          # Find and replace the problematic terser-webpack-plugin code
-          TERSER_FILE="node_modules/terser-webpack-plugin/dist/index.js"
-          if [ -f "$TERSER_FILE" ]; then
-            echo "📝 Patching terser-webpack-plugin..."
-            
-            # Backup original
-            cp "$TERSER_FILE" "$TERSER_FILE.backup"
-            
-            # Replace the problematic validation call with a no-op
-            sed -i 's/(0, _schemaUtils\.validate)(_options\.default, options, {/\/\* schema validation disabled \*\/ true \&\& false \&\& (0, _schemaUtils.validate)(_options.default, options, {/g' "$TERSER_FILE"
-            
-            echo "✅ Patched terser-webpack-plugin"
-          fi
-          
-          # Do the same for other problematic plugins
-          MINI_CSS_FILE="node_modules/mini-css-extract-plugin/dist/index.js"
-          if [ -f "$MINI_CSS_FILE" ]; then
-            echo "📝 Patching mini-css-extract-plugin..."
-            
-            cp "$MINI_CSS_FILE" "$MINI_CSS_FILE.backup"
-            sed -i 's/(0, _schemaUtils\.default)(_pluginOptions\.default, options/\/\* schema validation disabled \*\/ true \&\& false \&\& (0, _schemaUtils.default)(_pluginOptions.default, options/g' "$MINI_CSS_FILE"
-            
-            echo "✅ Patched mini-css-extract-plugin"
-          fi
-          
-          FORK_TS_FILE="node_modules/fork-ts-checker-webpack-plugin/lib/ForkTsCheckerWebpackPlugin.js"
-          if [ -f "$FORK_TS_FILE" ]; then
-            echo "📝 Patching fork-ts-checker-webpack-plugin..."
-            
-            cp "$FORK_TS_FILE" "$FORK_TS_FILE.backup"
-            sed -i 's/schema_utils_1\.default(ForkTsCheckerWebpackPluginOptions_json_1\.default, options/\/\* schema validation disabled \*\/ true \&\& false \&\& schema_utils_1.default(ForkTsCheckerWebpackPluginOptions_json_1.default, options/g' "$FORK_TS_FILE"
-            
-            echo "✅ Patched fork-ts-checker-webpack-plugin"
-          fi
-          
-          echo "🎯 ALL WEBPACK PLUGINS MANUALLY PATCHED!"
-          echo "✅ BRUTAL FIX COMPLETE - READY TO BUILD!"
-      
-      - name: 🏗️ Build React Application
-        working-directory: ./frontend
-        timeout-minutes: 10
-        env:
-          REACT_APP_API_URL: ${{ needs.cleanup-and-deploy.outputs.api-endpoint }}
-          REACT_APP_STAGE: prod
-          REACT_APP_VERSION: ${{ github.sha }}
-          CI: false
-          NODE_OPTIONS: "--max_old_space_size=4096"
-          SKIP_PREFLIGHT_CHECK: true
-        run: |
-          set -euo pipefail
-          
-          echo "🏗️ ============================================"
-          echo "🏗️  BUILDING REACT APPLICATION"
-          echo "🏗️ ============================================"
-          echo ""
-          
-          API_ENDPOINT="${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
-          
-          echo "✅ API Endpoint: $API_ENDPOINT"
-          
-          cat > .env.production << EOF
-          REACT_APP_API_URL=$API_ENDPOINT
-          REACT_APP_STAGE=prod
-          REACT_APP_VERSION=$(date +%Y%m%d-%H%M%S)
-          REACT_APP_BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          EOF
-          
-          echo "📝 Environment:"
-          cat .env.production
-          echo ""
-          
-          echo "🔨 Building..."
-          BUILD_START=$(date +%s)
-          
-          if npm run build 2>&1 | tee build.log; then
-            BUILD_END=$(date +%s)
-            BUILD_DURATION=$((BUILD_END - BUILD_START))
-            
-            echo ""
-            echo "✅ ============================================"
-            echo "✅  BUILD COMPLETED IN ${BUILD_DURATION}s"
-            echo "✅ ============================================"
-          else
-            echo ""
-            echo "❌ Build failed:"
-            echo "--------------------------------------------"
-            tail -100 build.log
-            echo "--------------------------------------------"
-            
-            echo ""
-            echo "🔍 Installed webpack plugin versions:"
-            npm list schema-utils fork-ts-checker-webpack-plugin terser-webpack-plugin --depth=0 || true
-            
+          if [ ! -f build/index.html ]; then
+            echo "❌ CRITICAL FAILURE: build/index.html not found"
             exit 1
           fi
           
-          if [[ ! -f build/index.html ]]; then
-            echo "❌ Build output missing"
+          MAIN_JS=$(find build/static/js -name "main.*.js" 2>/dev/null | head -1)
+          if [ -z "$MAIN_JS" ] || [ ! -f "$MAIN_JS" ]; then
+            echo "❌ CRITICAL FAILURE: Main JavaScript bundle not found"
+            ls -la build/static/js/ 2>/dev/null || echo "Directory not found"
             exit 1
           fi
           
-          echo ""
-          echo "📊 Build Statistics:"
-          echo "  Total size: $(du -sh build | cut -f1)"
-          echo "  File count: $(find build -type f | wc -l)"
-          
-          if [[ -d build/static ]]; then
-            echo "  Static size: $(du -sh build/static | cut -f1)"
-            echo "  JS files: $(find build/static -name "*.js" | wc -l)"
-            echo "  CSS files: $(find build/static -name "*.css" | wc -l)"
-          fi
-          
-          echo ""
-          echo "✅ Build validation complete"
-      
-      
+          echo "✅ All critical files present"
+
       - name: 🚀 Deploy to S3
         timeout-minutes: 10
+        env:
+          FRONTEND_BUCKET: ${{ env.STACK_NAME }}-frontend
         run: |
           set -euo pipefail
-          FRONTEND_BUCKET="${{ env.STACK_NAME }}-frontend"
           
           echo "🚀 ============================================"
           echo "🚀  S3 FRONTEND DEPLOYMENT"
@@ -825,73 +744,70 @@ jobs:
             fi
             
             sleep 5
+            
+            echo "🌐 Enabling static website hosting..."
+            aws s3api put-bucket-website \
+              --bucket "$FRONTEND_BUCKET" \
+              --website-configuration '{
+                "IndexDocument": {"Suffix": "index.html"},
+                "ErrorDocument": {"Key": "index.html"}
+              }'
+            
+            echo "🔒 Applying bucket policy..."
+            cat > bucket-policy.json << EOF
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "PublicReadGetObject",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::$FRONTEND_BUCKET/*"
+            }]
+          }
+          EOF
+            aws s3api put-bucket-policy \
+              --bucket "$FRONTEND_BUCKET" \
+              --policy file://bucket-policy.json
+            
+            echo "🔓 Configuring public access..."
+            aws s3api put-public-access-block \
+              --bucket "$FRONTEND_BUCKET" \
+              --public-access-block-configuration \
+              "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
           fi
           
           echo ""
-          echo "📤 Uploading static assets..."
+          echo "📤 Uploading optimized static assets..."
           
-          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET" \
+          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
             --delete \
             --cache-control "public,max-age=31536000,immutable" \
             --exclude "*.html" \
-            --exclude "service-worker.js" \
-            --exclude "asset-manifest.json" \
-            --exclude "manifest.json" \
-            --exclude "robots.txt"
+            --exclude "*.json" \
+            --exclude "*.txt" \
+            --exclude "service-worker.js"
           
-          echo ""
-          echo "📤 Uploading HTML files..."
-          
-          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET" \
+          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
             --exclude "*" \
-            --include "*.html" \
+            --include "*.json" \
+            --include "*.txt" \
             --include "service-worker.js" \
-            --include "asset-manifest.json" \
-            --include "manifest.json" \
-            --include "robots.txt" \
-            --cache-control "no-cache,no-store,must-revalidate" \
+            --cache-control "public,max-age=86400" \
             --metadata-directive REPLACE
           
-          echo ""
-          echo "🌐 Configuring static website hosting..."
-          
-          aws s3api put-bucket-website \
-            --bucket "$FRONTEND_BUCKET" \
-            --website-configuration '{
-              "IndexDocument": {"Suffix": "index.html"},
-              "ErrorDocument": {"Key": "index.html"}
-            }'
-          
-          echo ""
-          echo "🔓 Configuring public access..."
-          
-          aws s3api put-public-access-block \
-            --bucket "$FRONTEND_BUCKET" \
-            --public-access-block-configuration \
-            "BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false"
-          
-          aws s3api put-bucket-policy \
-            --bucket "$FRONTEND_BUCKET" \
-            --policy '{
-              "Version": "2012-10-17",
-              "Statement": [{
-                "Sid": "PublicReadGetObject",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::'$FRONTEND_BUCKET'/*"
-              }]
-            }'
-          
-          WEBSITE_URL="http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
+          aws s3 sync frontend/build/ "s3://$FRONTEND_BUCKET/" \
+            --exclude "*" \
+            --include "*.html" \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --metadata-directive REPLACE
           
           echo ""
           echo "✅ ============================================"
           echo "✅  FRONTEND DEPLOYMENT COMPLETE"
           echo "✅ ============================================"
           echo ""
-          echo "🌐 Website URL: $WEBSITE_URL"
-          echo ""
+          echo "🌐 Website URL: http://$FRONTEND_BUCKET.s3-website-${{ env.AWS_DEFAULT_REGION }}.amazonaws.com"
 
       - name: 🧪 Post-Deployment Validation
         timeout-minutes: 5
