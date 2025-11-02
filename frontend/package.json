@@ -14,8 +14,8 @@
     "css-loader": "6.7.3",
     "postcss-loader": "6.2.1",
     "sass-loader": "12.6.0",
-    "fork-ts-checker-webpack-plugin": "7.3.0",
-    "terser-webpack-plugin": "5.3.9"
+    "fork-ts-checker-webpack-plugin": "6.5.3",
+    "terser-webpack-plugin": "4.2.3"
   },
   "overrides": {
     "ajv": "6.12.6",
@@ -28,8 +28,8 @@
     "sass-loader": "12.6.0",
     "semver": "7.5.4",
     "nth-check": "^2.1.1",
-    "fork-ts-checker-webpack-plugin": "7.3.0",
-    "terser-webpack-plugin": "5.3.9"
+    "fork-ts-checker-webpack-plugin": "6.5.3",
+    "terser-webpack-plugin": "4.2.3"
   },
   "dependencies": {
     "react": "^18.3.1",
