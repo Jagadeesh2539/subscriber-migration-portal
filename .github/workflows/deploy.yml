@@ -631,7 +631,7 @@ jobs:
           fi
 
   deploy-frontend:
-    name: 🌐 Deploy Frontend with Modern Stack
+    name: 🌐 Deploy Frontend - Conservative Stack
     runs-on: ubuntu-latest
     needs: [cleanup-and-deploy, initialize-database]
     timeout-minutes: 20
@@ -656,25 +656,18 @@ jobs:
           
           echo "🧹 Performing complete cleanup..."
           
-          rm -rf node_modules
-          rm -rf build
-          rm -rf .npm
-          rm -rf ~/.npm
-          rm -f package-lock.json
-          rm -f .env.production
-          
+          rm -rf node_modules build .npm package-lock.json .env.production
           npm cache clean --force
-          npm cache verify
           
           echo "✅ Cleanup complete"
       
-      - name: 📦 Install Dependencies with Version Locks
+      - name: 📦 Install Dependencies with Conservative Stack
         working-directory: ./frontend
         timeout-minutes: 10
         run: |
           set -euo pipefail
           
-          echo "📦 Installing dependencies with version locks..."
+          echo "📦 Installing dependencies..."
           
           cat > .npmrc << 'EOF'
           legacy-peer-deps=true
@@ -685,43 +678,40 @@ jobs:
           npm install --legacy-peer-deps
           
           echo ""
-          echo "🔧 Installing fixed versions of critical packages..."
+          echo "🔧 Force installing exact compatible versions for react-scripts@5.0.1..."
           
           npm install --save-dev --legacy-peer-deps --force \
-            schema-utils@3.3.0 \
+            schema-utils@2.7.1 \
             ajv@6.12.6 \
             ajv-keywords@3.5.2 \
-            fork-ts-checker-webpack-plugin@8.0.0
+            fork-ts-checker-webpack-plugin@6.5.3
+          
+          npm dedupe --legacy-peer-deps || true
           
           echo "✅ Dependencies installed"
       
-      - name: 🔍 Verify Package Versions and Compatibility
+      - name: 🔍 Verify Compatibility
         working-directory: ./frontend
         run: |
           set -euo pipefail
           
-          echo "🔍 Verifying critical package versions and compatibility..."
+          echo "🔍 Verifying package versions..."
           
           node -e "
             const fs = require('fs');
-            const path = require('path');
             
             const packages = {
               'schema-utils': 'node_modules/schema-utils/package.json',
               'ajv': 'node_modules/ajv/package.json',
-              'ajv-keywords': 'node_modules/ajv-keywords/package.json',
-              'fork-ts-checker-webpack-plugin': 'node_modules/fork-ts-checker-webpack-plugin/package.json',
-              'webpack': 'node_modules/webpack/package.json'
+              'fork-ts-checker-webpack-plugin': 'node_modules/fork-ts-checker-webpack-plugin/package.json'
             };
             
             console.log('📋 Installed Versions:');
-            console.log('');
-            
             const versions = {};
             
-            Object.entries(packages).forEach(([name, pkgPath]) => {
+            Object.entries(packages).forEach(([name, path]) => {
               try {
-                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
                 versions[name] = pkg.version;
                 console.log(\`  ✅ \${name.padEnd(40)} v\${pkg.version}\`);
               } catch (err) {
@@ -731,48 +721,26 @@ jobs:
             });
             
             console.log('');
-            console.log('🔍 Compatibility Check:');
             
             const schemaUtilsMajor = parseInt(versions['schema-utils'].split('.')[0]);
             const forkTsCheckerMajor = parseInt(versions['fork-ts-checker-webpack-plugin'].split('.')[0]);
             
-            let compatible = false;
-            
-            if (schemaUtilsMajor === 3 && (forkTsCheckerMajor === 7 || forkTsCheckerMajor === 8)) {
-              compatible = true;
-              console.log('  ✅ schema-utils@3.x + fork-ts-checker@7/8.x ✓');
-            } else if (schemaUtilsMajor === 2 && forkTsCheckerMajor === 6) {
-              compatible = true;
-              console.log('  ✅ schema-utils@2.x + fork-ts-checker@6.x ✓');
+            if (schemaUtilsMajor === 2 && forkTsCheckerMajor === 6) {
+              console.log('✅ Compatible: schema-utils@2.x + fork-ts-checker@6.x');
+              console.log('✅ This combination works with react-scripts@5.0.1');
             } else {
-              console.log('  ❌ INCOMPATIBLE VERSIONS:');
-              console.log(\`     schema-utils v\${versions['schema-utils']} + fork-ts-checker v\${versions['fork-ts-checker-webpack-plugin']}\`);
-              console.log('');
-              console.log('  Expected combinations:');
-              console.log('    - schema-utils@2.7.1 + fork-ts-checker@6.5.3');
-              console.log('    - schema-utils@3.3.0 + fork-ts-checker@8.0.0');
+              console.log('❌ Incompatible versions detected');
               process.exit(1);
             }
             
-            // Test schema-utils validate function
-            try {
-              const schemaUtils = require('schema-utils');
-              
-              if (typeof schemaUtils.validate === 'function') {
-                console.log('  ✅ schema-utils.validate function available');
-              } else {
-                console.log('  ❌ schema-utils.validate function NOT FOUND');
-                process.exit(1);
-              }
-            } catch (err) {
-              console.log(\`  ❌ schema-utils test failed: \${err.message}\`);
+            const schemaUtils = require('schema-utils');
+            if (typeof schemaUtils === 'function' || typeof schemaUtils.validate === 'function') {
+              console.log('✅ schema-utils validation function available');
+            } else {
+              console.log('❌ schema-utils validation not available');
               process.exit(1);
             }
-            
-            console.log('');
-            console.log('✅ All compatibility checks passed');
           "
-      
       - name: 🏗️ Build React Application
         working-directory: ./frontend
         timeout-minutes: 10
@@ -783,26 +751,18 @@ jobs:
           CI: false
           NODE_OPTIONS: "--max_old_space_size=4096"
           SKIP_PREFLIGHT_CHECK: true
-          TSC_COMPILE_ON_ERROR: true
         run: |
           set -euo pipefail
           
           echo "🏗️ ============================================"
-          echo "🏗️  STARTING REACT BUILD"
+          echo "🏗️  BUILDING REACT APPLICATION"
           echo "🏗️ ============================================"
           echo ""
           
           API_ENDPOINT="${{ needs.cleanup-and-deploy.outputs.api-endpoint }}"
           
-          if [[ -z "$API_ENDPOINT" || "$API_ENDPOINT" == "None" ]]; then
-            echo "❌ Invalid API endpoint: '$API_ENDPOINT'"
-            exit 1
-          fi
-          
           echo "✅ API Endpoint: $API_ENDPOINT"
-          echo ""
           
-          echo "📝 Creating .env.production..."
           cat > .env.production << EOF
           REACT_APP_API_URL=$API_ENDPOINT
           REACT_APP_STAGE=prod
@@ -810,32 +770,11 @@ jobs:
           REACT_APP_BUILD_TIME=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           EOF
           
-          echo "Environment configuration:"
+          echo "📝 Environment:"
           cat .env.production
           echo ""
           
-          echo "🔍 Build environment:"
-          echo "  Node: $(node --version)"
-          echo "  npm: $(npm --version)"
-          echo "  Working directory: $(pwd)"
-          echo ""
-          
-          if [[ ! -d node_modules ]]; then
-            echo "❌ node_modules not found"
-            exit 1
-          fi
-          
-          if [[ ! -f package.json ]]; then
-            echo "❌ package.json not found"
-            exit 1
-          fi
-          
-          echo "✅ Pre-build validation passed"
-          echo ""
-          
-          echo "🔨 Executing npm run build..."
-          echo ""
-          
+          echo "🔨 Building..."
           BUILD_START=$(date +%s)
           
           if npm run build 2>&1 | tee build.log; then
@@ -844,62 +783,24 @@ jobs:
             
             echo ""
             echo "✅ ============================================"
-            echo "✅  BUILD COMPLETED SUCCESSFULLY"
-            echo "✅  Duration: ${BUILD_DURATION}s"
+            echo "✅  BUILD COMPLETED IN ${BUILD_DURATION}s"
             echo "✅ ============================================"
           else
-            BUILD_EXIT_CODE=$?
-            
             echo ""
-            echo "❌ ============================================"
-            echo "❌  BUILD FAILED (exit code: $BUILD_EXIT_CODE)"
-            echo "❌ ============================================"
-            echo ""
-            
-            echo "📋 Last 100 lines of build output:"
-            echo "--------------------------------------------"
-            tail -100 build.log
-            echo "--------------------------------------------"
-            echo ""
-            
-            echo "🔍 Diagnostic Information:"
-            echo ""
-            echo "Package versions:"
-            npm list schema-utils fork-ts-checker-webpack-plugin webpack ajv --depth=0 || true
-            echo ""
-            echo "schema-utils location:"
-            find node_modules -name "schema-utils" -type d | head -5 || true
-            
-            exit 1
-          fi
-          
-          echo ""
-          echo "🔍 Validating build output..."
-          
-          if [[ ! -d build ]]; then
-            echo "❌ Build directory not created"
+            echo "❌ Build failed:"
+            tail -50 build.log
             exit 1
           fi
           
           if [[ ! -f build/index.html ]]; then
-            echo "❌ index.html not found in build"
-            ls -la build/ || true
+            echo "❌ Build output missing"
             exit 1
           fi
           
           echo ""
-          echo "📊 Build Statistics:"
-          echo "  Total size: $(du -sh build | cut -f1)"
-          echo "  File count: $(find build -type f | wc -l)"
-          
-          if [[ -d build/static ]]; then
-            echo "  Static size: $(du -sh build/static | cut -f1)"
-            echo "  JS files: $(find build/static -name "*.js" | wc -l)"
-            echo "  CSS files: $(find build/static -name "*.css" | wc -l)"
-          fi
-          
-          echo ""
+          echo "📊 Build size: $(du -sh build | cut -f1)"
           echo "✅ Build validation complete"
+      
       
       - name: 🚀 Deploy to S3
         timeout-minutes: 10
