@@ -69,9 +69,10 @@ Globals:
   Api:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
-      AllowOrigin: !Sub "'${CorsOrigins}'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+      AllowOrigin: "'*'"
       MaxAge: "'600'"
+      AllowCredentials: false
     Auth:
       Authorizers:
         JwtAuthorizer:
@@ -845,8 +846,6 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
-      Layers:
-        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -876,8 +875,6 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
-      Layers:
-        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -907,8 +904,6 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
-      Layers:
-        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -938,8 +933,6 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
-      Layers:
-        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
