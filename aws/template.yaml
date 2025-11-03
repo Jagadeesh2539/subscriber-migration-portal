@@ -8,18 +8,23 @@ Parameters:
     Default: 'prod'
     AllowedValues: ['dev', 'test', 'prod']
     Description: 'Deployment stage'
+
   CorsOrigins:
     Type: String
-    Default: 'http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com'
-    Description: 'Allowed CORS origins'
+    # CRITICAL: Value must include single quotes as part of the literal string
+    Default: "'http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com'"
+    Description: "Allowed CORS origins (literal with inner single quotes)"
+
   JwtSecret:
     Type: String
     NoEcho: true
     Description: 'JWT secret for authentication'
+
   BucketSuffix:
     Type: String
     Default: '20251031'
     Description: 'Unique suffix for resource naming'
+
   DbInstanceClass:
     Type: String
     Default: 'db.t3.micro'
@@ -29,32 +34,39 @@ Parameters:
       - 'db.t3.small'
       - 'db.t3.medium'
     Description: 'RDS instance class'
+
   DbAllocatedStorage:
     Type: Number
     Default: 20
+
   VpcId:
     Type: String
     Description: 'Existing VPC ID to use'
     Default: 'vpc-0123456789abcdef0'
+
   PrivateSubnetId1:
     Type: String
     Description: 'First private subnet ID'
     Default: 'subnet-0123456789abcdef0'
+
   PrivateSubnetId2:
     Type: String
     Description: 'Second private subnet ID'
     Default: 'subnet-0123456789abcdef1'
+
   PublicSubnetId1:
     Type: String
     Description: 'First public subnet ID (optional)'
     Default: ''
+
   PublicSubnetId2:
     Type: String
     Description: 'Second public subnet ID (optional)'
     Default: ''
+
   DeploymentHash:
     Type: String
-    Default: '20251103-ultimate-cors-fix'
+    Default: '20251103-final-cors-fix'
     Description: 'Deployment hash to force redeploys'
 
 Globals:
@@ -70,14 +82,17 @@ Globals:
     Tags:
       Project: 'SubscriberMigrationPortal'
       Environment: !Ref Stage
+
   Api:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
-      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-      AllowOrigin: !Sub "'${CorsOrigins}'"
+      AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+      # CRITICAL FIX: Use direct !Ref to pre-quoted parameter
+      AllowOrigin: !Ref CorsOrigins
       MaxAge: "'600'"
       AllowCredentials: true
     Auth:
+      DefaultAuthorizer: JwtAuthorizer
       Authorizers:
         JwtAuthorizer:
           FunctionArn: !GetAtt AuthorizerFunction.Arn
@@ -372,43 +387,31 @@ Resources:
           Properties:
             Path: /subscribers
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
         CreateSubscriber:
           Type: Api
           Properties:
             Path: /subscribers
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         GetSubscriber:
           Type: Api
           Properties:
             Path: /subscribers/{id}
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
         UpdateSubscriber:
           Type: Api
           Properties:
             Path: /subscribers/{id}
             Method: PUT
-            Auth:
-              Authorizer: JwtAuthorizer
         DeleteSubscriber:
           Type: Api
           Properties:
             Path: /subscribers/{id}
             Method: DELETE
-            Auth:
-              Authorizer: JwtAuthorizer
         SearchSubscribers:
           Type: Api
           Properties:
             Path: /subscribers/search
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
 
   OrchestratorFunction:
     Type: AWS::Serverless::Function
@@ -438,50 +441,36 @@ Resources:
           Properties:
             Path: /migration/upload
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         CreateMigrationJob:
           Type: Api
           Properties:
             Path: /migration/jobs
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         CreateAuditJob:
           Type: Api
           Properties:
             Path: /audit/jobs
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         CreateExportJob:
           Type: Api
           Properties:
             Path: /export/jobs
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         GetJobStatus:
           Type: Api
           Properties:
             Path: /jobs/{id}
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
         CancelJob:
           Type: Api
           Properties:
             Path: /jobs/{id}/cancel
             Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
         ListJobs:
           Type: Api
           Properties:
             Path: /jobs
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -605,15 +594,11 @@ Resources:
           Properties:
             Path: /settings/provisioning-mode
             Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
         PutMode:
           Type: Api
           Properties:
             Path: /settings/provisioning-mode
             Method: PUT
-            Auth:
-              Authorizer: JwtAuthorizer
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -1103,101 +1088,123 @@ Outputs:
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}'
     Export:
       Name: !Sub '${AWS::StackName}-api-endpoint'
+
   UploadsBucketName:
     Description: 'S3 uploads bucket name'
     Value: !Ref UploadsBucket
     Export:
       Name: !Sub '${AWS::StackName}-uploads-bucket'
+
   MigrationJobsTableName:
     Description: 'Migration jobs DynamoDB table'
     Value: !Ref MigrationJobsTable
     Export:
       Name: !Sub '${AWS::StackName}-jobs-table'
+
   SubscribersTableName:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
       Name: !Sub '${AWS::StackName}-subscribers-table'
+
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
       Name: !Sub '${AWS::StackName}-settings-table'
+
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
     Value: !Ref MigrationWorkflow
     Export:
       Name: !Sub '${AWS::StackName}-migration-workflow-arn'
+
   AuditWorkflowArn:
     Description: 'Audit workflow state machine ARN'
     Value: !Ref AuditWorkflow
     Export:
       Name: !Sub '${AWS::StackName}-audit-workflow-arn'
+
   ExportWorkflowArn:
     Description: 'Export workflow state machine ARN'
     Value: !Ref ExportWorkflow
     Export:
       Name: !Sub '${AWS::StackName}-export-workflow-arn'
+
   LegacyDbSecretArn:
     Description: 'RDS MySQL credentials secret ARN'
     Value: !Ref LegacyDbSecret
     Export:
       Name: !Sub '${AWS::StackName}-db-secret-arn'
+
   LegacyDbHost:
     Description: 'RDS MySQL endpoint'
     Value: !GetAtt LegacyDb.Endpoint.Address
     Export:
       Name: !Sub '${AWS::StackName}-db-host'
+
   LegacyDbPort:
     Description: 'RDS MySQL port'
     Value: !GetAtt LegacyDb.Endpoint.Port
     Export:
       Name: !Sub '${AWS::StackName}-db-port'
+
   SchemaInitializerFunctionName:
     Description: 'Schema initializer Lambda function name'
     Value: !Ref SchemaInitializerFunction
     Export:
       Name: !Sub '${AWS::StackName}-schema-initializer-name'
+
   SchemaInitializerArn:
     Description: 'Schema initializer Lambda function ARN'
     Value: !GetAtt SchemaInitializerFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-schema-initializer-arn'
+
   PymysqlLayerArn:
     Description: 'PyMySQL Lambda Layer ARN'
     Value: !Ref PymysqlLayer
     Export:
       Name: !Sub '${AWS::StackName}-pymysql-layer-arn'
+
   CommonLayerArn:
     Description: 'Common utilities Lambda Layer ARN'
     Value: !Ref CommonLayer
     Export:
       Name: !Sub '${AWS::StackName}-common-layer-arn'
+
   LambdaSecurityGroupId:
     Description: 'Lambda security group ID'
     Value: !Ref LambdaSecurityGroup
     Export:
       Name: !Sub '${AWS::StackName}-lambda-sg-id'
+
   RdsSecurityGroupId:
     Description: 'RDS security group ID'
     Value: !Ref RdsSecurityGroup
     Export:
       Name: !Sub '${AWS::StackName}-rds-sg-id'
+
   StackName:
     Description: 'CloudFormation stack name'
     Value: !Ref AWS::StackName
+
   StackId:
     Description: 'CloudFormation stack ID'
     Value: !Ref AWS::StackId
+
   DeploymentRegion:
     Description: 'AWS region'
     Value: !Ref AWS::Region
+
   DeploymentStage:
     Description: 'Deployment stage'
     Value: !Ref Stage
+
   CorsOriginsDomain:
     Description: 'CORS allowed origin domain'
     Value: !Ref CorsOrigins
+
   DeploymentHashUsed:
     Description: 'Deployment hash for this version'
     Value: !Ref DeploymentHash
