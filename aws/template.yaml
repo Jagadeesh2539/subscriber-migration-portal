@@ -70,9 +70,9 @@ Globals:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
       AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-      AllowOrigin: "'*'"
+      AllowOrigin: !Ref CorsOrigins
       MaxAge: "'600'"
-      AllowCredentials: false
+      AllowCredentials: "'false'"
     Auth:
       Authorizers:
         JwtAuthorizer:
@@ -80,7 +80,7 @@ Globals:
           Identity:
             Header: Authorization
             ValidationExpression: "^Bearer [-0-9A-Za-z\\.]+$"
-      DefaultAuthorizer: JwtAuthorizer
+      # DefaultAuthorizer removed to prevent overrides
 
 Resources:
   LambdaSecurityGroup:
@@ -354,6 +354,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        ListSubscribersOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         CreateSubscriber:
           Type: Api
           Properties:
@@ -361,6 +390,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        CreateSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         GetSubscriber:
           Type: Api
           Properties:
@@ -368,6 +426,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        GetSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         UpdateSubscriber:
           Type: Api
           Properties:
@@ -375,6 +462,35 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
+        UpdateSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         DeleteSubscriber:
           Type: Api
           Properties:
@@ -382,6 +498,35 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: JwtAuthorizer
+        DeleteSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         SearchSubscribers:
           Type: Api
           Properties:
@@ -389,6 +534,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        SearchSubscribersOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/search
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -632,6 +806,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        UploadRequestOptions:
+          Type: Api
+          Properties:
+            Path: /migration/upload
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         CreateMigrationJob:
           Type: Api
           Properties:
@@ -639,6 +842,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        CreateMigrationJobOptions:
+          Type: Api
+          Properties:
+            Path: /migration/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         CreateAuditJob:
           Type: Api
           Properties:
@@ -646,6 +878,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        CreateAuditJobOptions:
+          Type: Api
+          Properties:
+            Path: /audit/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         CreateExportJob:
           Type: Api
           Properties:
@@ -653,6 +914,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        CreateExportJobOptions:
+          Type: Api
+          Properties:
+            Path: /export/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         GetJobStatus:
           Type: Api
           Properties:
@@ -660,6 +950,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        GetJobStatusOptions:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         CancelJob:
           Type: Api
           Properties:
@@ -667,6 +986,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        CancelJobOptions:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}/cancel
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         ListJobs:
           Type: Api
           Properties:
@@ -674,6 +1022,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        ListJobsOptions:
+          Type: Api
+          Properties:
+            Path: /jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -792,6 +1169,35 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        GetModeOptions:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         PutMode:
           Type: Api
           Properties:
@@ -799,6 +1205,35 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
+        PutModeOptions:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -824,6 +1259,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+        LoginOptions:
+          Type: Api
+          Properties:
+            Path: /auth/login
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         VerifyToken:
           Type: Api
           Properties:
@@ -831,6 +1295,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+        VerifyTokenOptions:
+          Type: Api
+          Properties:
+            Path: /auth/verify
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
         RefreshToken:
           Type: Api
           Properties:
@@ -838,6 +1331,35 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
+        RefreshTokenOptions:
+          Type: Api
+          Properties:
+            Path: /auth/refresh
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -867,6 +1389,28 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   StatusFunction:
     Type: AWS::Serverless::Function
@@ -896,6 +1440,28 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   RootFunction:
     Type: AWS::Serverless::Function
@@ -925,6 +1491,28 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   PingFunction:
     Type: AWS::Serverless::Function
@@ -954,6 +1542,28 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+            Integration:
+              Type: MOCK
+              RequestTemplates:
+                application/json: '{"statusCode": 200}'
+              IntegrationResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
+                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
+                    method.response.header.Access-Control-Allow-Credentials: "'false'"
+                    method.response.header.Access-Control-Max-Age: "'600'"
+                  ResponseTemplates:
+                    application/json: '{}'
+            MethodResponses:
+              - StatusCode: 200
+                ResponseParameters:
+                  method.response.header.Access-Control-Allow-Headers: true
+                  method.response.header.Access-Control-Allow-Methods: true
+                  method.response.header.Access-Control-Allow-Origin: true
+                  method.response.header.Access-Control-Allow-Credentials: true
+                  method.response.header.Access-Control-Max-Age: true
 
   MigrationWorkflow:
     Type: AWS::StepFunctions::StateMachine
