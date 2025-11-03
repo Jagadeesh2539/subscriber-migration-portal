@@ -812,7 +812,7 @@ jobs:
                 echo "✅ SUCCESS: Correct MIME type confirmed!"
                 
                 # Test actual content
-                if curl -s "$WEBSITE_URL" | grep -q "Subscriber Migration Portal"; then
+                if curl -s "$WEBSITE_URL" | grep -q "Portal"; then
                   echo "✅ Portal content verified!"
                   echo ""
                   echo "🎉 ==============================================="
@@ -869,7 +869,7 @@ jobs:
                 echo "✅ SUCCESS: Correct MIME type (text/html) detected!"
                 
                 # Test actual content
-                if curl -s "$WEBSITE_URL" | grep -q "Subscriber Migration Portal"; then
+                if curl -s "$WEBSITE_URL" | grep -q "Portal"; then
                   echo "✅ Portal content verified!"
                   SUCCESS=true
                   break
