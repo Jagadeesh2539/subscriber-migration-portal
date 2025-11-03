@@ -1,297 +1,228 @@
 #!/usr/bin/env python3
 import json
 import os
-from datetime import datetime
 import boto3
-from botocore.exceptions import ClientError
-import time
+from datetime import datetime
+from typing import Dict, Any
 
-# Lambda Layer imports
-import sys
-sys.path.append('/opt/python')
-from common_utils import create_response, create_error_response
-
+# Import from layer
 try:
-    # AWS service clients
-    dynamodb = boto3.resource('dynamodb')
-    rds_client = boto3.client('rds')
-    sfn_client = boto3.client('stepfunctions')
+    from common_utils import create_response, create_error_response, DynamoDBHelper
+except ImportError:
+    # Fallback for local testing
+    def create_response(status_code: int = 200, body: Dict = None, headers: Dict = None, origin: str = None) -> Dict[str, Any]:
+        response_headers = {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': origin or '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+        }
+        if headers:
+            response_headers.update(headers)
+        
+        return {
+            'statusCode': status_code,
+            'headers': response_headers,
+            'body': json.dumps(body or {}, default=str)
+        }
     
-    # Environment variables
-    SUBSCRIBERS_TABLE = os.environ.get('SUBSCRIBERS_TABLE')
-    SETTINGS_TABLE = os.environ.get('SETTINGS_TABLE')
-    MIGRATION_JOBS_TABLE = os.environ.get('MIGRATION_JOBS_TABLE')
-    LEGACY_DB_HOST = os.environ.get('LEGACY_DB_HOST')
+    def create_error_response(status_code: int, message: str, error_code: str = None, origin: str = None) -> Dict[str, Any]:
+        return create_response(status_code, {'error': message, 'code': error_code}, origin=origin)
     
-    subscribers_table = dynamodb.Table(SUBSCRIBERS_TABLE) if SUBSCRIBERS_TABLE else None
-    settings_table = dynamodb.Table(SETTINGS_TABLE) if SETTINGS_TABLE else None
-    jobs_table = dynamodb.Table(MIGRATION_JOBS_TABLE) if MIGRATION_JOBS_TABLE else None
-    
-except Exception as e:
-    print(f"AWS services initialization error: {e}")
-    dynamodb = None
-    rds_client = None
-    sfn_client = None
-    subscribers_table = None
-    settings_table = None
-    jobs_table = None
+    class DynamoDBHelper:
+        @staticmethod
+        def get_table(table_name: str):
+            return boto3.resource('dynamodb').Table(table_name)
 
+# Initialize AWS resources
+dynamodb = boto3.resource('dynamodb')
+rds_client = boto3.client('rds')
 
-def lambda_handler(event, context):
-    """Health check endpoint with comprehensive system validation"""
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    Health check endpoint handler
+    """
+    # Get request details
+    path = event.get('path', '/')
     method = event.get('httpMethod', 'GET')
     headers = event.get('headers', {})
     origin = headers.get('origin')
     
-    if method != 'GET':
-        return create_error_response(405, 'Method not allowed', origin=origin)
+    # Handle OPTIONS for CORS
+    if method == 'OPTIONS':
+        return create_response(200, {'message': 'OK'}, origin=origin)
     
-    start_time = time.time()
+    # Only allow GET for health checks
+    if method != 'GET':
+        return create_error_response(405, 'Method not allowed', 'METHOD_NOT_ALLOWED', origin=origin)
+    
+    # Build health response
     health_data = {
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat(),
         'service': 'Subscriber Migration Portal',
         'version': '3.0.0',
-        'environment': os.environ.get('STAGE', 'unknown'),
-        'region': os.environ.get('AWS_DEFAULT_REGION', 'us-east-1'),
-        'components': {}
+        'path': path,
+        'function': context.function_name if context else 'local',
+        'request_id': context.aws_request_id if context else 'local-test'
     }
     
-    overall_healthy = True
-    
+    # Check environment variables and dependencies
     try:
-        # Test DynamoDB connectivity
-        dynamodb_health = test_dynamodb_health()
-        health_data['components']['dynamodb'] = dynamodb_health
-        if not dynamodb_health['healthy']:
-            overall_healthy = False
+        checks = {
+            'environment': check_environment(),
+            'dynamodb': check_dynamodb(),
+            'rds': check_rds()
+        }
         
-        # Test RDS connectivity
-        rds_health = test_rds_health()
-        health_data['components']['rds'] = rds_health
-        if not rds_health['healthy']:
-            overall_healthy = False
+        # Add detailed checks if requested
+        query_params = event.get('queryStringParameters') or {}
+        if query_params.get('detailed') == 'true':
+            health_data['checks'] = checks
+            
+            # Determine overall health
+            all_healthy = all(check.get('status') == 'healthy' for check in checks.values())
+            health_data['status'] = 'healthy' if all_healthy else 'degraded'
         
-        # Test Step Functions
-        stepfunctions_health = test_stepfunctions_health()
-        health_data['components']['stepfunctions'] = stepfunctions_health
-        if not stepfunctions_health['healthy']:
-            overall_healthy = False
+        # Add endpoint-specific messages
+        if path == '/':
+            health_data['message'] = 'API Gateway root endpoint is operational'
+        elif path == '/health':
+            health_data['message'] = 'Health check endpoint is operational'
+        elif path == '/status':
+            health_data['message'] = 'Status endpoint is operational'
+            health_data['checks'] = checks  # Always include checks for /status
+        elif path == '/ping':
+            return create_response(200, {
+                'pong': True, 
+                'timestamp': datetime.utcnow().isoformat(),
+                'message': 'Ping successful'
+            }, origin=origin)
         
-        # Overall status
-        health_data['status'] = 'healthy' if overall_healthy else 'degraded'
-        health_data['responseTime'] = round((time.time() - start_time) * 1000, 2)  # ms
-        
-        status_code = 200 if overall_healthy else 503
+        # Determine status code based on health
+        status_code = 200
+        if health_data.get('status') == 'degraded':
+            status_code = 503
+            
         return create_response(status_code, health_data, origin=origin)
-    
+        
     except Exception as e:
-        health_data['status'] = 'unhealthy'
-        health_data['error'] = str(e)
-        health_data['responseTime'] = round((time.time() - start_time) * 1000, 2)
-        
-        return create_response(503, health_data, origin=origin)
+        # Log error but don't expose internal details
+        print(f"Health check error: {str(e)}")
+        return create_response(503, {
+            'status': 'unhealthy',
+            'timestamp': datetime.utcnow().isoformat(),
+            'service': 'Subscriber Migration Portal',
+            'message': 'Health check failed',
+            'path': path
+        }, origin=origin)
 
-
-def test_dynamodb_health():
-    """Test DynamoDB table connectivity and health"""
-    start_time = time.time()
+def check_environment() -> Dict[str, Any]:
+    """Check environment variables"""
+    required_vars = [
+        'SUBSCRIBERS_TABLE',
+        'SETTINGS_TABLE',
+        'MIGRATION_JOBS_TABLE'
+    ]
     
+    missing = []
+    present = []
+    
+    for var in required_vars:
+        if os.environ.get(var):
+            present.append(var)
+        else:
+            missing.append(var)
+    
+    return {
+        'status': 'healthy' if not missing else 'unhealthy',
+        'present': present,
+        'missing': missing
+    }
+
+def check_dynamodb() -> Dict[str, Any]:
+    """Check DynamoDB tables"""
     try:
-        if not subscribers_table:
-            return {
-                'healthy': False,
-                'error': 'Subscribers table not configured',
-                'responseTime': 0
-            }
+        tables_status = {}
         
-        # Test table access with describe_table
-        table_response = subscribers_table.meta.client.describe_table(
-            TableName=subscribers_table.table_name
-        )
-        
-        table_status = table_response['Table']['TableStatus']
-        item_count = table_response['Table'].get('ItemCount', 0)
-        
-        # Test read operation with limit
-        scan_response = subscribers_table.scan(
-            Limit=1,
-            Select='COUNT'
-        )
-        
-        response_time = round((time.time() - start_time) * 1000, 2)
-        
-        return {
-            'healthy': table_status == 'ACTIVE',
-            'status': table_status,
-            'itemCount': item_count,
-            'scannedCount': scan_response.get('ScannedCount', 0),
-            'responseTime': response_time,
-            'tables': {
-                'subscribers': table_status,
-                'settings': 'CONFIGURED' if settings_table else 'NOT_CONFIGURED',
-                'migrationJobs': 'CONFIGURED' if jobs_table else 'NOT_CONFIGURED'
-            }
+        table_vars = {
+            'subscribers': os.environ.get('SUBSCRIBERS_TABLE'),
+            'settings': os.environ.get('SETTINGS_TABLE'),
+            'migration_jobs': os.environ.get('MIGRATION_JOBS_TABLE')
         }
-    
-    except ClientError as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
-        error_code = e.response['Error']['Code']
         
-        return {
-            'healthy': False,
-            'error': f'DynamoDB error: {error_code}',
-            'errorMessage': str(e),
-            'responseTime': response_time
-        }
-    
-    except Exception as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
+        healthy_tables = 0
+        total_tables = len([t for t in table_vars.values() if t])
         
-        return {
-            'healthy': False,
-            'error': f'DynamoDB connection failed: {str(e)}',
-            'responseTime': response_time
-        }
-
-
-def test_rds_health():
-    """Test RDS connectivity and status"""
-    start_time = time.time()
-    
-    try:
-        if not LEGACY_DB_HOST or not rds_client:
-            return {
-                'healthy': False,
-                'error': 'Legacy RDS not configured',
-                'responseTime': 0
-            }
-        
-        # Get RDS instance status
-        db_instances = rds_client.describe_db_instances()
-        
-        legacy_instance = None
-        for instance in db_instances['DBInstances']:
-            if LEGACY_DB_HOST in instance['Endpoint']['Address']:
-                legacy_instance = instance
-                break
-        
-        if not legacy_instance:
-            return {
-                'healthy': False,
-                'error': 'Legacy RDS instance not found',
-                'responseTime': round((time.time() - start_time) * 1000, 2)
-            }
-        
-        db_status = legacy_instance['DBInstanceStatus']
-        response_time = round((time.time() - start_time) * 1000, 2)
-        
-        return {
-            'healthy': db_status == 'available',
-            'status': db_status,
-            'engine': legacy_instance['Engine'],
-            'engineVersion': legacy_instance['EngineVersion'],
-            'instanceClass': legacy_instance['DBInstanceClass'],
-            'allocatedStorage': legacy_instance['AllocatedStorage'],
-            'multiAZ': legacy_instance['MultiAZ'],
-            'endpoint': legacy_instance['Endpoint']['Address'],
-            'responseTime': response_time
-        }
-    
-    except ClientError as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
-        error_code = e.response['Error']['Code']
-        
-        return {
-            'healthy': False,
-            'error': f'RDS error: {error_code}',
-            'errorMessage': str(e),
-            'responseTime': response_time
-        }
-    
-    except Exception as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
-        
-        return {
-            'healthy': False,
-            'error': f'RDS connection failed: {str(e)}',
-            'responseTime': response_time
-        }
-
-
-def test_stepfunctions_health():
-    """Test Step Functions deployment and status"""
-    start_time = time.time()
-    
-    try:
-        if not sfn_client:
-            return {
-                'healthy': False,
-                'error': 'Step Functions client not available',
-                'responseTime': 0
-            }
-        
-        # List state machines for this stack
-        response = sfn_client.list_state_machines()
-        stack_name = os.environ.get('AWS_STACK_NAME', 'subscriber-migration-portal-prod')
-        
-        stack_workflows = []
-        workflow_status = {}
-        
-        for sm in response.get('stateMachines', []):
-            if stack_name in sm['name']:
-                stack_workflows.append(sm['name'])
-                
-                # Get detailed status
+        for table_type, table_name in table_vars.items():
+            if table_name:
                 try:
-                    detail_response = sfn_client.describe_state_machine(
-                        stateMachineArn=sm['stateMachineArn']
-                    )
-                    workflow_status[sm['name']] = {
-                        'status': detail_response['status'],
-                        'arn': sm['stateMachineArn'],
-                        'type': detail_response['type'],
-                        'creationDate': detail_response['creationDate'].isoformat()
+                    table = DynamoDBHelper.get_table(table_name)
+                    table.load()
+                    status = table.table_status
+                    tables_status[table_type] = {
+                        'name': table_name,
+                        'status': status
                     }
+                    if status == 'ACTIVE':
+                        healthy_tables += 1
                 except Exception as e:
-                    workflow_status[sm['name']] = {
+                    tables_status[table_type] = {
+                        'name': table_name,
                         'status': 'ERROR',
                         'error': str(e)
                     }
         
-        response_time = round((time.time() - start_time) * 1000, 2)
-        
-        # Count active workflows
-        active_workflows = sum(1 for status in workflow_status.values() 
-                             if status.get('status') == 'ACTIVE')
-        
-        expected_workflows = ['migration-workflow', 'audit-workflow', 'export-workflow']
-        
         return {
-            'healthy': active_workflows >= 3,
-            'deployedWorkflows': len(stack_workflows),
-            'activeWorkflows': active_workflows,
-            'expectedWorkflows': len(expected_workflows),
-            'workflows': workflow_status,
-            'responseTime': response_time
+            'status': 'healthy' if healthy_tables == total_tables else 'unhealthy',
+            'tables': tables_status,
+            'summary': f'{healthy_tables}/{total_tables} tables healthy'
         }
-    
-    except ClientError as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
-        error_code = e.response['Error']['Code']
         
-        return {
-            'healthy': False,
-            'error': f'Step Functions error: {error_code}',
-            'errorMessage': str(e),
-            'responseTime': response_time
-        }
-    
     except Exception as e:
-        response_time = round((time.time() - start_time) * 1000, 2)
-        
         return {
-            'healthy': False,
-            'error': f'Step Functions health check failed: {str(e)}',
-            'responseTime': response_time
+            'status': 'unhealthy',
+            'error': str(e)
+        }
+
+def check_rds() -> Dict[str, Any]:
+    """Check RDS connectivity"""
+    try:
+        legacy_db_host = os.environ.get('LEGACY_DB_HOST')
+        if not legacy_db_host:
+            return {
+                'status': 'healthy',
+                'message': 'RDS not configured (optional)',
+                'configured': False
+            }
+        
+        # Try to describe DB instances to check connectivity
+        response = rds_client.describe_db_instances()
+        
+        # Find the instance with matching endpoint
+        db_instance = None
+        for instance in response.get('DBInstances', []):
+            if legacy_db_host in instance.get('Endpoint', {}).get('Address', ''):
+                db_instance = instance
+                break
+        
+        if db_instance:
+            return {
+                'status': 'healthy' if db_instance['DBInstanceStatus'] == 'available' else 'unhealthy',
+                'instance_status': db_instance['DBInstanceStatus'],
+                'engine': db_instance['Engine'],
+                'configured': True
+            }
+        else:
+            return {
+                'status': 'unhealthy',
+                'message': 'RDS instance not found',
+                'configured': True
+            }
+            
+    except Exception as e:
+        return {
+            'status': 'unhealthy',
+            'error': str(e),
+            'configured': True
         }

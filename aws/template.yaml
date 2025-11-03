@@ -560,6 +560,21 @@ Resources:
       BuildMethod: python3.11
       BuildArchitecture: x86_64
 
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${AWS::StackName}-common-utils'
+      Description: 'Common utilities for Lambda functions'
+      ContentUri: layers/common/
+      CompatibleRuntimes:
+        - python3.11
+        - python3.10
+        - python3.9
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.11
+      BuildArchitecture: x86_64
+
   SchemaInitializerFunction:
     Type: AWS::Serverless::Function
     DependsOn:
@@ -830,6 +845,8 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -844,6 +861,13 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
+        HealthCheckOptions:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   StatusFunction:
     Type: AWS::Serverless::Function
@@ -852,6 +876,8 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -866,6 +892,13 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
+        StatusCheckOptions:
+          Type: Api
+          Properties:
+            Path: /status
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   RootFunction:
     Type: AWS::Serverless::Function
@@ -874,6 +907,8 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -888,6 +923,13 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
+        RootCheckOptions:
+          Type: Api
+          Properties:
+            Path: /
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   PingFunction:
     Type: AWS::Serverless::Function
@@ -896,6 +938,8 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaPublicRole.Arn
       CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
       Environment:
         Variables:
           SUBSCRIBERS_TABLE: !Ref SubscribersTable
@@ -908,6 +952,13 @@ Resources:
           Properties:
             Path: /ping
             Method: GET
+            Auth:
+              Authorizer: NONE
+        PingCheckOptions:
+          Type: Api
+          Properties:
+            Path: /ping
+            Method: OPTIONS
             Auth:
               Authorizer: NONE
 
@@ -1112,6 +1163,11 @@ Outputs:
     Value: !Ref PymysqlLayer
     Export:
       Name: !Sub '${AWS::StackName}-pymysql-layer-arn'
+  CommonLayerArn:
+    Description: 'Common utilities Lambda Layer ARN'
+    Value: !Ref CommonLayer
+    Export:
+      Name: !Sub '${AWS::StackName}-common-layer-arn'
   LambdaSecurityGroupId:
     Description: 'Lambda security group ID'
     Value: !Ref LambdaSecurityGroup
