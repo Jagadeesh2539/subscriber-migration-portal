@@ -52,6 +52,10 @@ Parameters:
     Type: String
     Description: 'Second public subnet ID (optional)'
     Default: ''
+  DeploymentHash:
+    Type: String
+    Default: '20251103-sam-validation-fix'
+    Description: 'Deployment hash to force redeploys'
 
 Globals:
   Function:
@@ -70,9 +74,9 @@ Globals:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
       AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-      AllowOrigin: !Ref CorsOrigins
+      AllowOrigin: !Sub "'${CorsOrigins}'"
       MaxAge: "'600'"
-      AllowCredentials: "'false'"
+      AllowCredentials: true
     Auth:
       Authorizers:
         JwtAuthorizer:
@@ -80,9 +84,22 @@ Globals:
           Identity:
             Header: Authorization
             ValidationExpression: "^Bearer [-0-9A-Za-z\\.]+$"
-      # DefaultAuthorizer removed to prevent overrides
 
 Resources:
+  # Deployment trigger to force redeploys
+  DeploymentTrigger:
+    Type: AWS::CloudFormation::WaitConditionHandle
+    Properties: {}
+    Metadata:
+      DeploymentHash: !Ref DeploymentHash
+
+  DeploymentWaitCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    Properties:
+      Handle: !Ref DeploymentTrigger
+      Timeout: '1'
+      Count: 0
+
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -315,6 +332,8 @@ Resources:
       Handler: handler.lambda_handler
       Role: !GetAtt LambdaVpcRole.Arn
       CodeUri: lambda/authorizer/
+      Layers:
+        - !Ref CommonLayer
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
@@ -334,6 +353,7 @@ Resources:
       CodeUri: lambda/subscribers/
       Layers:
         - !Ref PymysqlLayer
+        - !Ref CommonLayer
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
@@ -354,35 +374,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        ListSubscribersOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
         CreateSubscriber:
           Type: Api
           Properties:
@@ -390,35 +381,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        CreateSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
         GetSubscriber:
           Type: Api
           Properties:
@@ -426,35 +388,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        GetSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
         UpdateSubscriber:
           Type: Api
           Properties:
@@ -462,35 +395,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        UpdateSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
         DeleteSubscriber:
           Type: Api
           Properties:
@@ -498,35 +402,6 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: JwtAuthorizer
-        DeleteSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
         SearchSubscribers:
           Type: Api
           Properties:
@@ -534,35 +409,348 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        SearchSubscribersOptions:
+
+  OrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-orchestrator'
+      Handler: orchestrator.lambda_handler
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Layers:
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          MIGRATION_WORKFLOW_ARN: !Ref MigrationWorkflow
+          AUDIT_WORKFLOW_ARN: !Ref AuditWorkflow
+          EXPORT_WORKFLOW_ARN: !Ref ExportWorkflow
+      Events:
+        UploadRequest:
           Type: Api
           Properties:
-            Path: /subscribers/search
-            Method: OPTIONS
+            Path: /migration/upload
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        CreateMigrationJob:
+          Type: Api
+          Properties:
+            Path: /migration/jobs
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        CreateAuditJob:
+          Type: Api
+          Properties:
+            Path: /audit/jobs
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        CreateExportJob:
+          Type: Api
+          Properties:
+            Path: /export/jobs
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        GetJobStatus:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}
+            Method: GET
+            Auth:
+              Authorizer: JwtAuthorizer
+        CancelJob:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}/cancel
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        ListJobs:
+          Type: Api
+          Properties:
+            Path: /jobs
+            Method: GET
+            Auth:
+              Authorizer: JwtAuthorizer
+
+  ValidateJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-validate-job'
+      Handler: validate_job.lambda_handler
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Layers:
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+
+  ProcessFileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-process-file'
+      Handler: process_file.lambda_handler
+      Timeout: 900
+      MemorySize: 1024
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Layers:
+        - !Ref PymysqlLayer
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+
+  ProcessAuditFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-process-audit'
+      Handler: process_audit.lambda_handler
+      Timeout: 600
+      MemorySize: 1024
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Layers:
+        - !Ref PymysqlLayer
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+
+  ProcessExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-process-export'
+      Handler: process_export.lambda_handler
+      Timeout: 600
+      MemorySize: 1024
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/migration/
+      Layers:
+        - !Ref PymysqlLayer
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          UPLOADS_BUCKET: !Ref UploadsBucket
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+
+  SettingsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-settings'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/settings/
+      Layers:
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          SETTINGS_TABLE: !Ref SettingsTable
+      Events:
+        GetMode:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: GET
+            Auth:
+              Authorizer: JwtAuthorizer
+        PutMode:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: PUT
+            Auth:
+              Authorizer: JwtAuthorizer
+
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-auth'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/auth/
+      Layers:
+        - !Ref CommonLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          JWT_SECRET: !Ref JwtSecret
+      Events:
+        Login:
+          Type: Api
+          Properties:
+            Path: /auth/login
+            Method: POST
             Auth:
               Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
+        VerifyToken:
+          Type: Api
+          Properties:
+            Path: /auth/verify
+            Method: POST
+            Auth:
+              Authorizer: NONE
+        RefreshToken:
+          Type: Api
+          Properties:
+            Path: /auth/refresh
+            Method: POST
+            Auth:
+              Authorizer: NONE
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-health'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaPublicRole.Arn
+      CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          SETTINGS_TABLE: !Ref SettingsTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+      Events:
+        HealthCheck:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-status'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaPublicRole.Arn
+      CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          SETTINGS_TABLE: !Ref SettingsTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+      Events:
+        StatusCheck:
+          Type: Api
+          Properties:
+            Path: /status
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  RootFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-root'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaPublicRole.Arn
+      CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          SETTINGS_TABLE: !Ref SettingsTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+      Events:
+        RootCheck:
+          Type: Api
+          Properties:
+            Path: /
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  PingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-ping'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaPublicRole.Arn
+      CodeUri: lambda/health/
+      Layers:
+        - !Ref CommonLayer
+      Environment:
+        Variables:
+          SUBSCRIBERS_TABLE: !Ref SubscribersTable
+          SETTINGS_TABLE: !Ref SettingsTable
+          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+      Events:
+        PingCheck:
+          Type: Api
+          Properties:
+            Path: /ping
+            Method: GET
+            Auth:
+              Authorizer: NONE
 
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -765,6 +953,7 @@ Resources:
       CodeUri: lambda/schema-init/
       Layers:
         - !Ref PymysqlLayer
+        - !Ref CommonLayer
       VpcConfig:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
@@ -777,793 +966,6 @@ Resources:
           LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
           AWS_STACK_NAME: !Sub '${AWS::StackName}'
           DB_NAME: legacydb
-
-  OrchestratorFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-orchestrator'
-      Handler: orchestrator.lambda_handler
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          MIGRATION_WORKFLOW_ARN: !Ref MigrationWorkflow
-          AUDIT_WORKFLOW_ARN: !Ref AuditWorkflow
-          EXPORT_WORKFLOW_ARN: !Ref ExportWorkflow
-      Events:
-        UploadRequest:
-          Type: Api
-          Properties:
-            Path: /migration/upload
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        UploadRequestOptions:
-          Type: Api
-          Properties:
-            Path: /migration/upload
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        CreateMigrationJob:
-          Type: Api
-          Properties:
-            Path: /migration/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateMigrationJobOptions:
-          Type: Api
-          Properties:
-            Path: /migration/jobs
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        CreateAuditJob:
-          Type: Api
-          Properties:
-            Path: /audit/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateAuditJobOptions:
-          Type: Api
-          Properties:
-            Path: /audit/jobs
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        CreateExportJob:
-          Type: Api
-          Properties:
-            Path: /export/jobs
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CreateExportJobOptions:
-          Type: Api
-          Properties:
-            Path: /export/jobs
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        GetJobStatus:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        GetJobStatusOptions:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        CancelJob:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}/cancel
-            Method: POST
-            Auth:
-              Authorizer: JwtAuthorizer
-        CancelJobOptions:
-          Type: Api
-          Properties:
-            Path: /jobs/{id}/cancel
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        ListJobs:
-          Type: Api
-          Properties:
-            Path: /jobs
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        ListJobsOptions:
-          Type: Api
-          Properties:
-            Path: /jobs
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  ValidateJobFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-validate-job'
-      Handler: validate_job.lambda_handler
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-
-  ProcessFileFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-process-file'
-      Handler: process_file.lambda_handler
-      Timeout: 900
-      MemorySize: 1024
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      Layers:
-        - !Ref PymysqlLayer
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-
-  ProcessAuditFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-process-audit'
-      Handler: process_audit.lambda_handler
-      Timeout: 600
-      MemorySize: 1024
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      Layers:
-        - !Ref PymysqlLayer
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-
-  ProcessExportFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-process-export'
-      Handler: process_export.lambda_handler
-      Timeout: 600
-      MemorySize: 1024
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/migration/
-      Layers:
-        - !Ref PymysqlLayer
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          UPLOADS_BUCKET: !Ref UploadsBucket
-          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-
-  SettingsFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-settings'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/settings/
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          SETTINGS_TABLE: !Ref SettingsTable
-      Events:
-        GetMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: GET
-            Auth:
-              Authorizer: JwtAuthorizer
-        GetModeOptions:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        PutMode:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: PUT
-            Auth:
-              Authorizer: JwtAuthorizer
-        PutModeOptions:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  AuthFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-auth'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaVpcRole.Arn
-      CodeUri: lambda/auth/
-      VpcConfig:
-        SecurityGroupIds:
-          - !Ref LambdaSecurityGroup
-        SubnetIds:
-          - !Ref PrivateSubnetId1
-          - !Ref PrivateSubnetId2
-      Environment:
-        Variables:
-          JWT_SECRET: !Ref JwtSecret
-      Events:
-        Login:
-          Type: Api
-          Properties:
-            Path: /auth/login
-            Method: POST
-            Auth:
-              Authorizer: NONE
-        LoginOptions:
-          Type: Api
-          Properties:
-            Path: /auth/login
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        VerifyToken:
-          Type: Api
-          Properties:
-            Path: /auth/verify
-            Method: POST
-            Auth:
-              Authorizer: NONE
-        VerifyTokenOptions:
-          Type: Api
-          Properties:
-            Path: /auth/verify
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-        RefreshToken:
-          Type: Api
-          Properties:
-            Path: /auth/refresh
-            Method: POST
-            Auth:
-              Authorizer: NONE
-        RefreshTokenOptions:
-          Type: Api
-          Properties:
-            Path: /auth/refresh
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  HealthFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-health'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaPublicRole.Arn
-      CodeUri: lambda/health/
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          SETTINGS_TABLE: !Ref SettingsTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Events:
-        HealthCheck:
-          Type: Api
-          Properties:
-            Path: /health
-            Method: GET
-            Auth:
-              Authorizer: NONE
-        HealthCheckOptions:
-          Type: Api
-          Properties:
-            Path: /health
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  StatusFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-status'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaPublicRole.Arn
-      CodeUri: lambda/health/
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          SETTINGS_TABLE: !Ref SettingsTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Events:
-        StatusCheck:
-          Type: Api
-          Properties:
-            Path: /status
-            Method: GET
-            Auth:
-              Authorizer: NONE
-        StatusCheckOptions:
-          Type: Api
-          Properties:
-            Path: /status
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  RootFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-root'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaPublicRole.Arn
-      CodeUri: lambda/health/
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          SETTINGS_TABLE: !Ref SettingsTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Events:
-        RootCheck:
-          Type: Api
-          Properties:
-            Path: /
-            Method: GET
-            Auth:
-              Authorizer: NONE
-        RootCheckOptions:
-          Type: Api
-          Properties:
-            Path: /
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
-
-  PingFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub '${AWS::StackName}-ping'
-      Handler: handler.lambda_handler
-      Role: !GetAtt LambdaPublicRole.Arn
-      CodeUri: lambda/health/
-      Environment:
-        Variables:
-          SUBSCRIBERS_TABLE: !Ref SubscribersTable
-          SETTINGS_TABLE: !Ref SettingsTable
-          MIGRATION_JOBS_TABLE: !Ref MigrationJobsTable
-          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
-      Events:
-        PingCheck:
-          Type: Api
-          Properties:
-            Path: /ping
-            Method: GET
-            Auth:
-              Authorizer: NONE
-        PingCheckOptions:
-          Type: Api
-          Properties:
-            Path: /ping
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-            Integration:
-              Type: MOCK
-              RequestTemplates:
-                application/json: '{"statusCode": 200}'
-              IntegrationResponses:
-                - StatusCode: 200
-                  ResponseParameters:
-                    method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-                    method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-                    method.response.header.Access-Control-Allow-Origin: !Ref CorsOrigins
-                    method.response.header.Access-Control-Allow-Credentials: "'false'"
-                    method.response.header.Access-Control-Max-Age: "'600'"
-                  ResponseTemplates:
-                    application/json: '{}'
-            MethodResponses:
-              - StatusCode: 200
-                ResponseParameters:
-                  method.response.header.Access-Control-Allow-Headers: true
-                  method.response.header.Access-Control-Allow-Methods: true
-                  method.response.header.Access-Control-Allow-Origin: true
-                  method.response.header.Access-Control-Allow-Credentials: true
-                  method.response.header.Access-Control-Max-Age: true
 
   MigrationWorkflow:
     Type: AWS::StepFunctions::StateMachine
@@ -1793,3 +1195,9 @@ Outputs:
   DeploymentStage:
     Description: 'Deployment stage'
     Value: !Ref Stage
+  CorsOriginsDomain:
+    Description: 'CORS allowed origin domain'
+    Value: !Ref CorsOrigins
+  DeploymentHashUsed:
+    Description: 'Deployment hash for this version'
+    Value: !Ref DeploymentHash
