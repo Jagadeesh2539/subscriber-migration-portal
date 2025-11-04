@@ -355,7 +355,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: ONE OPTIONS route for /subscribers ---
+        # --- FIX: This is the SINGLE OPTIONS route for /subscribers ---
         SubscribersRootOptions:
           Type: Api
           Properties:
@@ -370,6 +370,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- DELETED Duplicate CreateSubscriberOptions ---
         GetSubscriber:
           Type: Api
           Properties:
@@ -377,7 +378,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: ONE OPTIONS route for /subscribers/{id} ---
+        # --- FIX: This is the SINGLE OPTIONS route for /subscribers/{id} ---
         SubscriberByIdOptions:
           Type: Api
           Properties:
@@ -880,6 +881,7 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
+        # --- DELETED Duplicate PutModeOptions ---
 
   QueryFunction:
     Type: AWS::Serverless::Function
@@ -1149,7 +1151,7 @@ Resources:
             "ValidationFailed": {
               "Type": "Fail",
               "Error": "ValidationError",
-      "Cause": "File validation failed"
+              "Cause": "File validation failed"
             }
           }
         }
@@ -1243,11 +1245,13 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      Name: !Sub '${AWSCSS::StackName}-subscribers-table'
+      # --- TYPO FIX 1 ---
+      Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
+      # --- TYPO FIX 2 ---
       Name: !Sub '${AWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
@@ -1288,7 +1292,7 @@ Outputs:
     Description: 'Schema initializer Lambda function ARN'
     Value: !GetAtt SchemaInitializerFunction.Arn
     Export:
-      Name: !Sub '${AWS::StackName}-schema-initializer-arn'
+      Name: !Sub '${AWSExample::StackName}-schema-initializer-arn'
   PymysqlLayerArn:
     Description: 'PyMySQL Lambda Layer ARN'
     Value: !Ref PymysqlLayer
