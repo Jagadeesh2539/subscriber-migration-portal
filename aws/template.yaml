@@ -11,9 +11,9 @@ Parameters:
 
   CorsOrigins:
     Type: String
-    # CRITICAL: Value must include single quotes as part of the literal string
-    Default: "'http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com'"
-    Description: "Allowed CORS origins (literal with inner single quotes)"
+    # SIMPLIFIED: Use wildcard with credentials=false for easier deployment
+    Default: "'*'"
+    Description: "Allowed CORS origins (wildcard for simplified deployment)"
 
   JwtSecret:
     Type: String
@@ -22,7 +22,7 @@ Parameters:
 
   BucketSuffix:
     Type: String
-    Default: '20251031'
+    Default: '20251104'
     Description: 'Unique suffix for resource naming'
 
   DbInstanceClass:
@@ -66,7 +66,7 @@ Parameters:
 
   DeploymentHash:
     Type: String
-    Default: '20251104-force-api-redeploy'
+    Default: '20251104-wildcard-cors-fix'
     Description: 'Deployment hash to force redeploys'
 
 Globals:
@@ -87,10 +87,10 @@ Globals:
     Cors:
       AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
       AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token,X-Requested-With,Accept,Origin'"
-      # CRITICAL FIX: Use direct !Ref to pre-quoted parameter
+      # CRITICAL FIX: Use wildcard with credentials=false to avoid mapping expression errors
       AllowOrigin: !Ref CorsOrigins
       MaxAge: "'600'"
-      AllowCredentials: true
+      AllowCredentials: false
     Auth:
       DefaultAuthorizer: JwtAuthorizer
       Authorizers:
