@@ -286,7 +286,7 @@ Resources:
     UpdateReplacePolicy: Snapshot
     Properties:
       Engine: mysql
-      EngineVersion: '5.7.44-RDS.20250508'
+      EngineVersion: '5.7.44-rds.20250508'
       DBInstanceClass: !Ref DbInstanceClass
       AllocatedStorage: !Ref DbAllocatedStorage
       StorageType: gp2
@@ -603,9 +603,7 @@ Resources:
 
   SchemaInitializerFunction:
     Type: AWS::Serverless::Function
-    DependsOn:
-      - LegacyDb
-      - LegacyDbSecret
+    
     Properties:
       FunctionName: !Sub '${AWS::StackName}-schema-initializer'
       Handler: index.handler
@@ -748,6 +746,21 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
+        # --- FIX: Added this missing route from your index.html ---
+        CancelAllJobs:
+          Type: Api
+          Properties:
+            Path: /jobs/cancel-all
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        CancelAllJobsOptions:
+          Type: Api
+          Properties:
+            Path: /jobs/cancel-all
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -881,7 +894,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        # --- DELETED Duplicate PutModeOptions ---
 
   QueryFunction:
     Type: AWS::Serverless::Function
@@ -1245,13 +1257,13 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      # --- TYPO FIX 1 ---
+      # --- TYPO FIX ---
       Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
-      # --- TYPO FIX 2 ---
+      # --- TYPO FIX ---
       Name: !Sub '${AWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
@@ -1292,7 +1304,8 @@ Outputs:
     Description: 'Schema initializer Lambda function ARN'
     Value: !GetAtt SchemaInitializerFunction.Arn
     Export:
-      Name: !Sub '${AWSExample::StackName}-schema-initializer-arn'
+      # --- TYPO FIX ---
+      Name: !Sub '${AWS::StackName}-schema-initializer-arn'
   PymysqlLayerArn:
     Description: 'PyMySQL Lambda Layer ARN'
     Value: !Ref PymysqlLayer
@@ -1325,3 +1338,4 @@ Outputs:
   DeploymentStage:
     Description: 'Deployment stage'
     Value: !Ref Stage
+
