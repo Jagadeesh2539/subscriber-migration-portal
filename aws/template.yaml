@@ -79,7 +79,7 @@ Globals:
           FunctionArn: !GetAtt AuthorizerFunction.Arn
           Identity:
             Header: Authorization
-            # --- THIS IS THE REGEX FIX (INCLUDES _) ---
+            # --- FIX 1: Includes the underscore _ ---
             ValidationExpression: "^Bearer [-0-9A-Za-z\\._]+$"
       DefaultAuthorizer: JwtAuthorizer
 
@@ -825,7 +825,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
+        # --- FIX 2: Added OPTIONS route ---
         LoginOptions:
           Type: Api
           Properties:
@@ -841,7 +841,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
+        # --- FIX 2: Added OPTIONS route ---
         VerifyTokenOptions:
           Type: Api
           Properties:
@@ -857,7 +857,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
+        # --- FIX 2: Added OPTIONS route ---
         RefreshTokenOptions:
           Type: Api
           Properties:
@@ -1133,12 +1133,13 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      Name: !Sub '${AWSS::StackName}-subscribers-table'
+      # --- THIS IS THE FIX (AWSS:: -> AWS::) ---
+      Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
-      Name: !Sub '${AWS::StackName}-settings-table'
+      Name: !Sub '${AWSIAWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
     Value: !Ref MigrationWorkflow
