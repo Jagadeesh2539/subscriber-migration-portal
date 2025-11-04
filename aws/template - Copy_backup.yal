@@ -79,8 +79,7 @@ Globals:
           FunctionArn: !GetAtt AuthorizerFunction.Arn
           Identity:
             Header: Authorization
-            # --- THIS IS THE REGEX FIX (INCLUDES _) ---
-            ValidationExpression: "^Bearer [-0-9A-Za-z\\._]+$"
+            ValidationExpression: "^Bearer [-0-9A-Za-z\\.]+$"
       DefaultAuthorizer: JwtAuthorizer
 
 Resources:
@@ -825,15 +824,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
-        LoginOptions:
-          Type: Api
-          Properties:
-            Path: /auth/login
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
         VerifyToken:
           Type: Api
           Properties:
@@ -841,15 +831,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
-        VerifyTokenOptions:
-          Type: Api
-          Properties:
-            Path: /auth/verify
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
         RefreshToken:
           Type: Api
           Properties:
@@ -857,15 +838,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- THIS IS THE CORS FIX ---
-        RefreshTokenOptions:
-          Type: Api
-          Properties:
-            Path: /auth/refresh
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -1133,7 +1105,7 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      Name: !Sub '${AWSS::StackName}-subscribers-table'
+      Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
