@@ -355,6 +355,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        ListSubscribersOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         CreateSubscriber:
           Type: Api
           Properties:
@@ -362,6 +371,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        CreateSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         GetSubscriber:
           Type: Api
           Properties:
@@ -369,6 +387,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        GetSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         UpdateSubscriber:
           Type: Api
           Properties:
@@ -376,6 +403,15 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        UpdateSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         DeleteSubscriber:
           Type: Api
           Properties:
@@ -383,6 +419,15 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        DeleteSubscriberOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         SearchSubscribers:
           Type: Api
           Properties:
@@ -390,6 +435,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        SearchSubscribersOptions:
+          Type: Api
+          Properties:
+            Path: /subscribers/search
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
 
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -633,6 +687,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        UploadRequestOptions:
+          Type: Api
+          Properties:
+            Path: /migration/upload
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         CreateMigrationJob:
           Type: Api
           Properties:
@@ -640,6 +703,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        CreateMigrationJobOptions:
+          Type: Api
+          Properties:
+            Path: /migration/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         CreateAuditJob:
           Type: Api
           Properties:
@@ -647,6 +719,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        CreateAuditJobOptions:
+          Type: Api
+          Properties:
+            Path: /audit/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         CreateExportJob:
           Type: Api
           Properties:
@@ -654,6 +735,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        CreateExportJobOptions:
+          Type: Api
+          Properties:
+            Path: /export/jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         GetJobStatus:
           Type: Api
           Properties:
@@ -661,6 +751,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        GetJobStatusOptions:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         CancelJob:
           Type: Api
           Properties:
@@ -668,6 +767,15 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        CancelJobOptions:
+          Type: Api
+          Properties:
+            Path: /jobs/{id}/cancel
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         ListJobs:
           Type: Api
           Properties:
@@ -675,6 +783,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        ListJobsOptions:
+          Type: Api
+          Properties:
+            Path: /jobs
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -793,6 +910,15 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        GetModeOptions:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
         PutMode:
           Type: Api
           Properties:
@@ -800,6 +926,53 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
+        # --- ADD THIS BLOCK ---
+        PutModeOptions:
+          Type: Api
+          Properties:
+            Path: /settings/provisioning-mode
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+        # --- END OF BLOCK ---
+
+  # --- ADD THIS ENTIRE FUNCTION RESOURCE ---
+  QueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-query'
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaVpcRole.Arn
+      CodeUri: lambda/query/
+      Layers:
+        - !Ref PymysqlLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetId1
+          - !Ref PrivateSubnetId2
+      Environment:
+        Variables:
+          LEGACY_DB_SECRET_ARN: !Ref LegacyDbSecret
+          LEGACY_DB_HOST: !GetAtt LegacyDb.Endpoint.Address
+          DB_NAME: legacydb
+      Events:
+        QueryPost:
+          Type: Api
+          Properties:
+            Path: /query
+            Method: POST
+            Auth:
+              Authorizer: JwtAuthorizer
+        QueryOptions:
+          Type: Api
+          Properties:
+            Path: /query
+            Method: OPTIONS
+            Auth:
+              Authorizer: NONE
+  # --- END OF NEW FUNCTION ---
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -825,7 +998,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- FIX 2: Added OPTIONS route ---
         LoginOptions:
           Type: Api
           Properties:
@@ -833,7 +1005,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         VerifyToken:
           Type: Api
           Properties:
@@ -841,7 +1012,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- FIX 2: Added OPTIONS route ---
         VerifyTokenOptions:
           Type: Api
           Properties:
@@ -849,7 +1019,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         RefreshToken:
           Type: Api
           Properties:
@@ -857,7 +1026,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: NONE
-        # --- FIX 2: Added OPTIONS route ---
         RefreshTokenOptions:
           Type: Api
           Properties:
@@ -865,7 +1033,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
 
   HealthFunction:
     Type: AWS::Serverless::Function
@@ -1133,13 +1300,13 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      # --- FIX 3 (Original Typo) ---
+      # --- TYPO FIX 1 ---
       Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
-      # --- FIX 3 (My Typo) ---
+      # --- TYPO FIX 2 ---
       Name: !Sub '${AWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
