@@ -79,7 +79,7 @@ Globals:
           FunctionArn: !GetAtt AuthorizerFunction.Arn
           Identity:
             Header: Authorization
-            # --- FIX: Includes the underscore _ ---
+            # --- FIX 1: Includes the underscore _ ---
             ValidationExpression: "^Bearer [-0-9A-Za-z\\._]+$"
       DefaultAuthorizer: JwtAuthorizer
 
@@ -355,8 +355,8 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: This is the SINGLE OPTIONS route for /subscribers ---
-        ListSubscribersOptions:
+        # --- FIX: ONE OPTIONS route for /subscribers ---
+        SubscribersRootOptions:
           Type: Api
           Properties:
             Path: /subscribers
@@ -370,7 +370,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- DELETED Duplicate CreateSubscriberOptions ---
         GetSubscriber:
           Type: Api
           Properties:
@@ -378,8 +377,8 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: This is the SINGLE OPTIONS route for /subscribers/{id} ---
-        GetSubscriberOptions:
+        # --- FIX: ONE OPTIONS route for /subscribers/{id} ---
+        SubscriberByIdOptions:
           Type: Api
           Properties:
             Path: /subscribers/{id}
@@ -393,7 +392,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        # --- DELETED Duplicate UpdateSubscriberOptions ---
         DeleteSubscriber:
           Type: Api
           Properties:
@@ -401,7 +399,6 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: JwtAuthorizer
-        # --- DELETED Duplicate DeleteSubscriberOptions ---
         SearchSubscribers:
           Type: Api
           Properties:
@@ -409,7 +406,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: Added OPTIONS route for /subscribers/search ---
         SearchSubscribersOptions:
           Type: Api
           Properties:
@@ -869,8 +865,8 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX: This is the SINGLE OPTIONS route for /settings/provisioning-mode ---
-        GetModeOptions:
+        # --- FIX: This is the SINGLE OPTIONS route for this path ---
+        SettingsProvisioningOptions:
           Type: Api
           Properties:
             Path: /settings/provisioning-mode
@@ -884,7 +880,6 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        # --- DELETED Duplicate PutModeOptions ---
 
   QueryFunction:
     Type: AWS::Serverless::Function
@@ -1154,7 +1149,7 @@ Resources:
             "ValidationFailed": {
               "Type": "Fail",
               "Error": "ValidationError",
-              "Cause": "File validation failed"
+      "Cause": "File validation failed"
             }
           }
         }
@@ -1248,7 +1243,7 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      Name: !Sub '${AWS::StackName}-subscribers-table'
+      Name: !Sub '${AWSCSS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
