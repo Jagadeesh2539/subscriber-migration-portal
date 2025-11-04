@@ -79,7 +79,7 @@ Globals:
           FunctionArn: !GetAtt AuthorizerFunction.Arn
           Identity:
             Header: Authorization
-            # --- FIX 1: Includes the underscore _ ---
+            # --- FIX: Includes the underscore _ ---
             ValidationExpression: "^Bearer [-0-9A-Za-z\\._]+$"
       DefaultAuthorizer: JwtAuthorizer
 
@@ -355,7 +355,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
+        # --- FIX: This is the SINGLE OPTIONS route for /subscribers ---
         ListSubscribersOptions:
           Type: Api
           Properties:
@@ -363,7 +363,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         CreateSubscriber:
           Type: Api
           Properties:
@@ -371,15 +370,7 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
-        CreateSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
+        # --- DELETED Duplicate CreateSubscriberOptions ---
         GetSubscriber:
           Type: Api
           Properties:
@@ -387,7 +378,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
+        # --- FIX: This is the SINGLE OPTIONS route for /subscribers/{id} ---
         GetSubscriberOptions:
           Type: Api
           Properties:
@@ -395,7 +386,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         UpdateSubscriber:
           Type: Api
           Properties:
@@ -403,15 +393,7 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
-        UpdateSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
+        # --- DELETED Duplicate UpdateSubscriberOptions ---
         DeleteSubscriber:
           Type: Api
           Properties:
@@ -419,15 +401,7 @@ Resources:
             Method: DELETE
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
-        DeleteSubscriberOptions:
-          Type: Api
-          Properties:
-            Path: /subscribers/{id}
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
+        # --- DELETED Duplicate DeleteSubscriberOptions ---
         SearchSubscribers:
           Type: Api
           Properties:
@@ -435,7 +409,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
+        # --- FIX: Added OPTIONS route for /subscribers/search ---
         SearchSubscribersOptions:
           Type: Api
           Properties:
@@ -443,7 +417,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
 
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
@@ -687,7 +660,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         UploadRequestOptions:
           Type: Api
           Properties:
@@ -695,7 +667,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         CreateMigrationJob:
           Type: Api
           Properties:
@@ -703,7 +674,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         CreateMigrationJobOptions:
           Type: Api
           Properties:
@@ -711,7 +681,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         CreateAuditJob:
           Type: Api
           Properties:
@@ -719,7 +688,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         CreateAuditJobOptions:
           Type: Api
           Properties:
@@ -727,7 +695,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         CreateExportJob:
           Type: Api
           Properties:
@@ -735,7 +702,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         CreateExportJobOptions:
           Type: Api
           Properties:
@@ -743,7 +709,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         GetJobStatus:
           Type: Api
           Properties:
@@ -751,7 +716,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         GetJobStatusOptions:
           Type: Api
           Properties:
@@ -759,7 +723,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         CancelJob:
           Type: Api
           Properties:
@@ -767,7 +730,6 @@ Resources:
             Method: POST
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         CancelJobOptions:
           Type: Api
           Properties:
@@ -775,7 +737,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         ListJobs:
           Type: Api
           Properties:
@@ -783,7 +744,6 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
         ListJobsOptions:
           Type: Api
           Properties:
@@ -791,7 +751,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
 
   ValidateJobFunction:
     Type: AWS::Serverless::Function
@@ -910,7 +869,7 @@ Resources:
             Method: GET
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
+        # --- FIX: This is the SINGLE OPTIONS route for /settings/provisioning-mode ---
         GetModeOptions:
           Type: Api
           Properties:
@@ -918,7 +877,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-        # --- END OF FIX ---
         PutMode:
           Type: Api
           Properties:
@@ -926,17 +884,8 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: JwtAuthorizer
-        # --- FIX 2: Added OPTIONS route ---
-        PutModeOptions:
-          Type: Api
-          Properties:
-            Path: /settings/provisioning-mode
-            Method: OPTIONS
-            Auth:
-              Authorizer: NONE
-        # --- END OF FIX ---
+        # --- DELETED Duplicate PutModeOptions ---
 
-  # --- FIX 2: Added this ENTIRE function resource ---
   QueryFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -972,7 +921,6 @@ Resources:
             Method: OPTIONS
             Auth:
               Authorizer: NONE
-  # --- END OF NEW FUNCTION ---
 
   AuthFunction:
     Type: AWS::Serverless::Function
@@ -1300,13 +1248,11 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      # --- TYPO FIX 1 ---
       Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
-      # --- TYPO FIX 2 ---
       Name: !Sub '${AWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
