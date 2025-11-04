@@ -1,0 +1,137 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Build outputs
+dist/
+build/
+*.zip
+package/
+lambda-package/
+deployment/
+
+# Environment variables and secrets (CRITICAL)
+*.env
+*.env.*
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+config.json
+config.production.json
+secrets.json
+
+# AWS Credentials and Config
+.aws/
+aws-config
+aws-credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+credentials.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Icon?
+
+# Logs and monitoring
+*.log
+logs/
+*.out
+*.err
+monitor/
+
+# Temporary files
+*.tmp
+*.temp
+result*.json
+*-result.json
+response*.json
+test-*.json
+*-payload.json
+
+# Node.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# React build
+build/
+dist/
+.cache/
+
+# Backup files
+*.bak
+*.backup
+*.old
+backup/
+
+# Security scan results
+bandit-report.json
+safety-report.txt
+vulnerability-scan.json
+
+# PyMySQL (bundled in Lambda)
+pymysql/
+pymysql-*/
+
+# Lambda Layers
+aws/layers/pymysql/python/
+aws/layers/*/python/
+
+# Test artifacts
+.coverage
+.nyc_output
+coverage/
+.pytest_cache/
+
+# Local development
+.local
+.dev
+local-config.*
+dev-config.*

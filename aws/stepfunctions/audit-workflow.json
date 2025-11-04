@@ -1,0 +1,278 @@
+{
+  "Comment": "Subscriber Audit Workflow - System-generated audits with consistency checks across Cloud and Legacy",
+  "StartAt": "InitializeAudit",
+  "TimeoutSeconds": 1800,
+  "States": {
+    "InitializeAudit": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${MigrationJobsTable}",
+        "Key": {
+          "job_id": {
+            "S.$": "$.jobId"
+          }
+        },
+        "UpdateExpression": "SET job_status = :status, started_at = :timestamp",
+        "ExpressionAttributeValues": {
+          ":status": {"S": "RUNNING"},
+          ":timestamp": {"S.$": "$$.State.EnteredTime"}
+        }
+      },
+      "ResultPath": null,
+      "Next": "DetermineAuditType"
+    },
+    
+    "DetermineAuditType": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.auditType",
+          "StringEquals": "CONSISTENCY_CHECK",
+          "Next": "ConsistencyAudit"
+        },
+        {
+          "Variable": "$.auditType",
+          "StringEquals": "DATA_VALIDATION",
+          "Next": "DataValidationAudit"
+        },
+        {
+          "Variable": "$.auditType",
+          "StringEquals": "FULL_AUDIT",
+          "Next": "FullSystemAudit"
+        }
+      ],
+      "Default": "ConsistencyAudit"
+    },
+    
+    "ConsistencyAudit": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "AuditCloud",
+          "States": {
+            "AuditCloud": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditLambdaArn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "source": "cloud",
+                  "auditType": "CONSISTENCY_CHECK",
+                  "filters.$": "$.filters"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "AuditLegacy",
+          "States": {
+            "AuditLegacy": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditLambdaArn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "source": "legacy", 
+                  "auditType": "CONSISTENCY_CHECK",
+                  "filters.$": "$.filters"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.auditResults",
+      "Next": "CompareResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "AuditFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    
+    "DataValidationAudit": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessAuditLambdaArn}",
+        "Payload": {
+          "jobId.$": "$.jobId",
+          "auditType": "DATA_VALIDATION",
+          "filters.$": "$.filters",
+          "validationRules": [
+            {"field": "msisdn", "rule": "unique", "pattern": "^\\+[0-9]{10,15}$"},
+            {"field": "imsi", "rule": "unique", "pattern": "^[0-9]{15}$"},
+            {"field": "email", "rule": "format", "pattern": "^[\\w\\.-]+@[\\w\\.-]+\\.[a-zA-Z]{2,}$"},
+            {"field": "status", "rule": "enum", "values": ["ACTIVE", "INACTIVE", "SUSPENDED", "DELETED"]}
+          ]
+        }
+      },
+      "ResultPath": "$.result",
+      "Next": "ProcessingComplete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "AuditFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    
+    "FullSystemAudit": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "FullAuditCloud",
+          "States": {
+            "FullAuditCloud": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditLambdaArn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "source": "cloud",
+                  "auditType": "FULL_AUDIT",
+                  "includeMetrics": true,
+                  "includeValidation": true
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FullAuditLegacy",
+          "States": {
+            "FullAuditLegacy": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditLambdaArn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "source": "legacy",
+                  "auditType": "FULL_AUDIT",
+                  "includeMetrics": true,
+                  "includeValidation": true
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CrossSystemConsistency",
+          "States": {
+            "CrossSystemConsistency": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProcessAuditLambdaArn}",
+                "Payload": {
+                  "jobId.$": "$.jobId",
+                  "source": "dual",
+                  "auditType": "CONSISTENCY_CHECK",
+                  "crossSystemCheck": true
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.auditResults",
+      "Next": "CompareResults"
+    },
+    
+    "CompareResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${GenerateAuditReportLambdaArn}",
+        "Payload": {
+          "jobId.$": "$.jobId",
+          "auditResults.$": "$.auditResults",
+          "auditType.$": "$.auditType",
+          "generateSummary": true,
+          "generateDetailedReport": true
+        }
+      },
+      "ResultPath": "$.result",
+      "Next": "ProcessingComplete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "AuditFailed",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+    
+    "AuditFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${MigrationJobsTable}",
+        "Key": {
+          "job_id": {
+            "S.$": "$.jobId"
+          }
+        },
+        "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, error_message = :error",
+        "ExpressionAttributeValues": {
+          ":status": {"S": "FAILED"},
+          ":timestamp": {"S.$": "$$.State.EnteredTime"},
+          ":error": {"S.$": "$.error.Cause"}
+        }
+      },
+      "End": true
+    },
+    
+    "ProcessingComplete": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${MigrationJobsTable}",
+        "Key": {
+          "job_id": {
+            "S.$": "$.jobId"
+          }
+        },
+        "UpdateExpression": "SET job_status = :status, finished_at = :timestamp, processed_records = :processed, output_file_key = :output, audit_summary = :summary",
+        "ExpressionAttributeValues": {
+          ":status": {"S": "COMPLETED"},
+          ":timestamp": {"S.$": "$$.State.EnteredTime"},
+          ":processed": {"N.$": "States.JsonToString($.result.Payload.auditedRecords)"},
+          ":output": {"S.$": "$.result.Payload.reportFileKey"},
+          ":summary": {"S.$": "States.JsonToString($.result.Payload.summary)"}
+        }
+      },
+      "End": true
+    }
+  }
+}
