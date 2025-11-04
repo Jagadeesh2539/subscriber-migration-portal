@@ -1133,13 +1133,14 @@ Outputs:
     Description: 'Subscribers DynamoDB table'
     Value: !Ref SubscribersTable
     Export:
-      # --- THIS IS THE FIX (AWSS:: -> AWS::) ---
+      # --- FIX 3 (Original Typo) ---
       Name: !Sub '${AWS::StackName}-subscribers-table'
   SettingsTableName:
     Description: 'Settings DynamoDB table'
     Value: !Ref SettingsTable
     Export:
-      Name: !Sub '${AWSIAWS::StackName}-settings-table'
+      # --- FIX 3 (My Typo) ---
+      Name: !Sub '${AWS::StackName}-settings-table'
   MigrationWorkflowArn:
     Description: 'Migration workflow state machine ARN'
     Value: !Ref MigrationWorkflow
