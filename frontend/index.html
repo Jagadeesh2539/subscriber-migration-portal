@@ -397,6 +397,15 @@
             .form-grid { grid-template-columns: 1fr; }
         }
         @media (min-width: 769px) { .mobile-menu { display: none; } }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -649,7 +658,7 @@
             <section id="query" class="page-section">
                 <div class="page-header">
                     <h1>🔍 Data Query Interface</h1>
-                    <p>Execute queries and perform data operations on your subscriber database.</p>
+                    <p>Execute SQL queries and perform data operations on your subscriber database.</p>
                 </div>
                 
                 <div class="card">
@@ -691,22 +700,22 @@
                         <div class="stat-card">
                             <div class="icon">🚀</div>
                             <h3>API Response Time</h3>
-                            <div class="stat-number" id="response-time">245ms</div>
+                            <div class="stat-number" id="response-time">Loading...</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">💾</div>
                             <h3>Database Load</h3>
-                            <div class="stat-number" id="db-load">12%</div>
+                            <div class="stat-number" id="db-load">Loading...</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">☁️</div>
                             <h3>Lambda Calls</h3>
-                            <div class="stat-number" id="lambda-calls">1,234</div>
+                            <div class="stat-number" id="lambda-calls">Loading...</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">🔄</div>
                             <h3>Running Jobs</h3>
-                            <div class="stat-number" id="running-jobs">3</div>
+                            <div class="stat-number" id="running-jobs">Loading...</div>
                         </div>
                     </div>
                     <div style="margin-top: 20px;">
@@ -795,7 +804,7 @@
             REFRESH_INTERVAL: 30000
         };
 
-        // AUTHENTICATION SYSTEM
+        // AUTHENTICATION SYSTEM - REAL API ONLY
         const auth = {
             currentUser: null,
             
@@ -810,7 +819,6 @@
                     document.getElementById('username-display').textContent = username;
                     document.getElementById('user-avatar').textContent = username.charAt(0).toUpperCase();
                     
-                    // Initialize app
                     setTimeout(() => {
                         api.checkHealth();
                         dashboard.load();
@@ -837,36 +845,27 @@
                 errorEl.style.display = 'none';
 
                 try {
-                    // REAL API AUTHENTICATION
                     const response = await fetch(`${APP_CONFIG.API_BASE}/auth/login`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ username, password })
                     });
                     
-                    if (response.ok) {
-                        const data = await response.json();
-                        sessionStorage.setItem('authToken', data.token);
-                        sessionStorage.setItem('username', username);
-                        this.checkAuth();
-                        utils.showNotification('🎉 Welcome to Enterprise Portal!', 'success');
-                    } else {
-                        const error = await response.json();
-                        throw new Error(error.message || 'Authentication failed');
+                    if (!response.ok) {
+                        const errText = await response.text().catch(() => '');
+                        throw new Error(errText || `Authentication failed (${response.status})`);
                     }
+
+                    const data = await response.json();
+                    if (!data.token) throw new Error('Token missing in response');
+
+                    sessionStorage.setItem('authToken', data.token);
+                    sessionStorage.setItem('username', username);
+                    this.checkAuth();
+                    utils.showNotification('🎉 Welcome to Enterprise Portal!', 'success');
                 } catch (error) {
                     console.error('Login error:', error);
-                    
-                    // FALLBACK: Demo credentials
-                    if (username === 'admin' && password === 'password') {
-                        const demoToken = 'demo_' + Date.now();
-                        sessionStorage.setItem('authToken', demoToken);
-                        sessionStorage.setItem('username', username);
-                        this.checkAuth();
-                        utils.showNotification('🎉 Demo mode activated!', 'success');
-                    } else {
-                        this.showLoginError(error.message || 'Invalid credentials. Try admin/password for demo.');
-                    }
+                    this.showLoginError(error.message || 'Authentication failed. Please check your credentials.');
                 } finally {
                     loginBtn.disabled = false;
                     loginBtn.innerHTML = '<span>🔑 Sign In to Portal</span>';
@@ -893,32 +892,38 @@
             }
         };
 
-        // API COMMUNICATION LAYER
+        // API COMMUNICATION - REAL ENDPOINTS ONLY
         const api = {
             async request(endpoint, options = {}) {
                 const token = sessionStorage.getItem('authToken');
-                const defaultHeaders = {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+                const cfg = {
+                    method: options.method || 'GET',
+                    headers: { ...(options.headers || {}) },
+                    body: options.body
                 };
-                
-                if (token && !token.startsWith('demo_')) {
-                    defaultHeaders['Authorization'] = `Bearer ${token}`;
+
+                const isFormData = (cfg.body && typeof FormData !== 'undefined' && cfg.body instanceof FormData);
+                if (!isFormData) {
+                    cfg.headers['Accept'] = 'application/json';
+                    if (cfg.body && typeof cfg.body === 'object') {
+                        cfg.headers['Content-Type'] = 'application/json';
+                        cfg.body = JSON.stringify(cfg.body);
+                    } else if (!cfg.headers['Content-Type']) {
+                        cfg.headers['Content-Type'] = 'application/json';
+                    }
                 }
-                
-                const config = {
-                    headers: { ...defaultHeaders, ...(options.headers || {}) },
-                    ...options
-                };
-                
-                const response = await fetch(`${APP_CONFIG.API_BASE}${endpoint}`, config);
-                
-                if (response.status === 401) {
-                    auth.logout();
-                    throw new Error('Session expired. Please log in again.');
+
+                if (token) cfg.headers['Authorization'] = `Bearer ${token}`;
+
+                const res = await fetch(`${APP_CONFIG.API_BASE}${endpoint}`, cfg);
+
+                if (res.status === 401) {
+                    sessionStorage.clear();
+                    auth.checkAuth();
+                    throw new Error('Unauthorized - session expired');
                 }
-                
-                return response;
+
+                return res;
             },
 
             async checkHealth() {
@@ -929,27 +934,18 @@
                 try {
                     const response = await fetch(`${APP_CONFIG.API_BASE}/health`);
                     
-                    if (response.ok) {
-                        const data = await response.json();
-                        statusEl.className = 'alert success';
-                        statusEl.innerHTML = `
-                            ✅ <strong>Backend Connected!</strong><br>
-                            API Version: ${data.version} | Status: ${data.status} | 
-                            Response Time: ${Date.now() % 1000}ms
-                        `;
-                        
-                        // Update health indicators
-                        document.getElementById('api-health').textContent = '🟢 Connected';
-                        document.getElementById('lambda-health').textContent = '🟢 Operational';
-                        document.getElementById('db-health').textContent = 
-                            data.environment?.rds_configured ? '🟢 Connected' : '🟡 DynamoDB';
-                        
-                        return true;
-                    } else {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    const data = await response.json();
+                    
+                    statusEl.className = 'alert success';
+                    statusEl.innerHTML = `✅ <strong>Backend Connected!</strong><br>API Version: ${data.version || '-'} | Status: ${data.status || '-'}`;
+                    
+                    document.getElementById('api-health').textContent = '🟢 Connected';
+                    document.getElementById('lambda-health').textContent = '🟢 Operational';
+                    document.getElementById('db-health').textContent = data.environment?.rds_configured ? '🟢 Connected' : '🟡 DynamoDB';
+                    
+                    return true;
                 } catch (error) {
-                    console.error('Health check failed:', error);
                     statusEl.className = 'alert error';
                     statusEl.innerHTML = `❌ <strong>Backend Offline</strong><br>Error: ${error.message}`;
                     
@@ -967,36 +963,28 @@
             currentPage: 'dashboard',
             
             showPage(pageId) {
-                // Hide all sections
                 document.querySelectorAll('.page-section').forEach(section => {
                     section.classList.remove('active');
                 });
                 
-                // Remove active from nav
                 document.querySelectorAll('.nav-item').forEach(item => {
                     item.classList.remove('active');
                 });
                 
-                // Show selected section
                 const section = document.getElementById(pageId);
                 if (section) {
                     section.classList.add('active');
                     this.currentPage = pageId;
                 }
                 
-                // Update nav
                 const navItem = document.querySelector(`[data-page="${pageId}"]`);
                 if (navItem) {
                     navItem.classList.add('active');
                 }
                 
-                // Update URL
                 window.history.pushState({}, '', `#${pageId}`);
-                
-                // Close mobile menu
                 document.getElementById('sidebar').classList.remove('open');
                 
-                // Load page data
                 this.loadPageData(pageId);
             },
             
@@ -1043,40 +1031,52 @@
             }
         };
 
-        // DASHBOARD MODULE
+        // DASHBOARD MODULE - REAL DATA ONLY
         const dashboard = {
             async load() {
                 try {
-                    // Load subscriber count
                     const subResponse = await api.request('/subscribers');
                     if (subResponse.ok) {
                         const data = await subResponse.json();
                         document.getElementById('total-subscribers').textContent = 
-                            data.length ? data.length.toLocaleString() : '0';
+                            Array.isArray(data) ? data.length.toLocaleString() : '0';
                     } else {
                         throw new Error('Subscribers API failed');
                     }
                 } catch (error) {
-                    // Fallback data
-                    document.getElementById('total-subscribers').textContent = '12,453';
+                    console.error('Failed to load subscribers:', error);
+                    document.getElementById('total-subscribers').textContent = 'N/A';
                 }
                 
                 try {
-                    // Load migration jobs
                     const jobsResponse = await api.request('/jobs');
                     if (jobsResponse.ok) {
                         const jobs = await jobsResponse.json();
-                        const activeJobs = jobs.filter ? 
+                        const activeJobs = Array.isArray(jobs) ? 
                             jobs.filter(job => job.status === 'RUNNING').length : 0;
                         document.getElementById('active-migrations').textContent = activeJobs;
+                    } else {
+                        throw new Error('Jobs API failed');
                     }
                 } catch (error) {
-                    document.getElementById('active-migrations').textContent = '3';
+                    console.error('Failed to load jobs:', error);
+                    document.getElementById('active-migrations').textContent = 'N/A';
                 }
-                
-                // Static calculations for now
-                document.getElementById('success-rate').textContent = '98.7%';
-                document.getElementById('data-processed').textContent = '2.4 GB';
+
+                try {
+                    const statusResponse = await api.request('/status');
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        document.getElementById('success-rate').textContent = statusData.success_rate || 'N/A';
+                        document.getElementById('data-processed').textContent = statusData.data_processed || 'N/A';
+                    } else {
+                        throw new Error('Status API failed');
+                    }
+                } catch (error) {
+                    console.error('Failed to load status:', error);
+                    document.getElementById('success-rate').textContent = 'N/A';
+                    document.getElementById('data-processed').textContent = 'N/A';
+                }
                 
                 utils.showNotification('📊 Dashboard updated', 'success');
             },
@@ -1086,156 +1086,7 @@
             }
         };
 
-        // PROVISIONING MODULE
-        const provisioning = {
-            async create() {
-                const id = document.getElementById('subscriber-id').value.trim();
-                const email = document.getElementById('subscriber-email').value.trim();
-                const plan = document.getElementById('subscriber-plan').value.trim();
-                const status = document.getElementById('subscriber-status').value;
-                
-                if (!id || !email || !plan) {
-                    utils.showNotification('❌ Please fill in all required fields', 'error');
-                    return;
-                }
-                
-                const statusEl = document.getElementById('create-status');
-                statusEl.innerHTML = '<div class="alert info">👤 Creating subscriber...</div>';
-                
-                try {
-                    const response = await api.request('/subscribers', {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            uid: id,
-                            email: email,
-                            plan_id: plan,
-                            status: status
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        statusEl.innerHTML = '<div class="alert success">✅ Subscriber created successfully!</div>';
-                        utils.showNotification(`👤 Subscriber ${id} created!`, 'success');
-                        this.clearForm();
-                    } else {
-                        const error = await response.json();
-                        throw new Error(error.message || 'Creation failed');
-                    }
-                } catch (error) {
-                    statusEl.innerHTML = `<div class="alert error">❌ Failed: ${error.message}</div>`;
-                    utils.showNotification('❌ Creation failed', 'error');
-                }
-            },
-            
-            async search() {
-                const query = document.getElementById('search-input').value.trim();
-                const resultsEl = document.getElementById('search-results');
-                
-                if (!query) {
-                    utils.showNotification('❌ Please enter search criteria', 'error');
-                    return;
-                }
-                
-                resultsEl.innerHTML = '<div class="alert info">🔍 Searching subscribers...</div>';
-                
-                try {
-                    const response = await api.request(`/subscribers/search?q=${encodeURIComponent(query)}`);
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        this.displayResults(data, query);
-                    } else {
-                        throw new Error('Search failed');
-                    }
-                } catch (error) {
-                    resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
-                }
-            },
-            
-            displayResults(data, query) {
-                const resultsEl = document.getElementById('search-results');
-                
-                if (!data || data.length === 0) {
-                    resultsEl.innerHTML = `
-                        <div class="state-container">
-                            <div class="icon">🔍</div>
-                            <h3>No Results Found</h3>
-                            <p>No subscribers found for "${query}". Try a different search term.</p>
-                        </div>
-                    `;
-                    return;
-                }
-                
-                resultsEl.innerHTML = `
-                    <h3>🔍 Search Results (${data.length} found)</h3>
-                    <table class="results-table">
-                        <thead>
-                            <tr>
-                                <th>Subscriber ID</th>
-                                <th>Email</th>
-                                <th>Plan</th>
-                                <th>Status</th>
-                                <th>Created</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${data.map(sub => `
-                                <tr>
-                                    <td><strong>${sub.uid}</strong></td>
-                                    <td>${sub.email}</td>
-                                    <td><span class="status-badge info">${sub.plan_id}</span></td>
-                                    <td><span class="status-badge ${sub.status === 'active' ? 'success' : sub.status === 'inactive' ? 'error' : 'warning'}">${sub.status}</span></td>
-                                    <td>${new Date(sub.created_at).toLocaleDateString()}</td>
-                                    <td>
-                                        <button class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
-                                        <button class="btn btn-danger" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.confirmDelete('${sub.uid}')">🗑️ Delete</button>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                `;
-                
-                utils.showNotification(`✅ Found ${data.length} subscribers`, 'success');
-            },
-            
-            clearForm() {
-                document.getElementById('subscriber-id').value = '';
-                document.getElementById('subscriber-email').value = '';
-                document.getElementById('subscriber-plan').value = '';
-                document.getElementById('subscriber-status').value = 'active';
-                document.getElementById('create-status').innerHTML = '';
-            },
-            
-            confirmDelete(uid) {
-                ui.showConfirmationModal(
-                    'Delete Subscriber',
-                    `Are you sure you want to permanently delete subscriber ${uid}? This action cannot be undone.`,
-                    () => this.delete(uid)
-                );
-            },
-            
-            async delete(uid) {
-                try {
-                    const response = await api.request(`/subscribers/${uid}`, {
-                        method: 'DELETE'
-                    });
-                    
-                    if (response.ok) {
-                        utils.showNotification(`🗑️ Subscriber ${uid} deleted`, 'success');
-                        // Refresh search results
-                        this.search();
-                    } else {
-                        throw new Error('Delete failed');
-                    }
-                } catch (error) {
-                    utils.showNotification(`❌ Delete failed: ${error.message}`, 'error');
-                }
-            }
-        };
-
-        // MIGRATION MODULE
+        // MIGRATION MODULE - REAL ENDPOINTS WITH ALL MISSING FUNCTIONS
         const migration = {
             selectedFile: null,
             
@@ -1275,30 +1126,25 @@
                 statusEl.innerHTML = '<div class="alert info">🚀 Starting file migration...</div>';
                 
                 try {
-                    // Simulate upload progress
-                    let progress = 0;
-                    const progressInterval = setInterval(() => {
-                        progress += Math.random() * 20;
-                        if (progress > 100) progress = 100;
-                        progressEl.style.width = progress + '%';
-                        
-                        if (progress >= 100) {
-                            clearInterval(progressInterval);
-                            statusEl.innerHTML = '<div class="alert success">✅ Migration completed successfully!</div>';
-                            utils.showNotification('🎉 File migration completed!', 'success');
-                        }
-                    }, 300);
-                    
-                    // Real upload would go here:
-                    /*
-                    const formData = new FormData();
-                    formData.append('file', this.selectedFile);
-                    const response = await api.request('/migration/upload', {
+                    const fd = new FormData();
+                    fd.append('file', this.selectedFile);
+
+                    const token = sessionStorage.getItem('authToken');
+                    const res = await fetch(`${APP_CONFIG.API_BASE}/migration/upload`, {
                         method: 'POST',
-                        body: formData,
-                        headers: {} // Remove Content-Type to let browser set it for FormData
+                        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+                        body: fd
                     });
-                    */
+                    
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        throw new Error(errText || `Upload failed (${res.status})`);
+                    }
+
+                    const data = await res.json();
+                    statusEl.innerHTML = `<div class="alert success">✅ File uploaded successfully! Job ID: ${data.job_id || 'N/A'}</div>`;
+                    progressEl.style.width = '100%';
+                    utils.showNotification('🎉 File migration started!', 'success');
                     
                 } catch (error) {
                     statusEl.innerHTML = `<div class="alert error">❌ Migration failed: ${error.message}</div>`;
@@ -1310,11 +1156,344 @@
                 this.selectedFile = null;
                 document.getElementById('file-info').style.display = 'none';
                 document.getElementById('migration-file').value = '';
+                document.getElementById('upload-progress').style.width = '0%';
+                document.getElementById('migration-status').innerHTML = '';
                 utils.showNotification('Upload cancelled', 'info');
+            },
+
+            // MISSING FUNCTIONS - NOW IMPLEMENTED WITH REAL APIS
+            
+            async startBulk() {
+                const el = document.getElementById('migration-jobs');
+                el.innerHTML = '<div class="alert info">▶️ Starting bulk migration...</div>';
+                
+                try {
+                    const res = await api.request('/migration/jobs', {
+                        method: 'POST',
+                        body: { type: 'bulk_migration', batch_size: 1000, priority: 'high' }
+                    });
+                    
+                    if (!res.ok) throw new Error(await res.text());
+                    
+                    const data = await res.json();
+                    el.innerHTML = `<div class="alert success">✅ Bulk migration started! Job ID: ${data.job_id || 'N/A'}</div>`;
+                    utils.showNotification('🚀 Bulk migration started', 'success');
+                    
+                    setTimeout(() => this.checkJobs(), 2000);
+                } catch (error) {
+                    el.innerHTML = `<div class="alert error">❌ Failed to start bulk migration: ${error.message}</div>`;
+                    utils.showNotification('❌ Bulk migration failed', 'error');
+                }
+            },
+
+            async checkJobs() {
+                const el = document.getElementById('migration-jobs');
+                el.innerHTML = '<div class="alert info">⏱️ Loading active jobs...</div>';
+                
+                try {
+                    const res = await api.request('/jobs');
+                    if (!res.ok) throw new Error(await res.text());
+                    
+                    const jobs = await res.json();
+                    const activeJobs = Array.isArray(jobs) ? 
+                        jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes(j.status)) : [];
+                    
+                    this.renderJobs(activeJobs, 'Active Migration Jobs');
+                } catch (error) {
+                    el.innerHTML = `<div class="alert error">❌ Unable to load jobs: ${error.message}</div>`;
+                }
+            },
+
+            async loadHistory() {
+                const el = document.getElementById('migration-jobs');
+                el.innerHTML = '<div class="alert info">📋 Loading migration history...</div>';
+                
+                try {
+                    const res = await api.request('/jobs');
+                    if (!res.ok) throw new Error(await res.text());
+                    
+                    const jobs = await res.json();
+                    this.renderJobs(Array.isArray(jobs) ? jobs : [], 'Migration Job History', true);
+                } catch (error) {
+                    el.innerHTML = `<div class="alert error">❌ Unable to load history: ${error.message}</div>`;
+                }
+            },
+
+            renderJobs(jobs, title, showActions = false) {
+                const el = document.getElementById('migration-jobs');
+                
+                if (!jobs.length) {
+                    el.innerHTML = `
+                        <div class="state-container">
+                            <div class="icon">📋</div>
+                            <h3>${title}</h3>
+                            <p>No jobs found.</p>
+                        </div>`;
+                    return;
+                }
+                
+                el.innerHTML = `
+                    <div class="alert success">${title} (${jobs.length})</div>
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Progress</th>
+                                <th>Created</th>
+                                <th>Records</th>
+                                ${showActions ? '<th>Actions</th>' : ''}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${jobs.map(j => `
+                                <tr>
+                                    <td><strong>${j.job_id || j.id || ''}</strong></td>
+                                    <td><span class="status-badge info">${j.type || 'migration'}</span></td>
+                                    <td><span class="status-badge ${j.status === 'COMPLETED' ? 'success' : j.status === 'FAILED' ? 'error' : 'info'}">${j.status}</span></td>
+                                    <td>
+                                        <div class="progress-bar" style="width:80px;height:6px;">
+                                            <div class="progress-fill" style="width:${j.progress || 0}%"></div>
+                                        </div>
+                                        <small>${j.progress || 0}%</small>
+                                    </td>
+                                    <td>${j.created_at ? new Date(j.created_at).toLocaleString() : 'N/A'}</td>
+                                    <td>${j.records_processed ? j.records_processed.toLocaleString() : '0'}</td>
+                                    ${showActions ? `
+                                        <td>
+                                            ${j.status === 'RUNNING' ? 
+                                                `<button class="btn btn-danger" style="padding:6px 10px;font-size:11px" onclick="migration.cancelJob('${j.job_id || j.id}')">🛑 Cancel</button>` :
+                                                `<button class="btn btn-secondary" style="padding:6px 10px;font-size:11px" onclick="migration.viewJobDetails('${j.job_id || j.id}')">👁️ Details</button>`
+                                            }
+                                        </td>` : ''
+                                    }
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-secondary" onclick="migration.checkJobs()" style="font-size:12px">🔄 Refresh</button>
+                        <button class="btn btn-secondary" onclick="migration.loadHistory()" style="font-size:12px">📋 History</button>
+                        <button class="btn btn-danger" onclick="migration.cancelAll()" style="font-size:12px">🛑 Cancel All</button>
+                    </div>
+                `;
+                
+                utils.showNotification(`${title} loaded (${jobs.length} found)`, 'success');
+            },
+
+            async cancelAll() {
+                ui.showConfirmationModal(
+                    'Cancel All Migrations',
+                    'Are you sure you want to cancel ALL active migration jobs? This may leave some data in an inconsistent state.',
+                    async () => {
+                        const el = document.getElementById('migration-jobs');
+                        el.innerHTML = '<div class="alert info">🛑 Cancelling all jobs...</div>';
+                        
+                        try {
+                            const res = await api.request('/jobs/cancel-all', { 
+                                method: 'POST', 
+                                body: { reason: 'user_request', force: true } 
+                            });
+                            
+                            if (!res.ok) throw new Error(await res.text());
+                            
+                            const data = await res.json();
+                            el.innerHTML = `<div class="alert success">✅ All migrations cancelled! (${data.cancelled_count || 'N/A'} jobs)</div>`;
+                            utils.showNotification('🛑 All migration jobs cancelled', 'success');
+                            
+                            setTimeout(() => this.checkJobs(), 2000);
+                        } catch (error) {
+                            el.innerHTML = `<div class="alert error">❌ Cancel all failed: ${error.message}</div>`;
+                            utils.showNotification('❌ Cancel all failed', 'error');
+                        }
+                    }
+                );
+            },
+
+            async cancelJob(jobId) {
+                try {
+                    const res = await api.request(`/jobs/${jobId}/cancel`, { method: 'POST' });
+                    if (!res.ok) throw new Error(await res.text());
+                    
+                    utils.showNotification(`🛑 Job ${jobId} cancelled`, 'success');
+                    this.checkJobs();
+                } catch (error) {
+                    utils.showNotification(`❌ Cancel failed: ${error.message}`, 'error');
+                }
+            },
+
+            viewJobDetails(jobId) {
+                utils.showNotification(`📊 Viewing details for job ${jobId}`, 'info');
+                console.log(`Job details requested for: ${jobId}`);
             }
         };
 
-        // QUERY MODULE
+        // PROVISIONING MODULE - REAL ENDPOINTS ONLY
+        const provisioning = {
+            async create() {
+                const id = document.getElementById('subscriber-id').value.trim();
+                const email = document.getElementById('subscriber-email').value.trim();
+                const plan = document.getElementById('subscriber-plan').value.trim();
+                const status = document.getElementById('subscriber-status').value;
+                
+                if (!id || !email || !plan) {
+                    utils.showNotification('❌ Please fill in all required fields', 'error');
+                    return;
+                }
+                
+                const statusEl = document.getElementById('create-status');
+                statusEl.innerHTML = '<div class="alert info">👤 Creating subscriber...</div>';
+                
+                try {
+                    const response = await api.request('/subscribers', {
+                        method: 'POST',
+                        body: { uid: id, email: email, plan_id: plan, status: status }
+                    });
+                    
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(errText || 'Creation failed');
+                    }
+                    
+                    statusEl.innerHTML = '<div class="alert success">✅ Subscriber created successfully!</div>';
+                    utils.showNotification(`👤 Subscriber ${id} created!`, 'success');
+                    this.clearForm();
+                    dashboard.load(); // Refresh stats
+                } catch (error) {
+                    statusEl.innerHTML = `<div class="alert error">❌ Failed: ${error.message}</div>`;
+                    utils.showNotification('❌ Creation failed', 'error');
+                }
+            },
+            
+            async search() {
+                const query = document.getElementById('search-input').value.trim();
+                const resultsEl = document.getElementById('search-results');
+                
+                if (!query) {
+                    utils.showNotification('❌ Please enter search criteria', 'error');
+                    return;
+                }
+                
+                resultsEl.innerHTML = '<div class="alert info">🔍 Searching subscribers...</div>';
+                
+                try {
+                    const response = await api.request(`/subscribers/search?q=${encodeURIComponent(query)}`);
+                    
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(errText || 'Search failed');
+                    }
+                    
+                    const data = await response.json();
+                    this.displayResults(data, query);
+                } catch (error) {
+                    resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
+                    utils.showNotification('❌ Search failed', 'error');
+                }
+            },
+
+            async loadAll() {
+                const resultsEl = document.getElementById('search-results');
+                resultsEl.innerHTML = '<div class="alert info">👥 Loading all subscribers...</div>';
+                
+                try {
+                    const response = await api.request('/subscribers');
+                    if (!response.ok) throw new Error(await response.text());
+                    
+                    const data = await response.json();
+                    this.displayResults(data, 'all subscribers');
+                } catch (error) {
+                    resultsEl.innerHTML = `<div class="alert error">❌ Load failed: ${error.message}</div>`;
+                }
+            },
+            
+            displayResults(data, query) {
+                const resultsEl = document.getElementById('search-results');
+                
+                if (!data || !Array.isArray(data) || data.length === 0) {
+                    resultsEl.innerHTML = `
+                        <div class="state-container">
+                            <div class="icon">🔍</div>
+                            <h3>No Results Found</h3>
+                            <p>No subscribers found for "${query}". Try a different search term.</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                resultsEl.innerHTML = `
+                    <h3>🔍 Search Results (${data.length} found)</h3>
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Subscriber ID</th>
+                                <th>Email</th>
+                                <th>Plan</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.map(sub => `
+                                <tr>
+                                    <td><strong>${sub.uid || 'N/A'}</strong></td>
+                                    <td>${sub.email || 'N/A'}</td>
+                                    <td><span class="status-badge info">${sub.plan_id || 'N/A'}</span></td>
+                                    <td><span class="status-badge ${sub.status === 'active' ? 'success' : sub.status === 'inactive' ? 'error' : 'warning'}">${sub.status || 'N/A'}</span></td>
+                                    <td>${sub.created_at ? new Date(sub.created_at).toLocaleDateString() : 'N/A'}</td>
+                                    <td>
+                                        <button class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
+                                        <button class="btn btn-danger" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.confirmDelete('${sub.uid}')">🗑️ Delete</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+                
+                utils.showNotification(`✅ Found ${data.length} subscribers`, 'success');
+            },
+            
+            clearForm() {
+                document.getElementById('subscriber-id').value = '';
+                document.getElementById('subscriber-email').value = '';
+                document.getElementById('subscriber-plan').value = '';
+                document.getElementById('subscriber-status').value = 'active';
+                document.getElementById('create-status').innerHTML = '';
+            },
+            
+            confirmDelete(uid) {
+                ui.showConfirmationModal(
+                    'Delete Subscriber',
+                    `Are you sure you want to permanently delete subscriber ${uid}? This action cannot be undone.`,
+                    () => this.delete(uid)
+                );
+            },
+            
+            async delete(uid) {
+                try {
+                    const response = await api.request(`/subscribers/${uid}`, { method: 'DELETE' });
+                    
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(errText || 'Delete failed');
+                    }
+                    
+                    utils.showNotification(`🗑️ Subscriber ${uid} deleted`, 'success');
+                    this.search(); // Refresh current search
+                    dashboard.load(); // Update stats
+                } catch (error) {
+                    utils.showNotification(`❌ Delete failed: ${error.message}`, 'error');
+                }
+            },
+
+            edit(uid) {
+                utils.showNotification(`✏️ Edit functionality for ${uid} - coming soon`, 'info');
+            }
+        };
+
+        // DATA QUERY MODULE - REAL POST /query ENDPOINT
         const query = {
             quick(type) {
                 const queries = {
@@ -1322,7 +1501,7 @@
                     'inactive': 'SELECT * FROM subscribers WHERE status = "inactive" LIMIT 100;',
                     'recent': 'SELECT * FROM subscribers WHERE created_at > DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY created_at DESC;',
                     'plans': 'SELECT plan_id, COUNT(*) as count FROM subscribers GROUP BY plan_id;',
-                    'errors': 'SELECT * FROM migration_jobs WHERE status = "failed" ORDER BY created_at DESC LIMIT 50;',
+                    'errors': 'SELECT * FROM migration_jobs WHERE status = "FAILED" ORDER BY created_at DESC LIMIT 50;',
                     'audit': 'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 100;'
                 };
                 
@@ -1333,43 +1512,52 @@
             
             async execute() {
                 const queryText = document.getElementById('sql-query').value.trim();
-                const resultsEl = document.getElementById('query-results');
-                
                 if (!queryText) {
                     utils.showNotification('❌ Please enter a query', 'error');
                     return;
                 }
-                
+                await this.runQuery(queryText);
+            },
+
+            async runQuery(sql) {
+                const resultsEl = document.getElementById('query-results');
                 resultsEl.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
                 
-                // Simulate query execution
-                setTimeout(() => {
-                    const sampleResults = [
-                        { uid: 'SUB_001', email: 'user1@example.com', plan_id: 'PREMIUM', status: 'active' },
-                        { uid: 'SUB_002', email: 'user2@example.com', plan_id: 'BASIC', status: 'active' },
-                        { uid: 'SUB_003', email: 'user3@example.com', plan_id: 'PREMIUM', status: 'inactive' }
-                    ];
+                try {
+                    const res = await api.request('/query', {
+                        method: 'POST',
+                        body: { sql_query: sql }
+                    });
                     
+                    const text = await res.text();
+                    if (!res.ok) {
+                        let err = 'Query failed';
+                        try { err = JSON.parse(text).error || err; } catch {}
+                        throw new Error(err);
+                    }
+                    
+                    let payload = {};
+                    try { payload = JSON.parse(text); } catch { throw new Error('Invalid JSON from /query'); }
+                    
+                    const headers = Array.isArray(payload.headers) ? payload.headers : [];
+                    const rows = Array.isArray(payload.rows) ? payload.rows : [];
+
                     resultsEl.innerHTML = `
-                        <div class="alert success">✅ Query executed successfully! ${sampleResults.length} rows returned in 0.23s</div>
+                        <div class="alert success">✅ Query executed successfully! ${rows.length} rows returned</div>
                         <table class="results-table">
                             <thead>
-                                <tr><th>UID</th><th>Email</th><th>Plan ID</th><th>Status</th></tr>
+                                <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
                             </thead>
                             <tbody>
-                                ${sampleResults.map(row => `
-                                    <tr>
-                                        <td>${row.uid}</td>
-                                        <td>${row.email}</td>
-                                        <td>${row.plan_id}</td>
-                                        <td><span class="status-badge ${row.status === 'active' ? 'success' : 'error'}">${row.status}</span></td>
-                                    </tr>
-                                `).join('')}
+                                ${rows.map(r => `<tr>${Array.isArray(r) ? r.map(c => `<td>${c ?? ''}</td>`).join('') : '<td>Invalid row data</td>'}</tr>`).join('')}
                             </tbody>
                         </table>
                     `;
-                    utils.showNotification('✅ Query executed successfully', 'success');
-                }, 1500);
+                    utils.showNotification('✅ Query executed', 'success');
+                } catch (error) {
+                    resultsEl.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+                    utils.showNotification(`❌ ${error.message}`, 'error');
+                }
             },
             
             validate() {
@@ -1378,7 +1566,7 @@
                     utils.showNotification('❌ No query to validate', 'error');
                     return;
                 }
-                utils.showNotification('✅ Query syntax is valid', 'success');
+                utils.showNotification('✅ Query syntax looks valid (client-side check)', 'success');
             },
             
             clear() {
@@ -1387,65 +1575,76 @@
             },
             
             export() {
-                utils.showNotification('📊 Query results exported to CSV', 'success');
+                const table = document.querySelector('#query-results .results-table');
+                if (!table) {
+                    utils.showNotification('❌ No query results to export', 'error');
+                    return;
+                }
+                utils.showNotification('📊 Export functionality - implement CSV download', 'info');
             }
         };
 
-        // MONITORING MODULE
+        // MONITORING MODULE - REAL METRICS
         const monitoring = {
             realtimeActive: false,
             
-            refresh() {
-                // Update performance metrics with simulated real data
-                document.getElementById('response-time').textContent = 
-                    Math.floor(Math.random() * 200 + 100) + 'ms';
-                document.getElementById('db-load').textContent = 
-                    Math.floor(Math.random() * 30 + 5) + '%';
-                document.getElementById('lambda-calls').textContent = 
-                    Math.floor(Math.random() * 3000 + 1000).toLocaleString();
-                document.getElementById('running-jobs').textContent = 
-                    Math.floor(Math.random() * 8);
+            async refresh() {
+                try {
+                    const response = await api.request('/status');
+                    if (response.ok) {
+                        const data = await response.json();
+                        document.getElementById('response-time').textContent = data.response_time || 'N/A';
+                        document.getElementById('db-load').textContent = data.db_load || 'N/A';
+                        document.getElementById('lambda-calls').textContent = data.lambda_calls || 'N/A';
+                        document.getElementById('running-jobs').textContent = data.running_jobs || 'N/A';
+                    } else {
+                        throw new Error('Status API failed');
+                    }
+                } catch (error) {
+                    console.error('Failed to refresh metrics:', error);
+                    document.getElementById('response-time').textContent = 'N/A';
+                    document.getElementById('db-load').textContent = 'N/A';
+                    document.getElementById('lambda-calls').textContent = 'N/A';
+                    document.getElementById('running-jobs').textContent = 'N/A';
+                }
                 
                 utils.showNotification('📊 Metrics refreshed', 'success');
             },
             
             async checkHealth() {
                 const healthEl = document.getElementById('health-details');
-                
                 healthEl.innerHTML = '<div class="alert info">🏥 Running comprehensive health check...</div>';
                 
                 try {
                     const response = await api.request('/status');
                     
-                    if (response.ok) {
-                        const data = await response.json();
-                        healthEl.innerHTML = `
-                            <div class="alert success">✅ System Status: ${data.status?.toUpperCase()}</div>
-                            <div class="health-grid">
-                                <div class="health-item">
-                                    <span class="label">DynamoDB Tables</span>
-                                    <span class="status">🟢 ${data.environment?.tables_configured || 3} Active</span>
-                                </div>
-                                <div class="health-item">
-                                    <span class="label">RDS Database</span>
-                                    <span class="status">🟢 ${data.environment?.rds_configured ? 'Connected' : 'DynamoDB Mode'}</span>
-                                </div>
-                                <div class="health-item">
-                                    <span class="label">Lambda Functions</span>
-                                    <span class="status">🟢 Operational</span>
-                                </div>
-                                <div class="health-item">
-                                    <span class="label">API Gateway</span>
-                                    <span class="status">🟢 Responding</span>
-                                </div>
+                    if (!response.ok) throw new Error(await response.text());
+                    const data = await response.json();
+                    
+                    healthEl.innerHTML = `
+                        <div class="alert success">✅ System Status: ${data.status?.toUpperCase() || 'UNKNOWN'}</div>
+                        <div class="health-grid">
+                            <div class="health-item">
+                                <span class="label">DynamoDB Tables</span>
+                                <span class="status">🟢 ${data.environment?.tables_configured || 'N/A'} Active</span>
                             </div>
-                            <p style="margin-top: 16px; color: var(--text-light);">
-                                <strong>🕒 Last Updated:</strong> ${new Date(data.timestamp).toLocaleString()}
-                            </p>
-                        `;
-                    } else {
-                        throw new Error('Health API failed');
-                    }
+                            <div class="health-item">
+                                <span class="label">RDS Database</span>
+                                <span class="status">🟢 ${data.environment?.rds_configured ? 'Connected' : 'DynamoDB Mode'}</span>
+                            </div>
+                            <div class="health-item">
+                                <span class="label">Lambda Functions</span>
+                                <span class="status">🟢 ${data.environment?.lambda_count || 'N/A'} Active</span>
+                            </div>
+                            <div class="health-item">
+                                <span class="label">API Gateway</span>
+                                <span class="status">🟢 Responding</span>
+                            </div>
+                        </div>
+                        <p style="margin-top: 16px; color: var(--text-light);">
+                            <strong>🕒 Last Updated:</strong> ${new Date(data.timestamp || Date.now()).toLocaleString()}
+                        </p>
+                    `;
                 } catch (error) {
                     healthEl.innerHTML = `<div class="alert error">❌ Health check failed: ${error.message}</div>`;
                 }
@@ -1473,7 +1672,7 @@
             }
         };
 
-        // SETTINGS MODULE
+        // SETTINGS MODULE - REAL CONFIGURATION
         const settings = {
             async load() {
                 try {
@@ -1481,9 +1680,12 @@
                     if (response.ok) {
                         const data = await response.json();
                         document.getElementById('provisioning-mode').value = data.mode || 'CLOUD';
+                    } else {
+                        throw new Error('Settings API failed');
                     }
                 } catch (error) {
-                    console.log('Could not load settings:', error);
+                    console.error('Could not load settings:', error);
+                    // Keep default value
                 }
             },
             
@@ -1496,17 +1698,15 @@
                 try {
                     const response = await api.request('/settings/provisioning-mode', {
                         method: 'PUT',
-                        body: JSON.stringify({ mode: mode })
+                        body: { mode: mode }
                     });
                     
-                    if (response.ok) {
-                        statusEl.innerHTML = '<div class="alert success">✅ Provisioning mode updated successfully!</div>';
-                        utils.showNotification(`⚙️ Mode updated to ${mode}`, 'success');
-                    } else {
-                        throw new Error('Failed to save mode');
-                    }
+                    if (!response.ok) throw new Error(await response.text());
+                    
+                    statusEl.innerHTML = '<div class="alert success">✅ Provisioning mode updated successfully!</div>';
+                    utils.showNotification(`⚙️ Mode updated to ${mode}`, 'success');
                 } catch (error) {
-                    statusEl.innerHTML = '<div class="alert error">❌ Failed to save mode</div>';
+                    statusEl.innerHTML = `<div class="alert error">❌ Failed to save mode: ${error.message}</div>`;
                     utils.showNotification('❌ Save failed', 'error');
                 }
             },
@@ -1539,20 +1739,6 @@
             }
         };
 
-        // Add notification animations
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-        `;
-        document.head.appendChild(style);
-
         // APPLICATION INITIALIZATION
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 Enterprise Migration Portal v3.4.0 Loaded');
@@ -1566,25 +1752,29 @@
             const fileInput = document.getElementById('migration-file');
             const dropZone = document.getElementById('file-drop-zone');
             
-            fileInput.addEventListener('change', () => migration.handleFileSelect());
+            if (fileInput) {
+                fileInput.addEventListener('change', () => migration.handleFileSelect());
+            }
             
-            // Drag & drop
-            dropZone.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                dropZone.classList.add('dragover');
-            });
-            dropZone.addEventListener('dragleave', () => {
-                dropZone.classList.remove('dragover');
-            });
-            dropZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                dropZone.classList.remove('dragover');
-                const files = e.dataTransfer.files;
-                if (files.length > 0) {
-                    fileInput.files = files;
-                    migration.handleFileSelect();
-                }
-            });
+            if (dropZone) {
+                // Drag & drop
+                dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('dragover');
+                });
+                dropZone.addEventListener('dragleave', () => {
+                    dropZone.classList.remove('dragover');
+                });
+                dropZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('dragover');
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        fileInput.files = files;
+                        migration.handleFileSelect();
+                    }
+                });
+            }
             
             // Navigation setup
             document.querySelectorAll('.nav-item').forEach(item => {
@@ -1597,7 +1787,9 @@
             // Handle browser back/forward
             window.addEventListener('popstate', function(e) {
                 const hash = window.location.hash.substring(1);
-                if (hash) ui.showPage(hash);
+                if (hash && document.getElementById(hash)) {
+                    ui.showPage(hash);
+                }
             });
             
             // Enter key support for login
