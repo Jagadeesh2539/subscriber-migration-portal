@@ -43,6 +43,11 @@
       -moz-osx-font-smoothing: grayscale;
     }
 
+    /* Styles trimmed for brevity — same as your original CSS */
+    /* ... keep all previous CSS exactly as before ... */
+
+    /* I'm keeping the whole CSS as in your original file (already loaded above in your version).
+       Inserting same CSS here for completeness in the actual file. */
     /* LOGIN */
     #login-screen {
       display: flex; align-items: center; justify-content: center;
@@ -524,18 +529,26 @@
   </div>
 
   <script>
-    // APP CONFIG - HYBRID: Dummy login only, real APIs for everything else
+    // === APP CONFIG (fixed) ===
     const APP_CONFIG = {
       DEMO_LOGIN: false,
-      SUBSCRIBERS_API: "https://2f2wzceckjqbmgxx2hwcg4464a0iptoa.lambda-url.us-east-1.on.aws/",
-      JOBS_API: "https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/",
-      AUTH_API: "https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/auth",
-	  HEALTH_API: "https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod"
+
+      // API Gateway base (keep auth + health + other complex flows here)
+      API_BASE: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod',
+
+      // Explicit auth & health paths (makes usage clearer)
+      AUTH_API: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/auth/login',
+      HEALTH_API: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod',
+
+      // Working Lambda Function URLs for subscribers & jobs
+      SUBSCRIBERS_API: 'https://2f2wzceckjqbmgxx2hwcg4464a0iptoa.lambda-url.us-east-1.on.aws/',
+      JOBS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
+
       VERSION: '3.4.0',
       REFRESH_INTERVAL: 30000
     };
 
-    // AUTH - dummy login only
+    // === AUTH ===
     const auth = {
       currentUser: null,
       checkAuth() {
@@ -572,14 +585,14 @@
             this.checkAuth();
             return;
           }
-          // Real login path (kept for future)
-          const res = await fetch(`${APP_CONFIG.API_BASE}/auth/login`, {
+          // Real login path — use AUTH_API
+          const res = await fetch(APP_CONFIG.AUTH_API, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ username, password })
           });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
-          if (!data.token) throw new Error('Token missing');
+          if (!data.success || !data.token) throw new Error(data.message || 'Login failed');
           sessionStorage.setItem('authToken', data.token);
           sessionStorage.setItem('username', username);
           this.checkAuth();
@@ -602,30 +615,73 @@
       }
     };
 
-    // API helper
+    // === API HELPER with routing for Function URLs ===
     const api = {
+      // Build full URL depending on endpoint and mapping rules
+      _fullUrl(endpoint) {
+        // If endpoint is already a full URL, return it
+        if (endpoint.startsWith('http://') || endpoint.startsWith('https://')) return endpoint;
+
+        // Route subscribers endpoints to Function URL
+        if (endpoint === '/subscribers' || endpoint.startsWith('/subscribers/')) {
+          const rest = endpoint.slice('/subscribers'.length); // maybe '/:id' or ''
+          // ensure single slash after base
+          return APP_CONFIG.SUBSCRIBERS_API.replace(/\/$/, '') + (rest === '' ? '/' : rest);
+        }
+
+        // Route jobs endpoints to Function URL
+        if (endpoint === '/jobs' || endpoint.startsWith('/jobs/')) {
+          const rest = endpoint.slice('/jobs'.length);
+          return APP_CONFIG.JOBS_API.replace(/\/$/, '') + (rest === '' ? '/' : rest);
+        }
+
+        // By default, use API_BASE
+        return APP_CONFIG.API_BASE.replace(/\/$/, '') + (endpoint.startsWith('/') ? endpoint : `/${endpoint}`);
+      },
+
+      // Unified request method
       async request(endpoint, options = {}) {
         const token = sessionStorage.getItem('authToken');
-        const cfg = { method: options.method || 'GET', headers: { ...(options.headers || {}) }, body: options.body };
+        const method = (options.method || 'GET').toUpperCase();
+        const headers = Object.assign({}, options.headers || {});
+        let body = options.body;
 
-        const isFormData = (cfg.body && typeof FormData !== 'undefined' && cfg.body instanceof FormData);
-        if (!isFormData) {
-          cfg.headers['Accept'] = 'application/json';
-          if (cfg.body && typeof cfg.body === 'object') {
-            cfg.headers['Content-Type'] = 'application/json'; cfg.body = JSON.stringify(cfg.body);
-          } else if (!cfg.headers['Content-Type']) { cfg.headers['Content-Type'] = 'application/json'; }
+        const fullUrl = this._fullUrl(endpoint);
+
+        // If body is an object and not FormData -> stringify
+        const isFormData = (typeof FormData !== 'undefined' && (body instanceof FormData));
+        if (!isFormData && body && typeof body === 'object') {
+          body = JSON.stringify(body);
+          headers['Content-Type'] = headers['Content-Type'] || 'application/json';
         }
-        if (token) cfg.headers['Authorization'] = `Bearer ${token}`;
-        const res = await fetch(`${APP_CONFIG.API_BASE}${endpoint}`, cfg);
-        if (res.status === 401) { utils.showNotification('🔒 Unauthorized - session reset', 'error'); sessionStorage.clear(); auth.checkAuth(); }
+
+        headers['Accept'] = headers['Accept'] || 'application/json';
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const cfg = { method, headers, body };
+
+        // For GET/HEAD, ensure no body
+        if (method === 'GET' || method === 'HEAD') delete cfg.body;
+
+        const res = await fetch(fullUrl, cfg);
+
+        if (res.status === 401) {
+          utils.showNotification('🔒 Unauthorized - session reset', 'error');
+          sessionStorage.clear();
+          auth.checkAuth();
+        }
+
         return res;
       },
+
+      // Health check convenience
       async checkHealth() {
         const statusEl = document.getElementById('api-status');
         statusEl.className = 'alert info';
         statusEl.textContent = '🔄 Testing backend connection...';
+
         try {
-          const response = await fetch(`${APP_CONFIG.API_BASE}/health`);
+          const response = await fetch(`${APP_CONFIG.HEALTH_API}/health`);
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const data = await response.json();
 
@@ -647,7 +703,7 @@
       }
     };
 
-    // UI
+    // === UI ===
     const ui = {
       currentPage: 'dashboard',
       showPage(pageId) {
@@ -695,32 +751,44 @@
       }
     };
 
-    // Dashboard
+    // === Dashboard ===
     const dashboard = {
       async load() {
+        // Subscribers
         try {
-          const subResponse = await api.request('/subscribers');
-          if (subResponse.ok) {
-            const data = await subResponse.json();
-            document.getElementById('total-subscribers').textContent = Array.isArray(data) ? data.length.toLocaleString() : '0';
-          } else { throw new Error('Subscribers API failed'); }
-        } catch { document.getElementById('total-subscribers').textContent = 'N/A'; }
+          const subRes = await api.request('/subscribers');
+          if (subRes.ok) {
+            const payload = await subRes.json();
+            // support both Function URL shape { success, subscribers } and array shape
+            const subsArr = Array.isArray(payload) ? payload : (payload.subscribers || []);
+            document.getElementById('total-subscribers').textContent = (subsArr.length || 0).toLocaleString();
+          } else {
+            throw new Error('Subscribers API failed');
+          }
+        } catch {
+          document.getElementById('total-subscribers').textContent = 'N/A';
+        }
 
+        // Jobs
         try {
-          const jobsResponse = await api.request('/jobs');
-          if (jobsResponse.ok) {
-            const jobs = await jobsResponse.json();
-            const activeJobs = Array.isArray(jobs) ? jobs.filter(job => job.status === 'RUNNING').length : 0;
+          const jobsRes = await api.request('/jobs');
+          if (jobsRes.ok) {
+            const payload = await jobsRes.json();
+            const jobsArr = Array.isArray(payload) ? payload : (payload.jobs || []);
+            const activeJobs = jobsArr.filter(job => (job.status || '').toUpperCase() === 'RUNNING').length;
             document.getElementById('active-migrations').textContent = activeJobs;
           } else { throw new Error('Jobs API failed'); }
-        } catch { document.getElementById('active-migrations').textContent = 'N/A'; }
+        } catch {
+          document.getElementById('active-migrations').textContent = 'N/A';
+        }
 
+        // Status metrics (API_BASE)
         try {
-          const statusResponse = await api.request('/status');
-          if (statusResponse.ok) {
-            const statusData = await statusResponse.json();
-            document.getElementById('success-rate').textContent = statusData.success_rate || 'N/A';
-            document.getElementById('data-processed').textContent = statusData.data_processed || 'N/A';
+          const statusRes = await api.request('/status');
+          if (statusRes.ok) {
+            const data = await statusRes.json();
+            document.getElementById('success-rate').textContent = data.success_rate || 'N/A';
+            document.getElementById('data-processed').textContent = data.data_processed || 'N/A';
           } else { throw new Error('Status API failed'); }
         } catch {
           document.getElementById('success-rate').textContent = 'N/A';
@@ -731,7 +799,7 @@
       refresh() { this.load(); }
     };
 
-    // Migration
+    // === Migration ===
     const migration = {
       selectedFile: null,
       handleFileSelect() {
@@ -764,7 +832,8 @@
           fd.append('file', this.selectedFile);
           const token = sessionStorage.getItem('authToken');
           const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-          const res = await fetch(APP_CONFIG.API_BASE + '/migration/upload', {
+          // Use API_BASE for migration upload (not function url)
+          const res = await fetch(`${APP_CONFIG.API_BASE}/migration/upload`, {
             method: 'POST', headers: headers, body: fd
           });
           if (!res.ok) { const errText = await res.text(); throw new Error(errText || ('Upload failed (' + res.status + ')')); }
@@ -789,6 +858,7 @@
         const el = document.getElementById('migration-jobs');
         el.innerHTML = '<div class="alert info">▶️ Starting bulk migration...</div>';
         try {
+          // use API_BASE for starting workflow
           const res = await api.request('/migration/jobs', { method: 'POST', body: { type: 'bulk_migration', batch_size: 1000, priority: 'high' } });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
@@ -806,8 +876,9 @@
         try {
           const res = await api.request('/jobs');
           if (!res.ok) throw new Error(await res.text());
-          const jobs = await res.json();
-          const activeJobs = Array.isArray(jobs) ? jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes(j.status)) : [];
+          const payload = await res.json();
+          const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+          const activeJobs = Array.isArray(jobs) ? jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes((j.status || '').toUpperCase())) : [];
           this.renderJobs(activeJobs, 'Active Migration Jobs');
         } catch (error) {
           el.innerHTML = '<div class="alert error">❌ Unable to load jobs: ' + error.message + '</div>';
@@ -819,15 +890,16 @@
         try {
           const res = await api.request('/jobs');
           if (!res.ok) throw new Error(await res.text());
-          const jobs = await res.json();
-          this.renderJobs(Array.isArray(jobs) ? jobs : [], 'Migration Job History', true);
+          const payload = await res.json();
+          const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+          this.renderJobs(jobs, 'Migration Job History', true);
         } catch (error) {
           el.innerHTML = '<div class="alert error">❌ Unable to load history: ' + error.message + '</div>';
         }
       },
       renderJobs(jobs, title, showActions = false) {
         const el = document.getElementById('migration-jobs');
-        if (!jobs.length) {
+        if (!jobs || !jobs.length) {
           el.innerHTML = `
             <div class="state-container">
               <div class="icon">📋</div>
@@ -849,7 +921,7 @@
                 <tr>
                   <td><strong>${j.job_id || j.id || ''}</strong></td>
                   <td><span class="status-badge info">${j.type || 'migration'}</span></td>
-                  <td><span class="status-badge ${j.status === 'COMPLETED' ? 'success' : j.status === 'FAILED' ? 'error' : 'info'}">${j.status}</span></td>
+                  <td><span class="status-badge ${ (j.status || '').toUpperCase() === 'COMPLETED' ? 'success' : ( (j.status || '').toUpperCase() === 'FAILED' ? 'error' : 'info') }">${j.status || ''}</span></td>
                   <td>
                     <div class="progress-bar" style="width:80px;height:6px;"><div class="progress-fill" style="width:${j.progress || 0}%"></div></div>
                     <small>${j.progress || 0}%</small>
@@ -858,7 +930,7 @@
                   <td>${j.records_processed ? j.records_processed.toLocaleString() : '0'}</td>
                   ${showActions ? `
                     <td>
-                      ${j.status === 'RUNNING'
+                      ${ (j.status || '').toUpperCase() === 'RUNNING'
                         ? `<button class="btn btn-danger" style="padding:6px 10px;font-size:11px" onclick="migration.cancelJob('${j.job_id || j.id}')">🛑 Cancel</button>`
                         : `<button class="btn btn-secondary" style="padding:6px 10px;font-size:11px" onclick="migration.viewJobDetails('${j.job_id || j.id}')">👁️ Details</button>`
                       }
@@ -904,7 +976,7 @@
       viewJobDetails(jobId) { utils.showNotification(`📊 Viewing details for job ${jobId}`, 'info'); }
     };
 
-    // Provisioning
+    // === Provisioning ===
     const provisioning = {
       async create() {
         const id = document.getElementById('subscriber-id').value.trim();
@@ -935,7 +1007,8 @@
           const response = await api.request(`/subscribers/search?q=${encodeURIComponent(queryText)}`);
           if (!response.ok) { const errText = await response.text(); throw new Error(errText || 'Search failed'); }
           const data = await response.json();
-          this.displayResults(data, queryText);
+          const arr = Array.isArray(data) ? data : (data.subscribers || []);
+          this.displayResults(arr, queryText);
         } catch (error) {
           resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
           utils.showNotification('❌ Search failed', 'error');
@@ -947,7 +1020,8 @@
         try {
           const response = await api.request('/subscribers');
           if (!response.ok) throw new Error(await response.text());
-          const data = await response.json();
+          const payload = await response.json();
+          const data = Array.isArray(payload) ? payload : (payload.subscribers || []);
           this.displayResults(data, 'all subscribers');
         } catch (error) {
           resultsEl.innerHTML = `<div class="alert error">❌ Load failed: ${error.message}</div>`;
@@ -1011,7 +1085,7 @@
       edit(uid) { utils.showNotification(`✏️ Edit functionality for ${uid} - coming soon`, 'info'); }
     };
 
-    // Query
+    // === Query ===
     const query = {
       quick(type) {
         const queries = {
@@ -1069,7 +1143,7 @@
       }
     };
 
-    // Monitoring
+    // === Monitoring ===
     const monitoring = {
       realtimeActive: false,
       async refresh() {
@@ -1121,7 +1195,7 @@
       }
     };
 
-    // Settings
+    // === Settings ===
     const settings = {
       async load() {
         try {
@@ -1149,7 +1223,7 @@
       saveConfig() { utils.showNotification('💾 System configuration saved', 'success'); }
     };
 
-    // Utils
+    // === Utils ===
     const utils = {
       showNotification(message, type = 'info') {
         const notification = document.createElement('div');
@@ -1168,7 +1242,7 @@
       }
     };
 
-    // Init
+    // === Init ===
     document.addEventListener('DOMContentLoaded', function() {
       // listeners
       document.getElementById('login-btn').addEventListener('click', () => auth.login());
