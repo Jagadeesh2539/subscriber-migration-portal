@@ -609,19 +609,12 @@
         if (!isFormData) {
           cfg.headers['Accept'] = 'application/json';
           if (cfg.body && typeof cfg.body === 'object') {
-            cfg.headers['Content-Type'] = 'application/json';
-            cfg.body = JSON.stringify(cfg.body);
-          } else if (!cfg.headers['Content-Type']) {
-            cfg.headers['Content-Type'] = 'application/json';
-          }
+            cfg.headers['Content-Type'] = 'application/json'; cfg.body = JSON.stringify(cfg.body);
+          } else if (!cfg.headers['Content-Type']) { cfg.headers['Content-Type'] = 'application/json'; }
         }
         if (token) cfg.headers['Authorization'] = `Bearer ${token}`;
-
         const res = await fetch(`${APP_CONFIG.API_BASE}${endpoint}`, cfg);
-        if (res.status === 401) {
-          utils.showNotification('🔒 Unauthorized - session reset', 'error');
-          sessionStorage.clear(); auth.checkAuth();
-        }
+        if (res.status === 401) { utils.showNotification('🔒 Unauthorized - session reset', 'error'); sessionStorage.clear(); auth.checkAuth(); }
         return res;
       },
       async checkHealth() {
@@ -756,7 +749,7 @@
           <strong>🔍 Type:</strong> ${file.type || 'CSV'}
         `;
         fileInfo.style.display = 'block';
-        utils.showNotification(\`📁 File "\${file.name}" ready for upload\`, 'success');
+        utils.showNotification('📁 File ' + file.name + ' ready for upload', 'success');
       },
       async startFileUpload() {
         if (!this.selectedFile) { utils.showNotification('❌ No file selected', 'error'); return; }
@@ -767,16 +760,17 @@
           const fd = new FormData();
           fd.append('file', this.selectedFile);
           const token = sessionStorage.getItem('authToken');
-          const res = await fetch(`${APP_CONFIG.API_BASE}/migration/upload`, {
-            method: 'POST', headers: token ? { 'Authorization': \`Bearer \${token}\` } : {}, body: fd
+          const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+          const res = await fetch(APP_CONFIG.API_BASE + '/migration/upload', {
+            method: 'POST', headers: headers, body: fd
           });
-          if (!res.ok) { const errText = await res.text(); throw new Error(errText || \`Upload failed (\${res.status})\`); }
+          if (!res.ok) { const errText = await res.text(); throw new Error(errText || ('Upload failed (' + res.status + ')')); }
           const data = await res.json();
-          statusEl.innerHTML = \`<div class="alert success">✅ File uploaded successfully! Job ID: \${data.job_id || 'N/A'}</div>\`;
+          statusEl.innerHTML = '<div class="alert success">✅ File uploaded successfully! Job ID: ' + (data.job_id || 'N/A') + '</div>';
           progressEl.style.width = '100%';
           utils.showNotification('🎉 File migration started!', 'success');
         } catch (error) {
-          statusEl.innerHTML = \`<div class="alert error">❌ Migration failed: \${error.message}</div>\`;
+          statusEl.innerHTML = '<div class="alert error">❌ Migration failed: ' + error.message + '</div>';
           utils.showNotification('❌ Migration failed', 'error');
         }
       },
@@ -795,11 +789,11 @@
           const res = await api.request('/migration/jobs', { method: 'POST', body: { type: 'bulk_migration', batch_size: 1000, priority: 'high' } });
           if (!res.ok) throw new Error(await res.text());
           const data = await res.json();
-          el.innerHTML = `<div class="alert success">✅ Bulk migration started! Job ID: ${data.job_id || 'N/A'}</div>`;
+          el.innerHTML = '<div class="alert success">✅ Bulk migration started! Job ID: ' + (data.job_id || 'N/A') + '</div>';
           utils.showNotification('🚀 Bulk migration started', 'success');
           setTimeout(() => this.checkJobs(), 2000);
         } catch (error) {
-          el.innerHTML = `<div class="alert error">❌ Failed to start bulk migration: ${error.message}</div>`;
+          el.innerHTML = '<div class="alert error">❌ Failed to start bulk migration: ' + error.message + '</div>';
           utils.showNotification('❌ Bulk migration failed', 'error');
         }
       },
@@ -813,7 +807,7 @@
           const activeJobs = Array.isArray(jobs) ? jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes(j.status)) : [];
           this.renderJobs(activeJobs, 'Active Migration Jobs');
         } catch (error) {
-          el.innerHTML = `<div class="alert error">❌ Unable to load jobs: ${error.message}</div>`;
+          el.innerHTML = '<div class="alert error">❌ Unable to load jobs: ' + error.message + '</div>';
         }
       },
       async loadHistory() {
@@ -825,7 +819,7 @@
           const jobs = await res.json();
           this.renderJobs(Array.isArray(jobs) ? jobs : [], 'Migration Job History', true);
         } catch (error) {
-          el.innerHTML = `<div class="alert error">❌ Unable to load history: ${error.message}</div>`;
+          el.innerHTML = '<div class="alert error">❌ Unable to load history: ' + error.message + '</div>';
         }
       },
       renderJobs(jobs, title, showActions = false) {
