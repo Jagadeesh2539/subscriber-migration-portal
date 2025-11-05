@@ -438,7 +438,7 @@
             <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-color);">
                 <p style="font-size: 12px; color: var(--text-light);">
                     Demo Credentials: admin / password<br>
-                    Production ready with JWT authentication
+                    <strong>Demo Mode - No Real APIs</strong>
                 </p>
             </div>
         </div>
@@ -452,7 +452,7 @@
         <nav class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h2>Migration Portal</h2>
-                <div class="version">v3.4.0 Enterprise</div>
+                <div class="version">v3.4.0 Demo</div>
             </div>
             
             <div class="nav-menu">
@@ -501,32 +501,32 @@
                     <div class="stat-card">
                         <div class="icon">👥</div>
                         <h3>Total Subscribers</h3>
-                        <div class="stat-number" id="total-subscribers">Loading...</div>
+                        <div class="stat-number" id="total-subscribers">1,247</div>
                         <div class="stat-change positive" id="subscribers-change">+12% this month</div>
                     </div>
                     <div class="stat-card">
                         <div class="icon">🔄</div>
                         <h3>Active Migrations</h3>
-                        <div class="stat-number" id="active-migrations">Loading...</div>
+                        <div class="stat-number" id="active-migrations">3</div>
                         <div class="stat-change" id="migrations-change">3 running</div>
                     </div>
                     <div class="stat-card">
                         <div class="icon">✅</div>
                         <h3>Success Rate</h3>
-                        <div class="stat-number" id="success-rate">Loading...</div>
+                        <div class="stat-number" id="success-rate">98.5%</div>
                         <div class="stat-change positive" id="success-change">+0.3% this week</div>
                     </div>
                     <div class="stat-card">
                         <div class="icon">📊</div>
                         <h3>Data Processed</h3>
-                        <div class="stat-number" id="data-processed">Loading...</div>
+                        <div class="stat-number" id="data-processed">15.2GB</div>
                         <div class="stat-change positive" id="data-change">+2.1GB today</div>
                     </div>
                 </div>
                 
                 <div class="card">
                     <h2>🔌 Backend API Status</h2>
-                    <div id="api-status" class="alert info">🔄 Testing backend connection...</div>
+                    <div id="api-status" class="alert success">✅ <strong>Demo Mode Active!</strong><br>All operations are simulated for demonstration purposes.</div>
                     <button class="btn" onclick="api.checkHealth()">🔄 Test Connection</button>
                     <button class="btn btn-secondary" onclick="dashboard.refresh()">📊 Refresh Data</button>
                 </div>
@@ -536,19 +536,19 @@
                     <div class="health-grid">
                         <div class="health-item">
                             <span class="label">API Gateway</span>
-                            <span class="status" id="api-health">🟡 Checking...</span>
+                            <span class="status" id="api-health">🟢 Simulated</span>
                         </div>
                         <div class="health-item">
                             <span class="label">Lambda Functions</span>
-                            <span class="status" id="lambda-health">🟡 Checking...</span>
+                            <span class="status" id="lambda-health">🟢 Demo Mode</span>
                         </div>
                         <div class="health-item">
                             <span class="label">Database</span>
-                            <span class="status" id="db-health">🟡 Checking...</span>
+                            <span class="status" id="db-health">🟢 Mock Data</span>
                         </div>
                         <div class="health-item">
                             <span class="label">S3 Storage</span>
-                            <span class="status" id="s3-health">🟢 Healthy</span>
+                            <span class="status" id="s3-health">🟢 Simulated</span>
                         </div>
                     </div>
                 </div>
@@ -700,22 +700,22 @@
                         <div class="stat-card">
                             <div class="icon">🚀</div>
                             <h3>API Response Time</h3>
-                            <div class="stat-number" id="response-time">Loading...</div>
+                            <div class="stat-number" id="response-time">245ms</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">💾</div>
                             <h3>Database Load</h3>
-                            <div class="stat-number" id="db-load">Loading...</div>
+                            <div class="stat-number" id="db-load">12%</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">☁️</div>
                             <h3>Lambda Calls</h3>
-                            <div class="stat-number" id="lambda-calls">Loading...</div>
+                            <div class="stat-number" id="lambda-calls">1,234</div>
                         </div>
                         <div class="stat-card">
                             <div class="icon">🔄</div>
                             <h3>Running Jobs</h3>
-                            <div class="stat-number" id="running-jobs">Loading...</div>
+                            <div class="stat-number" id="running-jobs">3</div>
                         </div>
                     </div>
                     <div style="margin-top: 20px;">
@@ -797,14 +797,30 @@
     </div>
 
     <script>
-        // ENTERPRISE APPLICATION LOGIC
+        // DEMO MODE CONFIGURATION
         const APP_CONFIG = {
-            API_BASE: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod',
+            DEMO_MODE: true,
             VERSION: '3.4.0',
             REFRESH_INTERVAL: 30000
         };
 
-        // AUTHENTICATION SYSTEM - REAL API ONLY
+        // MOCK DATA FOR DEMO
+        const MOCK_DATA = {
+            subscribers: [
+                { uid: 'SUB_001', email: 'john.doe@example.com', plan_id: 'PREMIUM', status: 'active', created_at: '2024-01-15' },
+                { uid: 'SUB_002', email: 'jane.smith@example.com', plan_id: 'BASIC', status: 'active', created_at: '2024-02-20' },
+                { uid: 'SUB_003', email: 'bob.wilson@example.com', plan_id: 'PRO', status: 'inactive', created_at: '2024-03-10' },
+                { uid: 'SUB_004', email: 'alice.brown@example.com', plan_id: 'PREMIUM', status: 'active', created_at: '2024-04-05' },
+                { uid: 'SUB_005', email: 'mike.davis@example.com', plan_id: 'BASIC', status: 'pending', created_at: '2024-05-12' }
+            ],
+            jobs: [
+                { job_id: 'JOB_001', type: 'file_upload', status: 'COMPLETED', progress: 100, created_at: '2024-11-01T10:30:00Z', records_processed: 150 },
+                { job_id: 'JOB_002', type: 'bulk_migration', status: 'RUNNING', progress: 75, created_at: '2024-11-05T09:15:00Z', records_processed: 1200 },
+                { job_id: 'JOB_003', type: 'data_sync', status: 'FAILED', progress: 25, created_at: '2024-11-04T14:20:00Z', records_processed: 45 }
+            ]
+        };
+
+        // DUMMY AUTHENTICATION SYSTEM
         const auth = {
             currentUser: null,
             
@@ -829,7 +845,7 @@
                 }
             },
 
-            async login() {
+            login() {
                 const username = document.getElementById('username').value.trim();
                 const password = document.getElementById('password').value.trim();
                 const loginBtn = document.getElementById('login-btn');
@@ -840,35 +856,24 @@
                     return;
                 }
                 
-                loginBtn.disabled = true;
-                loginBtn.innerHTML = '<div class="loading-spinner" style="width:20px; height:20px; border-width: 2px;"></div> <span>Authenticating...</span>';
-                errorEl.style.display = 'none';
+                // DUMMY LOGIN - Accept any credentials for demo
+                if (username && password) {
+                    loginBtn.disabled = true;
+                    loginBtn.innerHTML = '<div class="loading-spinner" style="width:20px; height:20px; border-width: 2px;"></div> <span>Authenticating...</span>';
+                    errorEl.style.display = 'none';
 
-                try {
-                    const response = await fetch(`${APP_CONFIG.API_BASE}/auth/login`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ username, password })
-                    });
-                    
-                    if (!response.ok) {
-                        const errText = await response.text().catch(() => '');
-                        throw new Error(errText || `Authentication failed (${response.status})`);
-                    }
-
-                    const data = await response.json();
-                    if (!data.token) throw new Error('Token missing in response');
-
-                    sessionStorage.setItem('authToken', data.token);
-                    sessionStorage.setItem('username', username);
-                    this.checkAuth();
-                    utils.showNotification('🎉 Welcome to Enterprise Portal!', 'success');
-                } catch (error) {
-                    console.error('Login error:', error);
-                    this.showLoginError(error.message || 'Authentication failed. Please check your credentials.');
-                } finally {
-                    loginBtn.disabled = false;
-                    loginBtn.innerHTML = '<span>🔑 Sign In to Portal</span>';
+                    // Simulate authentication delay
+                    setTimeout(() => {
+                        sessionStorage.setItem('authToken', 'dummy-token-' + Date.now());
+                        sessionStorage.setItem('username', username);
+                        this.checkAuth();
+                        utils.showNotification('🎉 Welcome to Demo Portal!', 'success');
+                        
+                        loginBtn.disabled = false;
+                        loginBtn.innerHTML = '<span>🔑 Sign In to Portal</span>';
+                    }, 1000);
+                } else {
+                    this.showLoginError('Invalid credentials');
                 }
             },
             
@@ -881,7 +886,7 @@
             logout() {
                 ui.showConfirmationModal(
                     'Sign Out', 
-                    'Are you sure you want to sign out of the Enterprise Portal?',
+                    'Are you sure you want to sign out of the Demo Portal?',
                     () => {
                         sessionStorage.clear();
                         this.currentUser = null;
@@ -892,100 +897,60 @@
             }
         };
 
-        // API COMMUNICATION - REAL ENDPOINTS ONLY
+        // DUMMY API SYSTEM
         const api = {
-            async request(endpoint, options = {}) {
-                const token = sessionStorage.getItem('authToken');
-                const cfg = {
-                    method: options.method || 'GET',
-                    headers: { ...(options.headers || {}) },
-                    body: options.body
-                };
-
-                const isFormData = (cfg.body && typeof FormData !== 'undefined' && cfg.body instanceof FormData);
-                if (!isFormData) {
-                    cfg.headers['Accept'] = 'application/json';
-                    if (cfg.body && typeof cfg.body === 'object') {
-                        cfg.headers['Content-Type'] = 'application/json';
-                        cfg.body = JSON.stringify(cfg.body);
-                    } else if (!cfg.headers['Content-Type']) {
-                        cfg.headers['Content-Type'] = 'application/json';
-                    }
-                }
-
-                if (token) cfg.headers['Authorization'] = `Bearer ${token}`;
-
-                const res = await fetch(`${APP_CONFIG.API_BASE}${endpoint}`, cfg);
-
-                if (res.status === 401) {
-                    sessionStorage.clear();
-                    auth.checkAuth();
-                    throw new Error('Unauthorized - session expired');
-                }
-
-                return res;
-            },
-
-            async checkHealth() {
+            checkHealth() {
                 const statusEl = document.getElementById('api-status');
-                statusEl.className = 'alert info';
-                statusEl.textContent = '🔄 Testing backend connection...';
+                statusEl.className = 'alert success';
+                statusEl.innerHTML = '✅ <strong>Demo Mode Active!</strong><br>All operations are simulated for demonstration purposes.';
                 
-                try {
-                    const response = await fetch(`${APP_CONFIG.API_BASE}/health`);
-                    
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                    const data = await response.json();
-                    
-                    statusEl.className = 'alert success';
-                    statusEl.innerHTML = `✅ <strong>Backend Connected!</strong><br>API Version: ${data.version || '-'} | Status: ${data.status || '-'}`;
-                    
-                    document.getElementById('api-health').textContent = '🟢 Connected';
-                    document.getElementById('lambda-health').textContent = '🟢 Operational';
-                    document.getElementById('db-health').textContent = data.environment?.rds_configured ? '🟢 Connected' : '🟡 DynamoDB';
-                    
-                    return true;
-                } catch (error) {
-                    statusEl.className = 'alert error';
-                    statusEl.innerHTML = `❌ <strong>Backend Offline</strong><br>Error: ${error.message}`;
-                    
-                    document.getElementById('api-health').textContent = '🔴 Failed';
-                    document.getElementById('lambda-health').textContent = '🟡 Unknown';
-                    document.getElementById('db-health').textContent = '🟡 Unknown';
-                    
-                    return false;
-                }
+                document.getElementById('api-health').textContent = '🟢 Simulated';
+                document.getElementById('lambda-health').textContent = '🟢 Demo Mode';
+                document.getElementById('db-health').textContent = '🟢 Mock Data';
+                document.getElementById('s3-health').textContent = '🟢 Simulated';
+                
+                return true;
             }
         };
 
-        // UI MANAGEMENT
+        // UI MANAGEMENT - FIXED ROUTING
         const ui = {
             currentPage: 'dashboard',
             
             showPage(pageId) {
+                // Hide all sections
                 document.querySelectorAll('.page-section').forEach(section => {
                     section.classList.remove('active');
                 });
                 
+                // Remove active class from all nav items
                 document.querySelectorAll('.nav-item').forEach(item => {
                     item.classList.remove('active');
                 });
                 
+                // Show selected section
                 const section = document.getElementById(pageId);
                 if (section) {
                     section.classList.add('active');
                     this.currentPage = pageId;
+                    console.log(`🔄 Navigated to: ${pageId}`);
                 }
                 
+                // Activate corresponding nav item
                 const navItem = document.querySelector(`[data-page="${pageId}"]`);
                 if (navItem) {
                     navItem.classList.add('active');
                 }
                 
+                // Update URL hash
                 window.history.pushState({}, '', `#${pageId}`);
                 document.getElementById('sidebar').classList.remove('open');
                 
+                // Load page-specific data
                 this.loadPageData(pageId);
+                
+                // Show success notification
+                utils.showNotification(`📄 Switched to ${pageId.charAt(0).toUpperCase() + pageId.slice(1)}`, 'info');
             },
             
             loadPageData(pageId) {
@@ -999,6 +964,15 @@
                         break;
                     case 'settings':
                         settings.load();
+                        break;
+                    case 'migration':
+                        utils.showNotification('🔄 Migration tools loaded', 'success');
+                        break;
+                    case 'provisioning':
+                        utils.showNotification('👥 Provisioning tools loaded', 'success');
+                        break;
+                    case 'query':
+                        utils.showNotification('🔍 Query interface loaded', 'success');
                         break;
                 }
             },
@@ -1031,54 +1005,15 @@
             }
         };
 
-        // DASHBOARD MODULE - REAL DATA ONLY
+        // DASHBOARD MODULE - DEMO DATA
         const dashboard = {
-            async load() {
-                try {
-                    const subResponse = await api.request('/subscribers');
-                    if (subResponse.ok) {
-                        const data = await subResponse.json();
-                        document.getElementById('total-subscribers').textContent = 
-                            Array.isArray(data) ? data.length.toLocaleString() : '0';
-                    } else {
-                        throw new Error('Subscribers API failed');
-                    }
-                } catch (error) {
-                    console.error('Failed to load subscribers:', error);
-                    document.getElementById('total-subscribers').textContent = 'N/A';
-                }
+            load() {
+                document.getElementById('total-subscribers').textContent = MOCK_DATA.subscribers.length.toLocaleString();
+                document.getElementById('active-migrations').textContent = MOCK_DATA.jobs.filter(j => j.status === 'RUNNING').length;
+                document.getElementById('success-rate').textContent = '98.5%';
+                document.getElementById('data-processed').textContent = '15.2GB';
                 
-                try {
-                    const jobsResponse = await api.request('/jobs');
-                    if (jobsResponse.ok) {
-                        const jobs = await jobsResponse.json();
-                        const activeJobs = Array.isArray(jobs) ? 
-                            jobs.filter(job => job.status === 'RUNNING').length : 0;
-                        document.getElementById('active-migrations').textContent = activeJobs;
-                    } else {
-                        throw new Error('Jobs API failed');
-                    }
-                } catch (error) {
-                    console.error('Failed to load jobs:', error);
-                    document.getElementById('active-migrations').textContent = 'N/A';
-                }
-
-                try {
-                    const statusResponse = await api.request('/status');
-                    if (statusResponse.ok) {
-                        const statusData = await statusResponse.json();
-                        document.getElementById('success-rate').textContent = statusData.success_rate || 'N/A';
-                        document.getElementById('data-processed').textContent = statusData.data_processed || 'N/A';
-                    } else {
-                        throw new Error('Status API failed');
-                    }
-                } catch (error) {
-                    console.error('Failed to load status:', error);
-                    document.getElementById('success-rate').textContent = 'N/A';
-                    document.getElementById('data-processed').textContent = 'N/A';
-                }
-                
-                utils.showNotification('📊 Dashboard updated', 'success');
+                utils.showNotification('📊 Dashboard updated with demo data', 'success');
             },
             
             refresh() {
@@ -1086,7 +1021,7 @@
             }
         };
 
-        // MIGRATION MODULE - REAL ENDPOINTS WITH ALL MISSING FUNCTIONS
+        // MIGRATION MODULE - DEMO FUNCTIONALITY
         const migration = {
             selectedFile: null,
             
@@ -1114,7 +1049,7 @@
                 utils.showNotification(`📁 File "${file.name}" ready for upload`, 'success');
             },
             
-            async startFileUpload() {
+            startFileUpload() {
                 if (!this.selectedFile) {
                     utils.showNotification('❌ No file selected', 'error');
                     return;
@@ -1125,31 +1060,18 @@
                 
                 statusEl.innerHTML = '<div class="alert info">🚀 Starting file migration...</div>';
                 
-                try {
-                    const fd = new FormData();
-                    fd.append('file', this.selectedFile);
-
-                    const token = sessionStorage.getItem('authToken');
-                    const res = await fetch(`${APP_CONFIG.API_BASE}/migration/upload`, {
-                        method: 'POST',
-                        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-                        body: fd
-                    });
-                    
-                    if (!res.ok) {
-                        const errText = await res.text();
-                        throw new Error(errText || `Upload failed (${res.status})`);
+                // Simulate upload progress
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += Math.random() * 20;
+                    if (progress >= 100) {
+                        progress = 100;
+                        clearInterval(interval);
+                        statusEl.innerHTML = '<div class="alert success">✅ File uploaded successfully! Job ID: JOB_DEMO_' + Date.now() + '</div>';
+                        utils.showNotification('🎉 File migration completed!', 'success');
                     }
-
-                    const data = await res.json();
-                    statusEl.innerHTML = `<div class="alert success">✅ File uploaded successfully! Job ID: ${data.job_id || 'N/A'}</div>`;
-                    progressEl.style.width = '100%';
-                    utils.showNotification('🎉 File migration started!', 'success');
-                    
-                } catch (error) {
-                    statusEl.innerHTML = `<div class="alert error">❌ Migration failed: ${error.message}</div>`;
-                    utils.showNotification('❌ Migration failed', 'error');
-                }
+                    progressEl.style.width = progress + '%';
+                }, 500);
             },
             
             cancelUpload() {
@@ -1161,62 +1083,22 @@
                 utils.showNotification('Upload cancelled', 'info');
             },
 
-            // MISSING FUNCTIONS - NOW IMPLEMENTED WITH REAL APIS
-            
-            async startBulk() {
+            startBulk() {
                 const el = document.getElementById('migration-jobs');
-                el.innerHTML = '<div class="alert info">▶️ Starting bulk migration...</div>';
-                
-                try {
-                    const res = await api.request('/migration/jobs', {
-                        method: 'POST',
-                        body: { type: 'bulk_migration', batch_size: 1000, priority: 'high' }
-                    });
-                    
-                    if (!res.ok) throw new Error(await res.text());
-                    
-                    const data = await res.json();
-                    el.innerHTML = `<div class="alert success">✅ Bulk migration started! Job ID: ${data.job_id || 'N/A'}</div>`;
-                    utils.showNotification('🚀 Bulk migration started', 'success');
-                    
-                    setTimeout(() => this.checkJobs(), 2000);
-                } catch (error) {
-                    el.innerHTML = `<div class="alert error">❌ Failed to start bulk migration: ${error.message}</div>`;
-                    utils.showNotification('❌ Bulk migration failed', 'error');
-                }
+                el.innerHTML = '<div class="alert success">✅ Bulk migration started! Job ID: BULK_DEMO_' + Date.now() + '</div>';
+                utils.showNotification('🚀 Bulk migration started', 'success');
+                setTimeout(() => this.checkJobs(), 2000);
             },
 
-            async checkJobs() {
+            checkJobs() {
                 const el = document.getElementById('migration-jobs');
-                el.innerHTML = '<div class="alert info">⏱️ Loading active jobs...</div>';
-                
-                try {
-                    const res = await api.request('/jobs');
-                    if (!res.ok) throw new Error(await res.text());
-                    
-                    const jobs = await res.json();
-                    const activeJobs = Array.isArray(jobs) ? 
-                        jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes(j.status)) : [];
-                    
-                    this.renderJobs(activeJobs, 'Active Migration Jobs');
-                } catch (error) {
-                    el.innerHTML = `<div class="alert error">❌ Unable to load jobs: ${error.message}</div>`;
-                }
+                const activeJobs = MOCK_DATA.jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes(j.status));
+                this.renderJobs(activeJobs, 'Active Migration Jobs');
             },
 
-            async loadHistory() {
+            loadHistory() {
                 const el = document.getElementById('migration-jobs');
-                el.innerHTML = '<div class="alert info">📋 Loading migration history...</div>';
-                
-                try {
-                    const res = await api.request('/jobs');
-                    if (!res.ok) throw new Error(await res.text());
-                    
-                    const jobs = await res.json();
-                    this.renderJobs(Array.isArray(jobs) ? jobs : [], 'Migration Job History', true);
-                } catch (error) {
-                    el.innerHTML = `<div class="alert error">❌ Unable to load history: ${error.message}</div>`;
-                }
+                this.renderJobs(MOCK_DATA.jobs, 'Migration Job History', true);
             },
 
             renderJobs(jobs, title, showActions = false) {
@@ -1271,66 +1153,36 @@
                                 </tr>`).join('')}
                         </tbody>
                     </table>
-                    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-                        <button class="btn btn-secondary" onclick="migration.checkJobs()" style="font-size:12px">🔄 Refresh</button>
-                        <button class="btn btn-secondary" onclick="migration.loadHistory()" style="font-size:12px">📋 History</button>
-                        <button class="btn btn-danger" onclick="migration.cancelAll()" style="font-size:12px">🛑 Cancel All</button>
-                    </div>
                 `;
                 
                 utils.showNotification(`${title} loaded (${jobs.length} found)`, 'success');
             },
 
-            async cancelAll() {
+            cancelAll() {
                 ui.showConfirmationModal(
                     'Cancel All Migrations',
-                    'Are you sure you want to cancel ALL active migration jobs? This may leave some data in an inconsistent state.',
-                    async () => {
+                    'Are you sure you want to cancel ALL active migration jobs?',
+                    () => {
                         const el = document.getElementById('migration-jobs');
-                        el.innerHTML = '<div class="alert info">🛑 Cancelling all jobs...</div>';
-                        
-                        try {
-                            const res = await api.request('/jobs/cancel-all', { 
-                                method: 'POST', 
-                                body: { reason: 'user_request', force: true } 
-                            });
-                            
-                            if (!res.ok) throw new Error(await res.text());
-                            
-                            const data = await res.json();
-                            el.innerHTML = `<div class="alert success">✅ All migrations cancelled! (${data.cancelled_count || 'N/A'} jobs)</div>`;
-                            utils.showNotification('🛑 All migration jobs cancelled', 'success');
-                            
-                            setTimeout(() => this.checkJobs(), 2000);
-                        } catch (error) {
-                            el.innerHTML = `<div class="alert error">❌ Cancel all failed: ${error.message}</div>`;
-                            utils.showNotification('❌ Cancel all failed', 'error');
-                        }
+                        el.innerHTML = '<div class="alert success">✅ All migrations cancelled! (Demo)</div>';
+                        utils.showNotification('🛑 All migration jobs cancelled', 'success');
                     }
                 );
             },
 
-            async cancelJob(jobId) {
-                try {
-                    const res = await api.request(`/jobs/${jobId}/cancel`, { method: 'POST' });
-                    if (!res.ok) throw new Error(await res.text());
-                    
-                    utils.showNotification(`🛑 Job ${jobId} cancelled`, 'success');
-                    this.checkJobs();
-                } catch (error) {
-                    utils.showNotification(`❌ Cancel failed: ${error.message}`, 'error');
-                }
+            cancelJob(jobId) {
+                utils.showNotification(`🛑 Job ${jobId} cancelled (Demo)`, 'success');
+                this.checkJobs();
             },
 
             viewJobDetails(jobId) {
                 utils.showNotification(`📊 Viewing details for job ${jobId}`, 'info');
-                console.log(`Job details requested for: ${jobId}`);
             }
         };
 
-        // PROVISIONING MODULE - REAL ENDPOINTS ONLY
+        // PROVISIONING MODULE - DEMO FUNCTIONALITY
         const provisioning = {
-            async create() {
+            create() {
                 const id = document.getElementById('subscriber-id').value.trim();
                 const email = document.getElementById('subscriber-email').value.trim();
                 const plan = document.getElementById('subscriber-plan').value.trim();
@@ -1344,28 +1196,21 @@
                 const statusEl = document.getElementById('create-status');
                 statusEl.innerHTML = '<div class="alert info">👤 Creating subscriber...</div>';
                 
-                try {
-                    const response = await api.request('/subscribers', {
-                        method: 'POST',
-                        body: { uid: id, email: email, plan_id: plan, status: status }
+                // Simulate creation
+                setTimeout(() => {
+                    MOCK_DATA.subscribers.push({
+                        uid: id, email: email, plan_id: plan, status: status, 
+                        created_at: new Date().toISOString().split('T')[0]
                     });
                     
-                    if (!response.ok) {
-                        const errText = await response.text();
-                        throw new Error(errText || 'Creation failed');
-                    }
-                    
-                    statusEl.innerHTML = '<div class="alert success">✅ Subscriber created successfully!</div>';
+                    statusEl.innerHTML = '<div class="alert success">✅ Subscriber created successfully! (Demo)</div>';
                     utils.showNotification(`👤 Subscriber ${id} created!`, 'success');
                     this.clearForm();
-                    dashboard.load(); // Refresh stats
-                } catch (error) {
-                    statusEl.innerHTML = `<div class="alert error">❌ Failed: ${error.message}</div>`;
-                    utils.showNotification('❌ Creation failed', 'error');
-                }
+                    dashboard.load();
+                }, 1000);
             },
             
-            async search() {
+            search() {
                 const query = document.getElementById('search-input').value.trim();
                 const resultsEl = document.getElementById('search-results');
                 
@@ -1376,41 +1221,29 @@
                 
                 resultsEl.innerHTML = '<div class="alert info">🔍 Searching subscribers...</div>';
                 
-                try {
-                    const response = await api.request(`/subscribers/search?q=${encodeURIComponent(query)}`);
-                    
-                    if (!response.ok) {
-                        const errText = await response.text();
-                        throw new Error(errText || 'Search failed');
-                    }
-                    
-                    const data = await response.json();
-                    this.displayResults(data, query);
-                } catch (error) {
-                    resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
-                    utils.showNotification('❌ Search failed', 'error');
-                }
+                setTimeout(() => {
+                    const results = MOCK_DATA.subscribers.filter(sub => 
+                        sub.uid.toLowerCase().includes(query.toLowerCase()) ||
+                        sub.email.toLowerCase().includes(query.toLowerCase()) ||
+                        sub.plan_id.toLowerCase().includes(query.toLowerCase())
+                    );
+                    this.displayResults(results, query);
+                }, 500);
             },
 
-            async loadAll() {
+            loadAll() {
                 const resultsEl = document.getElementById('search-results');
                 resultsEl.innerHTML = '<div class="alert info">👥 Loading all subscribers...</div>';
                 
-                try {
-                    const response = await api.request('/subscribers');
-                    if (!response.ok) throw new Error(await response.text());
-                    
-                    const data = await response.json();
-                    this.displayResults(data, 'all subscribers');
-                } catch (error) {
-                    resultsEl.innerHTML = `<div class="alert error">❌ Load failed: ${error.message}</div>`;
-                }
+                setTimeout(() => {
+                    this.displayResults(MOCK_DATA.subscribers, 'all subscribers');
+                }, 500);
             },
             
             displayResults(data, query) {
                 const resultsEl = document.getElementById('search-results');
                 
-                if (!data || !Array.isArray(data) || data.length === 0) {
+                if (!data || data.length === 0) {
                     resultsEl.innerHTML = `
                         <div class="state-container">
                             <div class="icon">🔍</div>
@@ -1471,29 +1304,24 @@
                 );
             },
             
-            async delete(uid) {
-                try {
-                    const response = await api.request(`/subscribers/${uid}`, { method: 'DELETE' });
-                    
-                    if (!response.ok) {
-                        const errText = await response.text();
-                        throw new Error(errText || 'Delete failed');
-                    }
-                    
-                    utils.showNotification(`🗑️ Subscriber ${uid} deleted`, 'success');
-                    this.search(); // Refresh current search
-                    dashboard.load(); // Update stats
-                } catch (error) {
-                    utils.showNotification(`❌ Delete failed: ${error.message}`, 'error');
+            delete(uid) {
+                const index = MOCK_DATA.subscribers.findIndex(s => s.uid === uid);
+                if (index > -1) {
+                    MOCK_DATA.subscribers.splice(index, 1);
+                    utils.showNotification(`🗑️ Subscriber ${uid} deleted (Demo)`, 'success');
+                    this.search();
+                    dashboard.load();
+                } else {
+                    utils.showNotification(`❌ Subscriber ${uid} not found`, 'error');
                 }
             },
 
             edit(uid) {
-                utils.showNotification(`✏️ Edit functionality for ${uid} - coming soon`, 'info');
+                utils.showNotification(`✏️ Edit functionality for ${uid} - Demo Mode`, 'info');
             }
         };
 
-        // DATA QUERY MODULE - REAL POST /query ENDPOINT
+        // DATA QUERY MODULE - DEMO FUNCTIONALITY
         const query = {
             quick(type) {
                 const queries = {
@@ -1510,54 +1338,40 @@
                 utils.showNotification(`📝 ${type.toUpperCase()} query loaded`, 'info');
             },
             
-            async execute() {
+            execute() {
                 const queryText = document.getElementById('sql-query').value.trim();
                 if (!queryText) {
                     utils.showNotification('❌ Please enter a query', 'error');
                     return;
                 }
-                await this.runQuery(queryText);
+                this.runQuery(queryText);
             },
 
-            async runQuery(sql) {
+            runQuery(sql) {
                 const resultsEl = document.getElementById('query-results');
                 resultsEl.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
                 
-                try {
-                    const res = await api.request('/query', {
-                        method: 'POST',
-                        body: { sql_query: sql }
-                    });
+                setTimeout(() => {
+                    // Demo query results
+                    const mockResults = [
+                        ['SUB_001', 'john.doe@example.com', 'PREMIUM', 'active'],
+                        ['SUB_002', 'jane.smith@example.com', 'BASIC', 'active'],
+                        ['SUB_004', 'alice.brown@example.com', 'PREMIUM', 'active']
+                    ];
                     
-                    const text = await res.text();
-                    if (!res.ok) {
-                        let err = 'Query failed';
-                        try { err = JSON.parse(text).error || err; } catch {}
-                        throw new Error(err);
-                    }
-                    
-                    let payload = {};
-                    try { payload = JSON.parse(text); } catch { throw new Error('Invalid JSON from /query'); }
-                    
-                    const headers = Array.isArray(payload.headers) ? payload.headers : [];
-                    const rows = Array.isArray(payload.rows) ? payload.rows : [];
-
                     resultsEl.innerHTML = `
-                        <div class="alert success">✅ Query executed successfully! ${rows.length} rows returned</div>
+                        <div class="alert success">✅ Query executed successfully! ${mockResults.length} rows returned (Demo)</div>
                         <table class="results-table">
                             <thead>
-                                <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+                                <tr><th>UID</th><th>Email</th><th>Plan</th><th>Status</th></tr>
                             </thead>
                             <tbody>
-                                ${rows.map(r => `<tr>${Array.isArray(r) ? r.map(c => `<td>${c ?? ''}</td>`).join('') : '<td>Invalid row data</td>'}</tr>`).join('')}
+                                ${mockResults.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}
                             </tbody>
                         </table>
                     `;
-                    utils.showNotification('✅ Query executed', 'success');
-                } catch (error) {
-                    resultsEl.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
-                    utils.showNotification(`❌ ${error.message}`, 'error');
-                }
+                    utils.showNotification('✅ Query executed (Demo)', 'success');
+                }, 1000);
             },
             
             validate() {
@@ -1566,7 +1380,7 @@
                     utils.showNotification('❌ No query to validate', 'error');
                     return;
                 }
-                utils.showNotification('✅ Query syntax looks valid (client-side check)', 'success');
+                utils.showNotification('✅ Query syntax looks valid (Demo)', 'success');
             },
             
             clear() {
@@ -1580,74 +1394,60 @@
                     utils.showNotification('❌ No query results to export', 'error');
                     return;
                 }
-                utils.showNotification('📊 Export functionality - implement CSV download', 'info');
+                utils.showNotification('📊 Export functionality - Demo Mode', 'info');
             }
         };
 
-        // MONITORING MODULE - REAL METRICS
+        // MONITORING MODULE - DEMO METRICS
         const monitoring = {
             realtimeActive: false,
             
-            async refresh() {
-                try {
-                    const response = await api.request('/status');
-                    if (response.ok) {
-                        const data = await response.json();
-                        document.getElementById('response-time').textContent = data.response_time || 'N/A';
-                        document.getElementById('db-load').textContent = data.db_load || 'N/A';
-                        document.getElementById('lambda-calls').textContent = data.lambda_calls || 'N/A';
-                        document.getElementById('running-jobs').textContent = data.running_jobs || 'N/A';
-                    } else {
-                        throw new Error('Status API failed');
-                    }
-                } catch (error) {
-                    console.error('Failed to refresh metrics:', error);
-                    document.getElementById('response-time').textContent = 'N/A';
-                    document.getElementById('db-load').textContent = 'N/A';
-                    document.getElementById('lambda-calls').textContent = 'N/A';
-                    document.getElementById('running-jobs').textContent = 'N/A';
-                }
+            refresh() {
+                const metrics = {
+                    response_time: Math.floor(Math.random() * 100 + 200) + 'ms',
+                    db_load: Math.floor(Math.random() * 20 + 10) + '%',
+                    lambda_calls: Math.floor(Math.random() * 1000 + 1000).toLocaleString(),
+                    running_jobs: Math.floor(Math.random() * 5 + 1)
+                };
                 
-                utils.showNotification('📊 Metrics refreshed', 'success');
+                document.getElementById('response-time').textContent = metrics.response_time;
+                document.getElementById('db-load').textContent = metrics.db_load;
+                document.getElementById('lambda-calls').textContent = metrics.lambda_calls;
+                document.getElementById('running-jobs').textContent = metrics.running_jobs;
+                
+                utils.showNotification('📊 Metrics refreshed (Demo)', 'success');
             },
             
-            async checkHealth() {
+            checkHealth() {
                 const healthEl = document.getElementById('health-details');
                 healthEl.innerHTML = '<div class="alert info">🏥 Running comprehensive health check...</div>';
                 
-                try {
-                    const response = await api.request('/status');
-                    
-                    if (!response.ok) throw new Error(await response.text());
-                    const data = await response.json();
-                    
+                setTimeout(() => {
                     healthEl.innerHTML = `
-                        <div class="alert success">✅ System Status: ${data.status?.toUpperCase() || 'UNKNOWN'}</div>
+                        <div class="alert success">✅ System Status: HEALTHY (Demo Mode)</div>
                         <div class="health-grid">
                             <div class="health-item">
-                                <span class="label">DynamoDB Tables</span>
-                                <span class="status">🟢 ${data.environment?.tables_configured || 'N/A'} Active</span>
+                                <span class="label">Mock Database</span>
+                                <span class="status">🟢 5 Records Active</span>
                             </div>
                             <div class="health-item">
-                                <span class="label">RDS Database</span>
-                                <span class="status">🟢 ${data.environment?.rds_configured ? 'Connected' : 'DynamoDB Mode'}</span>
+                                <span class="label">Demo Jobs</span>
+                                <span class="status">🟢 3 Simulated</span>
                             </div>
                             <div class="health-item">
-                                <span class="label">Lambda Functions</span>
-                                <span class="status">🟢 ${data.environment?.lambda_count || 'N/A'} Active</span>
+                                <span class="label">UI Components</span>
+                                <span class="status">🟢 All Functional</span>
                             </div>
                             <div class="health-item">
-                                <span class="label">API Gateway</span>
-                                <span class="status">🟢 Responding</span>
+                                <span class="label">Demo Mode</span>
+                                <span class="status">🟢 Active</span>
                             </div>
                         </div>
                         <p style="margin-top: 16px; color: var(--text-light);">
-                            <strong>🕒 Last Updated:</strong> ${new Date(data.timestamp || Date.now()).toLocaleString()}
+                            <strong>🕒 Last Updated:</strong> ${new Date().toLocaleString()}
                         </p>
                     `;
-                } catch (error) {
-                    healthEl.innerHTML = `<div class="alert error">❌ Health check failed: ${error.message}</div>`;
-                }
+                }, 1000);
             },
             
             toggleRealtime() {
@@ -1656,11 +1456,11 @@
                 if (this.realtimeActive) {
                     this.realtimeActive = false;
                     btn.textContent = '📡 Start Live Monitor';
-                    utils.showNotification('⏹️ Real-time monitoring stopped', 'info');
+                    utils.showNotification('⏹️ Real-time monitoring stopped (Demo)', 'info');
                 } else {
                     this.realtimeActive = true;
                     btn.textContent = '⏹️ Stop Live Monitor';
-                    utils.showNotification('📡 Real-time monitoring started', 'success');
+                    utils.showNotification('📡 Real-time monitoring started (Demo)', 'success');
                     
                     const monitorLoop = () => {
                         if (!this.realtimeActive) return;
@@ -1672,47 +1472,26 @@
             }
         };
 
-        // SETTINGS MODULE - REAL CONFIGURATION
+        // SETTINGS MODULE - DEMO CONFIGURATION
         const settings = {
-            async load() {
-                try {
-                    const response = await api.request('/settings/provisioning-mode');
-                    if (response.ok) {
-                        const data = await response.json();
-                        document.getElementById('provisioning-mode').value = data.mode || 'CLOUD';
-                    } else {
-                        throw new Error('Settings API failed');
-                    }
-                } catch (error) {
-                    console.error('Could not load settings:', error);
-                    // Keep default value
-                }
+            load() {
+                document.getElementById('provisioning-mode').value = 'CLOUD';
             },
             
-            async saveMode() {
+            saveMode() {
                 const mode = document.getElementById('provisioning-mode').value;
                 const statusEl = document.getElementById('settings-status');
                 
                 statusEl.innerHTML = '<div class="alert info">💾 Saving provisioning mode...</div>';
                 
-                try {
-                    const response = await api.request('/settings/provisioning-mode', {
-                        method: 'PUT',
-                        body: { mode: mode }
-                    });
-                    
-                    if (!response.ok) throw new Error(await response.text());
-                    
-                    statusEl.innerHTML = '<div class="alert success">✅ Provisioning mode updated successfully!</div>';
-                    utils.showNotification(`⚙️ Mode updated to ${mode}`, 'success');
-                } catch (error) {
-                    statusEl.innerHTML = `<div class="alert error">❌ Failed to save mode: ${error.message}</div>`;
-                    utils.showNotification('❌ Save failed', 'error');
-                }
+                setTimeout(() => {
+                    statusEl.innerHTML = '<div class="alert success">✅ Provisioning mode updated successfully! (Demo)</div>';
+                    utils.showNotification(`⚙️ Mode updated to ${mode} (Demo)`, 'success');
+                }, 1000);
             },
             
             saveConfig() {
-                utils.showNotification('💾 System configuration saved', 'success');
+                utils.showNotification('💾 System configuration saved (Demo)', 'success');
             }
         };
 
@@ -1741,8 +1520,8 @@
 
         // APPLICATION INITIALIZATION
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Enterprise Migration Portal v3.4.0 Loaded');
-            console.log('📡 Backend API:', APP_CONFIG.API_BASE);
+            console.log('🚀 Enterprise Migration Portal v3.4.0 Loaded (DEMO MODE)');
+            console.log('🎭 All operations are simulated for demonstration');
             
             // Setup event listeners
             document.getElementById('login-btn').addEventListener('click', () => auth.login());
@@ -1776,11 +1555,14 @@
                 });
             }
             
-            // Navigation setup
+            // Navigation setup - FIXED ROUTING
             document.querySelectorAll('.nav-item').forEach(item => {
                 item.addEventListener('click', (e) => {
                     const page = e.currentTarget.dataset.page;
-                    if (page) ui.showPage(page);
+                    if (page) {
+                        console.log(`🔗 Navigation clicked: ${page}`);
+                        ui.showPage(page);
+                    }
                 });
             });
             
