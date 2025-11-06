@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>🚀 Enterprise Migration Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -532,17 +532,20 @@
     // === APP CONFIG (fixed) ===
 const APP_CONFIG = {
     DEMO_LOGIN: false,
-    // NEW working Function URLs with proper CORS
-    API_BASE: 'https://jjdaoyzmbsgxlrdcelwl47pyhe0pbxte.lambda-url.us-east-1.on.aws/',
+
+    // API Gateway base (keep auth + health + other complex flows here)
+    API_BASE: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod',
+
+    // Explicit auth & health paths (makes usage clearer)
     AUTH_API: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/auth/login',
-    HEALTH_API: 'https://jjdaoyzmbsgxlrdcelwl47pyhe0pbxte.lambda-url.us-east-1.on.aws/',
-    // Working Lambda Function URLs for subscribers & jobs
-    SUBSCRIBERS_API: 'https://2f2wzceckjqbmgxx2hwcg4464a0iptoa.lambda-url.us-east-1.on.aws/',
+    HEALTH_API: 'https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod',
+
+    // Working Lambda Function URLs for all endpoints
+    SUBSCRIBERS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
     JOBS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
-    // NEW working endpoints with CORS
-    QUERY_API: 'https://jjdaoyzmbsgxlrdcelwl47pyhe0pbxte.lambda-url.us-east-1.on.aws/',      ← CHANGE THIS
-    SETTINGS_API: 'https://julrq5ehoa3txgfx2hyu2dczuq0xvyxi.lambda-url.us-east-1.on.aws/',  ← CHANGE THIS  
-    MIGRATION_API: 'https://4jupeb63df77irjxqw2y6roone0gwucz.lambda-url.us-east-1.on.aws/',  ← CHANGE THIS
+    QUERY_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
+    SETTINGS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
+    MIGRATION_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
     VERSION: '3.4.0',
     REFRESH_INTERVAL: 30000
 };
@@ -702,7 +705,7 @@ const api = {
         statusEl.textContent = 'Testing backend connection...';
         
         try {
-            const response = await fetch(APP_CONFIG.HEALTH_API + 'health');
+            const response = await fetch(APP_CONFIG.HEALTH_API + '/health');
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             
