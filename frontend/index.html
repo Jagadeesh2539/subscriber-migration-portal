@@ -656,39 +656,45 @@ const APP_CONFIG = {
 }
 
       // Unified request method
-      async request(endpoint, options = {}) {
-        const token = sessionStorage.getItem('authToken');
-        const method = (options.method || 'GET').toUpperCase();
-        const headers = Object.assign({}, options.headers || {});
-        let body = options.body;
-
-        const fullUrl = this._fullUrl(endpoint);
-
-        // If body is an object and not FormData -> stringify
-        const isFormData = (typeof FormData !== 'undefined' && (body instanceof FormData));
-        if (!isFormData && body && typeof body === 'object') {
-          body = JSON.stringify(body);
-          headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        }
-
-        headers['Accept'] = headers['Accept'] || 'application/json';
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const cfg = { method, headers, body };
-
-        // For GET/HEAD, ensure no body
-        if (method === 'GET' || method === 'HEAD') delete cfg.body;
-
-        const res = await fetch(fullUrl, cfg);
-
-        if (res.status === 401) {
-          utils.showNotification('🔒 Unauthorized - session reset', 'error');
-          sessionStorage.clear();
-          auth.checkAuth();
-        }
-
-        return res;
-      },
+       async request(endpoint, options = {}) {
+            const token = sessionStorage.getItem('authToken');
+            const method = (options.method || 'GET').toUpperCase();
+            const headers = Object.assign({}, options.headers);
+            let body = options.body;
+            
+            const fullUrl = this.fullUrl(endpoint);
+            
+            // If body is an object (and not FormData) - stringify it
+            const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+            if (!isFormData && body && typeof body === 'object') {
+                body = JSON.stringify(body);
+                headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+            }
+            
+            headers['Accept'] = headers['Accept'] || 'application/json';
+            
+            if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+            }
+            
+            const cfg = { method, headers, body };
+            
+            // For GET/HEAD, ensure no body
+            if (method === 'GET' || method === 'HEAD') {
+                delete cfg.body;
+            }
+            
+            const res = await fetch(fullUrl, cfg);
+            
+            if (res.status === 401) {
+                utils.showNotification('Unauthorized - session reset', 'error');
+                sessionStorage.clear();
+                auth.checkAuth();
+                return res;
+            }
+            
+            return res;
+        },
 
       // Health check convenience
       async checkHealth() {
