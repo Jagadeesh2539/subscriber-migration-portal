@@ -616,115 +616,115 @@ const APP_CONFIG = {
     };
 
     // === API HELPER with routing for Function URLs ===
-    const api = {
-      // Build full URL depending on endpoint and mapping rules
-      fullUrl(endpoint) {
-    // If endpoint is already a full URL, return it
-    if (endpoint.startsWith('http') || endpoint.startsWith('https')) return endpoint;
-    
-    // Route subscribers endpoints to Function URL
-    if (endpoint === 'subscribers' || endpoint.startsWith('/subscribers')) {
-        const rest = endpoint.slice('subscribers'.length);
-        return APP_CONFIG.SUBSCRIBERS_API.replace(/\/$/, '') + (rest ? rest : '');
-    }
-    
-    // Route jobs endpoints to Function URL  
-    if (endpoint === 'jobs' || endpoint.startsWith('/jobs')) {
-        const rest = endpoint.slice('jobs'.length);
-        return APP_CONFIG.JOBS_API.replace(/\/$/, '') + (rest ? rest : '');
-    }
-    
-    // Route query endpoints
-    if (endpoint === 'query' || endpoint.startsWith('/query')) {
-        return APP_CONFIG.QUERY_API.replace(/\/$/, '');
-    }
-    
-    // Route settings endpoints
-    if (endpoint === 'settings' || endpoint.startsWith('/settings')) {
-        const rest = endpoint.slice('settings'.length);
-        return APP_CONFIG.SETTINGS_API.replace(/\/$/, '') + (rest ? rest : '');
-    }
-    
-    // Route migration endpoints
-    if (endpoint === 'migration' || endpoint.startsWith('/migration')) {
-        const rest = endpoint.slice('migration'.length);
-        return APP_CONFIG.MIGRATION_API.replace(/\/$/, '') + (rest ? rest : '');
-    }
-    
-    // By default, use API_BASE
-    return APP_CONFIG.API_BASE.replace(/\/$/, '') + (endpoint.startsWith('/') ? endpoint : '/' + endpoint);
-}
+const api = {
+    // Build full URL depending on endpoint and mapping rules
+    fullUrl(endpoint) {
+        // If endpoint is already a full URL, return it
+        if (endpoint.startsWith('http') || endpoint.startsWith('https')) return endpoint;
+        
+        // Route subscribers endpoints to Function URL
+        if (endpoint === 'subscribers' || endpoint.startsWith('/subscribers')) {
+            const rest = endpoint.slice('subscribers'.length);
+            return APP_CONFIG.SUBSCRIBERS_API.replace(/\/$/, '') + (rest ? rest : '');
+        }
+        
+        // Route jobs endpoints to Function URL  
+        if (endpoint === 'jobs' || endpoint.startsWith('/jobs')) {
+            const rest = endpoint.slice('jobs'.length);
+            return APP_CONFIG.JOBS_API.replace(/\/$/, '') + (rest ? rest : '');
+        }
+        
+        // Route query endpoints
+        if (endpoint === 'query' || endpoint.startsWith('/query')) {
+            return APP_CONFIG.QUERY_API.replace(/\/$/, '');
+        }
+        
+        // Route settings endpoints
+        if (endpoint === 'settings' || endpoint.startsWith('/settings')) {
+            const rest = endpoint.slice('settings'.length);
+            return APP_CONFIG.SETTINGS_API.replace(/\/$/, '') + (rest ? rest : '');
+        }
+        
+        // Route migration endpoints
+        if (endpoint === 'migration' || endpoint.startsWith('/migration')) {
+            const rest = endpoint.slice('migration'.length);
+            return APP_CONFIG.MIGRATION_API.replace(/\/$/, '') + (rest ? rest : '');
+        }
+        
+        // By default, use API_BASE
+        return APP_CONFIG.API_BASE.replace(/\/$/, '') + (endpoint.startsWith('/') ? endpoint : '/' + endpoint);
+    },
 
-      // Unified request method
-       async request(endpoint, options = {}) {
-            const token = sessionStorage.getItem('authToken');
-            const method = (options.method || 'GET').toUpperCase();
-            const headers = Object.assign({}, options.headers);
-            let body = options.body;
-            
-            const fullUrl = this.fullUrl(endpoint);
-            
-            // If body is an object (and not FormData) - stringify it
-            const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-            if (!isFormData && body && typeof body === 'object') {
-                body = JSON.stringify(body);
-                headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-            }
-            
-            headers['Accept'] = headers['Accept'] || 'application/json';
-            
-            if (token) {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
-            
-            const cfg = { method, headers, body };
-            
-            // For GET/HEAD, ensure no body
-            if (method === 'GET' || method === 'HEAD') {
-                delete cfg.body;
-            }
-            
-            const res = await fetch(fullUrl, cfg);
-            
-            if (res.status === 401) {
-                utils.showNotification('Unauthorized - session reset', 'error');
-                sessionStorage.clear();
-                auth.checkAuth();
-                return res;
-            }
-            
+    // Unified request method  
+    async request(endpoint, options = {}) {
+        const token = sessionStorage.getItem('authToken');
+        const method = (options.method || 'GET').toUpperCase();
+        const headers = Object.assign({}, options.headers);
+        let body = options.body;
+        
+        const fullUrl = this.fullUrl(endpoint);
+        
+        // If body is an object (and not FormData) - stringify it
+        const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+        if (!isFormData && body && typeof body === 'object') {
+            body = JSON.stringify(body);
+            headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        }
+        
+        headers['Accept'] = headers['Accept'] || 'application/json';
+        
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        const cfg = { method, headers, body };
+        
+        // For GET/HEAD, ensure no body
+        if (method === 'GET' || method === 'HEAD') {
+            delete cfg.body;
+        }
+        
+        const res = await fetch(fullUrl, cfg);
+        
+        if (res.status === 401) {
+            utils.showNotification('Unauthorized - session reset', 'error');
+            sessionStorage.clear();
+            auth.checkAuth();
             return res;
-        },
+        }
+        
+        return res;
+    },
 
-      // Health check convenience
-      async checkHealth() {
+    // Health check convenience
+    async checkHealth() {
         const statusEl = document.getElementById('api-status');
         statusEl.className = 'alert info';
-        statusEl.textContent = '🔄 Testing backend connection...';
-
+        statusEl.textContent = 'Testing backend connection...';
+        
         try {
-          const response = await fetch(`${APP_CONFIG.HEALTH_API}/health`);
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const data = await response.json();
-
-          statusEl.className = 'alert success';
-          statusEl.innerHTML = `✅ <strong>Backend Connected!</strong><br>API Version: ${data.version || '-'} | Status: ${data.status || '-'}`;
-
-          document.getElementById('api-health').textContent = '🟢 Connected';
-          document.getElementById('lambda-health').textContent = '🟢 Operational';
-          document.getElementById('db-health').textContent = data.environment?.rds_configured ? '🟢 Connected' : '🟡 DynamoDB';
-          return true;
+            const response = await fetch(APP_CONFIG.HEALTH_API + 'health');
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            
+            statusEl.className = 'alert success';
+            statusEl.innerHTML = `<strong>Backend Connected!</strong><br>API Version: ${data.version} - Status: ${data.status}`;
+            
+            document.getElementById('api-health').textContent = 'Connected';
+            document.getElementById('lambda-health').textContent = 'Operational';
+            document.getElementById('db-health').textContent = data.environment?.rds_configured ? 'Connected' : 'DynamoDB';
+            return true;
         } catch (error) {
-          statusEl.className = 'alert error';
-          statusEl.innerHTML = `❌ <strong>Backend Offline</strong><br>Error: ${error.message}`;
-          document.getElementById('api-health').textContent = '🔴 Failed';
-          document.getElementById('lambda-health').textContent = '🟡 Unknown';
-          document.getElementById('db-health').textContent = '🟡 Unknown';
-          return false;
+            statusEl.className = 'alert error';
+            statusEl.innerHTML = `<strong>Backend Offline</strong><br>Error: ${error.message}`;
+            
+            document.getElementById('api-health').textContent = 'Failed';
+            document.getElementById('lambda-health').textContent = 'Unknown';
+            document.getElementById('db-health').textContent = 'Unknown';
+            return false;
         }
-      }
-    };
-
+    }
+};
     // === UI ===
     const ui = {
       currentPage: 'dashboard',
