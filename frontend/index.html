@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>🚀 Enterprise Migration Portal</title>
+  <title>🚀 Enhanced Migration Portal</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/x-icon" href="data:image/x-icon;base64,AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAIAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAA==">
   <style>
     :root {
       --color-primary: #4f46e5;
@@ -17,249 +16,268 @@
       --color-success: #22c55e;
       --color-warning: #f59e0b;
       --color-info: #3b82f6;
-
       --bg-body: #f3f4f6;
-      --bg-sidebar: #ffffff;
+      --bg-sidebar: #1f2937;
       --bg-card: #ffffff;
       --bg-light: #f9fafb;
-
       --text-dark: #111827;
       --text-light: #6b7280;
       --text-white: #ffffff;
-
       --border-color: #e5e7eb;
       --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
       --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px rgb(0 0 0 / 0.1);
       --radius: 8px;
       --font-main: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: var(--font-main);
       background-color: var(--bg-body);
       color: var(--text-dark);
       -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
     }
-
-    /* Styles trimmed for brevity — same as your original CSS */
-    /* ... keep all previous CSS exactly as before ... */
-
-    /* I'm keeping the whole CSS as in your original file (already loaded above in your version).
-       Inserting same CSS here for completeness in the actual file. */
-    /* LOGIN */
     #login-screen {
       display: flex; align-items: center; justify-content: center;
-      min-height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      position: relative; overflow: hidden;
+      min-height: 100vh; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      position: relative;
+      overflow: hidden;
     }
+    /* This ::before pseudo-element creates the grid background */
     #login-screen::before {
-      content: ''; position: absolute; inset: 0;
-      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>') repeat;
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3Cpattern id='grid' width='10' height='10' patternUnits='userSpaceOnUse'%3E%3Cpath d='M 10 0 L 0 0 0 10' fill='none' stroke='rgba(255,255,255,0.1)' stroke-width='0.5'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width='100' height='100' fill='url(%23grid)'/%3E%3C/svg%3E") repeat;
     }
     .login-card {
-      position: relative; z-index: 1; width: 100%; max-width: 420px; padding: 48px 40px;
+      position: relative;
+      z-index: 1;
+      width: 100%; max-width: 420px; padding: 48px 40px;
       background: var(--bg-card); border-radius: 16px;
       box-shadow: var(--shadow-lg); text-align: center;
-      backdrop-filter: blur(10px);
     }
     .login-header { margin-bottom: 32px; }
-    .login-header .logo {
+    .login-header .logo { 
       font-size: 48px; margin-bottom: 16px;
       background: linear-gradient(135deg, var(--color-primary), #8b5cf6);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
-    .login-header h2 { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--text-dark); }
-    .login-header p { color: var(--text-light); font-size: 16px; }
-
-    /* SHELL */
+    .login-header h2 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
     #app-shell { display: none; }
     .sidebar {
       position: fixed; left: 0; top: 0; width: 260px; height: 100vh;
-      background: var(--bg-sidebar); box-shadow: var(--shadow);
-      z-index: 1000; display: flex; flex-direction: column;
+      background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+      box-shadow: 2px 0 12px rgba(0,0,0,0.15); z-index: 1000;
+      display: flex; flex-direction: column;
     }
-    .sidebar-header { padding: 24px; text-align: center; border-bottom: 1px solid var(--border-color); }
-    .sidebar-header h2 { font-size: 20px; font-weight: 700; color: var(--color-primary); margin-bottom: 4px; }
-    .sidebar-header .version { font-size: 12px; color: var(--text-light); font-weight: 500; }
+    .sidebar-header { 
+      padding: 24px; text-align: center; 
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      background: rgba(79, 70, 229, 0.1);
+    }
+    .sidebar-header h2 { color: #ffffff; margin-bottom: 4px; }
+    .sidebar-header div { color: rgba(255,255,255,0.6); }
     .nav-menu { flex-grow: 1; overflow-y: auto; padding: 16px 0; }
     .nav-item {
       display: flex; align-items: center; gap: 12px; padding: 14px 24px;
-      text-decoration: none; color: var(--text-light); transition: all 0.2s ease;
-      cursor: pointer; font-size: 15px; font-weight: 500;
+      cursor: pointer; font-size: 15px; color: rgba(255,255,255,0.7);
+      transition: all 0.3s ease; border-radius: 8px; margin: 4px 12px;
     }
-    .nav-item:hover { background-color: #f3f4f6; color: var(--color-primary); }
+    .nav-item:hover { 
+      background-color: rgba(79, 70, 229, 0.2); 
+      color: #ffffff;
+      transform: translateX(4px);
+    }
     .nav-item.active {
-      background-color: #eef2ff; color: var(--color-primary); font-weight: 600;
-      border-right: 4px solid var(--color-primary);
+      background: linear-gradient(90deg, rgba(79, 70, 229, 0.3), rgba(79, 70, 229, 0.1));
+      color: #ffffff; font-weight: 600;
+      border-left: 4px solid var(--color-primary);
+      box-shadow: 0 2px 8px rgba(79, 70, 229, 0.3);
     }
-    .nav-item span { font-size: 18px; width: 20px; text-align: center; }
-
-    .sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--border-color); }
-    .user-profile { display: flex; align-items: center; gap: 12px; }
-    .user-avatar {
-      width: 40px; height: 40px; border-radius: 50%;
-      background: linear-gradient(135deg, var(--color-primary), #8b5cf6);
-      display: flex; align-items: center; justify-content: center;
-      color: white; font-weight: 600; font-size: 16px;
+    .nav-item span { font-size: 18px; }
+    .sidebar-footer { 
+      padding: 16px 24px; 
+      border-top: 1px solid rgba(255,255,255,0.1);
+      background: rgba(0,0,0,0.2);
     }
-    #username-display { font-weight: 600; font-size: 14px; color: var(--text-dark); }
-    #logout-btn { font-size: 12px; color: var(--color-secondary); cursor: pointer; text-decoration: none; font-weight: 500; }
-    #logout-btn:hover { color: var(--color-danger); }
-
-    .main-content { margin-left: 260px; padding: 32px; min-height: 100vh; background: var(--bg-body); }
+    .sidebar-footer span { color: #ffffff; font-weight: 600; }
+    .sidebar-footer a { color: rgba(255,255,255,0.6); }
+    .sidebar-footer a:hover { color: var(--color-primary); }
+    .main-content { margin-left: 260px; padding: 32px; min-height: 100vh; }
     .page-header { margin-bottom: 32px; }
-    .page-header h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; color: var(--text-dark); }
-    .page-header p { color: var(--text-light); font-size: 16px; }
-
+    .page-header h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
     .card {
-      background: var(--bg-card); padding: 24px; border-radius: var(--radius);
-      box-shadow: var(--shadow); margin-bottom: 24px; border: 1px solid var(--border-color);
+      background: var(--bg-card); padding: 24px; border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; 
+      border: 1px solid var(--border-color);
+      transition: all 0.3s ease;
     }
-    .card h2 { font-size: 20px; font-weight: 600; margin-bottom: 16px; color: var(--text-dark); }
-    .card h3 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--text-dark); }
-
+    .card:hover { 
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      transform: translateY(-2px);
+    }
+    .card h2 { 
+      font-size: 20px; font-weight: 600; margin-bottom: 16px;
+      color: var(--text-dark); display: flex; align-items: center; gap: 8px;
+    }
     .btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-      background: var(--color-primary); color: var(--text-white); border: none; padding: 12px 20px;
-      border-radius: var(--radius); cursor: pointer; font-size: 14px;
-      transition: all 0.2s ease; font-weight: 600; text-decoration: none;
+      background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
+      color: var(--text-white); border: none;
+      padding: 12px 20px; border-radius: 8px; cursor: pointer;
+      font-size: 14px; font-weight: 600; transition: all 0.3s ease;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
     }
-    .btn:hover { background: var(--color-primary-hover); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(79,70,229,0.3); }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn:hover { 
+      background: linear-gradient(135deg, var(--color-primary-hover), #3730a3);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(79, 70, 229, 0.4);
+    }
+    .btn:active { transform: translateY(0px); }
     .btn-secondary { background: var(--color-secondary); }
-    .btn-danger { background: var(--color-danger); }
-    .btn-success { background: var(--color-success); }
-
+    .btn-sm { padding: 8px 14px; font-size: 13px; }
     .form-input {
       width: 100%; padding: 12px 16px; border-radius: var(--radius);
-      border: 1px solid var(--border-color); margin: 8px 0; font-size: 14px;
-      transition: all 0.3s ease; background: var(--bg-card);
+      border: 1px solid var(--border-color); font-size: 14px;
     }
-    .form-input:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
-    .form-group { margin-bottom: 20px; text-align: left; }
-    .form-group label { display: block; margin-bottom: 6px; font-weight: 500; color: var(--text-dark); font-size: 14px; }
-
-    .status-badge { padding: 6px 12px; border-radius: 20px; font-weight: 600; font-size: 12px; display: inline-block; text-transform: uppercase; letter-spacing: 0.5px; }
-    .status-badge.success { background-color: #dcfce7; color: #166534; }
-    .status-badge.error { background-color: #fee2e2; color: #991b1b; }
-    .status-badge.warning { background-color: #fef3c7; color: #92400e; }
-    .status-badge.info { background-color: #dbeafe; color: #1e40af; }
-
-    .alert { padding: 16px; border-radius: var(--radius); margin: 16px 0; border-left: 4px solid; }
-    .alert.success { background: #f0fdf4; border-color: var(--color-success); color: #166534; }
-    .alert.error { background: #fef2f2; border-color: var(--color-danger); color: #991b1b; }
-    .alert.warning { background: #fffbeb; border-color: var(--color-warning); color: #92400e; }
-    .alert.info { background: #eff6ff; border-color: var(--color-info); color: #1e40af; }
-
+    .form-group { margin-bottom: 20px; }
+    .form-group label { display: block; margin-bottom: 6px; font-weight: 500; }
+    .status-badge {
+      padding: 6px 12px; border-radius: 20px; font-weight: 600;
+      font-size: 12px; display: inline-block;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      transition: all 0.2s ease;
+    }
+    .status-badge:hover { transform: scale(1.05); }
+    .status-badge.success { 
+      background: linear-gradient(135deg, #dcfce7, #bbf7d0); 
+      color: #166534; border: 1px solid #86efac;
+    }
+    .status-badge.error { 
+      background: linear-gradient(135deg, #fee2e2, #fecaca); 
+      color: #991b1b; border: 1px solid #fca5a5;
+    }
+    .status-badge.info { 
+      background: linear-gradient(135deg, #dbeafe, #bfdbfe); 
+      color: #1e40af; border: 1px solid #93c5fd;
+    }
+     .status-badge.warning { 
+      background: linear-gradient(135deg, #fef3c7, #fde68a); 
+      color: #92400e; border: 1px solid #fcd34d;
+    }
+    .alert { padding: 16px; border-radius: var(--radius); margin: 16px 0; }
+    .alert.success { background: #f0fdf4; color: #166534; }
+    .alert.error { background: #fef2f2; color: #991b1b; }
+    .alert.info { background: #eff6ff; color: #1e40af; }
+    .results-table {
+      width: 100%; border-collapse: collapse; margin: 20px 0;
+      background: var(--bg-card); border-radius: 12px;
+      overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .results-table th, .results-table td {
+      padding: 16px; text-align: left; border-bottom: 1px solid var(--border-color);
+    }
+    .results-table th { 
+      background: linear-gradient(180deg, #f9fafb, #f3f4f6); 
+      font-weight: 600; color: var(--text-dark);
+      border-bottom: 2px solid var(--color-primary);
+    }
+    .results-table tbody tr { transition: all 0.2s ease; }
+    .results-table tbody tr:hover { 
+      background: #f9fafb; 
+      transform: scale(1.01);
+    }
+    .progress-bar {
+      width: 100%; height: 8px; background: var(--bg-light);
+      border-radius: 4px; overflow: hidden;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
+    }
+    .progress-fill {
+      height: 100%; 
+      background: linear-gradient(90deg, var(--color-primary), var(--color-info));
+      transition: width 0.3s ease;
+      box-shadow: 0 2px 4px rgba(79, 70, 229, 0.3);
+    }
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 24px; margin: 32px 0;
+    }
+    .stat-card {
+      background: var(--bg-card); padding: 24px; border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center;
+      transition: all 0.3s ease; border: 1px solid var(--border-color);
+      position: relative; overflow: hidden;
+    }
+    .stat-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0;
+      height: 4px; background: linear-gradient(90deg, var(--color-primary), var(--color-info));
+    }
+    .stat-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    }
+    .stat-card > div:first-child { font-size: 2em; margin-bottom: 8px; }
+    .stat-card h3 { color: var(--text-light); font-size: 14px; margin-bottom: 8px; }
+    .stat-number { 
+      font-size: 2.2em; font-weight: 700; margin: 8px 0;
+      background: linear-gradient(135deg, var(--color-primary), var(--color-info));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .page-section { display: none; }
+    .page-section.active { display: block; }
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      z-index: 2000; align-items: center; justify-content: center;
+    }
+    .modal {
+      background: var(--bg-card); padding: 32px; border-radius: 16px;
+      max-width: 600px; width: 90%; 
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      animation: modalSlideIn 0.3s ease;
+    }
+    @keyframes modalSlideIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
+    
     .state-container { text-align: center; padding: 60px 20px; border: 2px dashed var(--border-color); border-radius: var(--radius); background: var(--bg-light); }
     .state-container .icon { font-size: 48px; margin-bottom: 16px; }
     .state-container h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
     .state-container p { color: var(--text-light); margin-bottom: 24px; }
-
-    .loading-spinner { width: 48px; height: 48px; border: 4px solid var(--bg-light); border-top: 4px solid var(--color-primary); border-radius: 50%; margin: 0 auto; animation: spin 1s linear infinite; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; margin: 32px 0; }
-    .stat-card { background: var(--bg-card); padding: 24px; border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border-color); transition: transform 0.2s ease, box-shadow 0.2s ease; }
-    .stat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); }
-    .stat-card .icon { font-size: 32px; margin-bottom: 12px; }
-    .stat-card h3 { color: var(--text-light); font-size: 14px; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-number { font-size: 2.2em; font-weight: 700; color: var(--text-dark); margin-bottom: 4px; }
-    .stat-change { font-size: 12px; font-weight: 500; }
-
-    .results-table { width: 100%; border-collapse: collapse; margin: 20px 0; background: var(--bg-card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--border-color); }
-    .results-table th { cursor: pointer; user-select: none; }
-    .results-table th:hover { background-color: #f1f5f9; }
-    .results-table th, .results-table td { padding: 16px; text-align: left; border-bottom: 1px solid var(--border-color); }
-    .results-table th { background: var(--bg-light); font-weight: 600; color: var(--text-dark); font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
-
-    .file-upload { border: 2px dashed var(--border-color); border-radius: var(--radius); padding: 40px; text-align: center; margin: 20px 0; transition: all 0.3s ease; background: var(--bg-light); }
-    .file-upload:hover { border-color: var(--color-primary); background: #eef2ff; }
-    .file-upload.dragover { border-color: var(--color-primary); background: #eef2ff; border-style: solid; }
-
-    .progress-bar { width: 100%; height: 8px; background: var(--bg-light); border-radius: 4px; overflow: hidden; margin: 16px 0; }
-    .progress-fill { height: 100%; background: var(--color-primary); border-radius: 4px; transition: width 0.3s ease; }
-
-    .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
-    .health-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: var(--bg-light); border-radius: var(--radius); border: 1px solid var(--border-color); }
-    .health-item .label { font-weight: 500; color: var(--text-dark); }
-    .health-item .status { font-weight: 600; }
-
-    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; }
-    .modal { background: var(--bg-card); padding: 32px; border-radius: 12px; max-width: 450px; width: 90%; box-shadow: var(--shadow-lg); animation: modalIn 0.3s ease; }
-    @keyframes modalIn { from { opacity: 0; transform: scale(0.9) translateY(-20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
-    .modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-    .modal-header .icon { font-size: 24px; }
-    .modal-header h3 { font-size: 20px; font-weight: 600; }
-    .modal-body { margin-bottom: 24px; line-height: 1.5; }
-    .modal-actions { display: flex; justify-content: flex-end; gap: 12px; }
-
-    .page-section { display: none; }
-    .page-section.active { display: block; animation: fadeIn 0.4s ease; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-
-    @media (max-width: 768px) {
-      .sidebar { transform: translateX(-100%); transition: transform 0.3s ease; width: 100%; z-index: 1002; }
-      .sidebar.open { transform: translateX(0); }
-      .main-content { margin-left: 0; padding: 16px; }
-      .mobile-menu { display: flex; position: fixed; top: 16px; left: 16px; background: white; border-radius: 50%; width: 50px; height: 50px; align-items: center; justify-content: center; box-shadow: var(--shadow-lg); z-index: 1001; cursor: pointer; font-size: 20px; color: var(--color-primary); }
-      .login-card { margin: 20px; padding: 32px 24px; }
-      .stats-grid { grid-template-columns: 1fr; }
-    }
-    @media (min-width: 769px) { .mobile-menu { display: none; } }
-
-    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
   </style>
 </head>
 <body>
 
-  <!-- LOGIN -->
   <div id="login-screen">
     <div class="login-card">
       <div class="login-header">
         <div class="logo">🏢</div>
-        <h2>Enterprise Migration Portal</h2>
-        <p>Secure access to your subscriber management system</p>
+        <h2>Migration Portal</h2>
+        <p>Secure Access</p>
       </div>
-
-      <div id="login-error" class="alert error" style="display:none; text-align: left;"></div>
-
       <div class="form-group">
         <label for="username">Username</label>
-        <input type="text" id="username" placeholder="Enter your username" class="form-input" value="admin">
+        <input type="text" id="username" class="form-input" value="admin">
       </div>
-
       <div class="form-group">
         <label for="password">Password</label>
-        <input type="password" id="password" placeholder="Enter your password" class="form-input" value="password">
+        <input type="password" id="password" class="form-input" value="password">
       </div>
-
-      <button id="login-btn" class="btn" style="width: 100%; margin-top: 16px;">
-        <span>🔑 Sign In to Portal</span>
-      </button>
-
-      <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-color);">
-        <p style="font-size: 12px; color: var(--text-light);">
-          Demo Credentials: admin / password<br>
-          Dummy login only; all features call real APIs
-        </p>
-      </div>
+      <button id="login-btn" class="btn" style="width: 100%;">Sign In</button>
     </div>
   </div>
 
-  <!-- APP -->
   <div id="app-shell">
-    <div class="mobile-menu" onclick="ui.toggleMobileMenu()">☰</div>
-
-    <nav class="sidebar" id="sidebar">
+    <nav class="sidebar">
       <div class="sidebar-header">
         <h2>Migration Portal</h2>
-        <div class="version">v3.4.0</div>
+        <div style="font-size: 12px; color: var(--text-light);">v2.4.0</div>
       </div>
-
       <div class="nav-menu">
         <div class="nav-item active" data-page="dashboard"><span>📊</span> Dashboard</div>
         <div class="nav-item" data-page="migration"><span>🔄</span> Migration</div>
@@ -268,216 +286,232 @@
         <div class="nav-item" data-page="monitoring"><span>📈</span> Monitoring</div>
         <div class="nav-item" data-page="settings"><span>⚙️</span> Settings</div>
       </div>
-
       <div class="sidebar-footer">
-        <div class="user-profile">
-          <div class="user-avatar" id="user-avatar">A</div>
-          <div class="user-info">
-            <span id="username-display">Loading...</span>
-            <a id="logout-btn">Sign Out</a>
-          </div>
+        <div style="text-align: center;">
+          <span id="username-display">Admin</span><br>
+          <a id="logout-btn" style="font-size: 12px; cursor: pointer;">Sign Out</a>
         </div>
       </div>
     </nav>
 
     <main class="main-content">
 
-      <!-- DASHBOARD -->
       <section id="dashboard" class="page-section active">
         <div class="page-header">
-          <h1>📊 Enterprise Dashboard</h1>
-          <p>Real-time overview of your migration environment and system health.</p>
+          <h1>📊 Dashboard</h1>
+          <p>System overview and health status</p>
         </div>
 
         <div class="stats-grid">
           <div class="stat-card">
-            <div class="icon">👥</div>
+            <div>👥</div>
             <h3>Total Subscribers</h3>
-            <div class="stat-number" id="total-subscribers">Loading...</div>
-            <div class="stat-change positive" id="subscribers-change">+12% this month</div>
+            <div class="stat-number" id="total-subscribers">-</div>
           </div>
           <div class="stat-card">
-            <div class="icon">🔄</div>
-            <h3>Active Migrations</h3>
-            <div class="stat-number" id="active-migrations">Loading...</div>
-            <div class="stat-change" id="migrations-change">3 running</div>
-          </div>
-          <div class="stat-card">
-            <div class="icon">✅</div>
+            <div>✅</div>
             <h3>Success Rate</h3>
-            <div class="stat-number" id="success-rate">Loading...</div>
-            <div class="stat-change positive" id="success-change">+0.3% this week</div>
-          </div>
-          <div class="stat-card">
-            <div class="icon">📊</div>
-            <h3>Data Processed</h3>
-            <div class="stat-number" id="data-processed">Loading...</div>
-            <div class="stat-change positive" id="data-change">+2.1GB today</div>
+            <div class="stat-number" id="success-rate">-</div>
           </div>
         </div>
 
         <div class="card">
-          <h2>🔌 Backend API Status</h2>
-          <div id="api-status" class="alert info">🔄 Testing backend connection...</div>
-          <button class="btn" onclick="api.checkHealth()">🔄 Test Connection</button>
-          <button class="btn btn-secondary" onclick="dashboard.refresh()">📊 Refresh Data</button>
-        </div>
-
-        <div class="card">
-          <h2>🏥 System Health Overview</h2>
-          <div class="health-grid">
-            <div class="health-item"><span class="label">API Gateway</span><span class="status" id="api-health">🟡 Checking...</span></div>
-            <div class="health-item"><span class="label">Lambda Functions</span><span class="status" id="lambda-health">🟡 Checking...</span></div>
-            <div class="health-item"><span class="label">Database</span><span class="status" id="db-health">🟡 Checking...</span></div>
-            <div class="health-item"><span class="label">S3 Storage</span><span class="status" id="s3-health">🟢 Healthy</span></div>
-          </div>
+          <h2>API Status</h2>
+          <div id="api-status" class="alert info">Testing connection...</div>
+          <button class="btn" onclick="testAPI()">Test Connection</button>
         </div>
       </section>
 
-      <!-- MIGRATION -->
       <section id="migration" class="page-section">
         <div class="page-header">
           <h1>🔄 Migration Management</h1>
           <p>Upload files, manage bulk operations, and monitor migration progress.</p>
         </div>
 
-        <div class="card">
-          <h2>📁 File Upload Migration</h2>
-          <p style="margin-bottom: 20px; color: var(--text-light);">Upload CSV files with subscriber data. Supported columns: uid, email, plan_id, status</p>
-
-          <div class="file-upload" id="file-drop-zone">
-            <div style="font-size: 48px; margin-bottom: 16px; color: var(--color-primary);">📁</div>
-            <h3>Drop CSV file here or click to browse</h3>
-            <p style="color: var(--text-light); margin: 8px 0 20px;">Maximum file size: 10MB</p>
-            <input type="file" id="migration-file" accept=".csv" style="display: none;">
-            <button class="btn" onclick="document.getElementById('migration-file').click()">📁 Select File</button>
+        <div class="card" style="border-left: 4px solid var(--color-primary); margin-bottom: 24px;">
+          <h2>📤 CSV Upload Migration</h2>
+          <p style="color: var(--text-light); margin-bottom: 20px;">
+            Upload CSV with subscriber identifiers. Auto-detects type from header.
+            <br><strong>Supported:</strong> uid, imsi, msisdn
+          </p>
+          
+          <div class="form-group">
+            <label>Select CSV File</label>
+            <input type="file" id="csv-file-input" accept=".csv" class="form-input" />
+            <small style="color: var(--text-light); display: block; margin-top: 8px;">
+              <strong>Format:</strong> uid<br/>32<br/>23<br/>11
+            </small>
           </div>
-
-          <div id="file-info" style="display: none; margin-top: 20px;">
-            <div class="alert info">
-              <h3>📋 File Information</h3>
-              <div id="file-details"></div>
-            </div>
-            <div class="progress-bar"><div class="progress-fill" id="upload-progress" style="width: 0%"></div></div>
-            <button class="btn btn-success" onclick="migration.startFileUpload()">🚀 Start Migration</button>
-            <button class="btn btn-secondary" onclick="migration.cancelUpload()">❌ Cancel</button>
-          </div>
-
-          <div id="migration-status"></div>
+          
+          <button class="btn" onclick="uploadCSV()">📤 Upload & Start Migration</button>
+          <div id="csv-upload-status" style="margin-top: 16px;"></div>
         </div>
 
         <div class="card">
-          <h2>⚡ Migration Operations</h2>
-          <div style="display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0;">
-            <button class="btn" onclick="migration.startBulk()">▶️ Start Bulk Migration</button>
-            <button class="btn btn-secondary" onclick="migration.loadHistory()">📋 View History</button>
-            <button class="btn btn-secondary" onclick="migration.checkJobs()">⏱️ Active Jobs</button>
-            <button class="btn btn-danger" onclick="migration.cancelAll()">🛑 Cancel All</button>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>📊 Migration Jobs</h2>
+            <button class="btn btn-secondary btn-sm" onclick="refreshJobs()">🔄 Refresh</button>
           </div>
-          <div id="migration-jobs"></div>
+          <div id="migration-jobs-container"></div>
         </div>
       </section>
 
-      <!-- PROVISIONING -->
       <section id="provisioning" class="page-section">
         <div class="page-header">
           <h1>👥 Subscriber Provisioning</h1>
           <p>Create, search, and manage individual subscriber accounts.</p>
         </div>
 
-        <div class="card">
+        <div class="card" style="border-left: 4px solid var(--color-success);">
           <h2>➕ Create New Subscriber</h2>
-          <div class="form-grid">
-            <div class="form-group"><label for="subscriber-id">Subscriber ID</label><input type="text" id="subscriber-id" placeholder="SUB_123456" class="form-input"></div>
-            <div class="form-group"><label for="subscriber-email">Email Address</label><input type="email" id="subscriber-email" placeholder="user@company.com" class="form-input"></div>
-            <div class="form-group"><label for="subscriber-plan">Plan ID</label><input type="text" id="subscriber-plan" placeholder="PLAN_PREMIUM" class="form-input"></div>
-            <div class="form-group"><label for="subscriber-status">Initial Status</label>
-              <select id="subscriber-status" class="form-input">
-                <option value="active">✅ Active</option>
-                <option value="inactive">😴 Inactive</option>
-                <option value="pending">⏳ Pending</option>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label>UID *</label>
+              <input type="text" id="create-uid" class="form-input" placeholder="Enter UID" required>
+            </div>
+            <div class="form-group">
+              <label>IMSI *</label>
+              <input type="text" id="create-imsi" class="form-input" placeholder="Enter IMSI" required>
+            </div>
+            <div class="form-group">
+              <label>MSISDN *</label>
+              <input type="text" id="create-msisdn" class="form-input" placeholder="Enter MSISDN" required>
+            </div>
+            <div class="form-group">
+              <label>Email</label>
+              <input type="email" id="create-email" class="form-input" placeholder="Enter Email">
+            </div>
+            <div class="form-group">
+              <label>Status</label>
+              <select id="create-status" class="form-input">
+                <option value="ACTIVE">ACTIVE</option>
+                <option value="INACTIVE">INACTIVE</option>
+                <option value="SUSPENDED">SUSPENDED</option>
               </select>
             </div>
+            <div class="form-group">
+              <label>Plan</label>
+              <input type="text" id="create-plan" class="form-input" placeholder="Enter Plan">
+            </div>
           </div>
-          <div style="margin-top: 20px;">
-            <button class="btn btn-success" onclick="provisioning.create()">👤 Create Subscriber</button>
-            <button class="btn btn-secondary" onclick="provisioning.clearForm()">🗑️ Clear Form</button>
-          </div>
-          <div id="create-status"></div>
+          
+          <button class="btn" onclick="createSubscriber()">➕ Create Subscriber</button>
+          <div id="create-subscriber-status" style="margin-top: 16px;"></div>
         </div>
 
         <div class="card">
           <h2>🔍 Search & Management</h2>
           <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
-            <input type="text" id="search-input" placeholder="Search by ID, email, or plan..." class="form-input" style="flex-grow: 1; max-width: 400px;">
+            <input type="text" id="search-input" placeholder="Search by UID, email, IMSI, or MSISDN..." class="form-input" style="flex-grow: 1; max-width: 400px;">
             <button class="btn" onclick="provisioning.search()">🔍 Search</button>
             <button class="btn btn-secondary" onclick="provisioning.loadAll()">👥 Load All</button>
           </div>
           <div id="search-results"></div>
         </div>
+
+        <div class="card" style="border-left: 4px solid var(--color-warning); margin-top: 24px;">
+          <h2>✏️ Modify Subscriber</h2>
+          
+          <div class="form-group">
+            <label>Search by UID to Modify</label>
+            <input type="text" id="modify-search-uid" class="form-input" placeholder="Enter UID to modify">
+            <button class="btn btn-secondary btn-sm" onclick="searchForModify()" style="margin-top: 8px;">🔍 Search</button>
+          </div>
+
+          <div id="modify-form-container" style="display: none; margin-top: 20px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label>UID (Read-only)</label>
+                <input type="text" id="modify-uid" class="form-input" readonly>
+              </div>
+              <div class="form-group">
+                <label>IMSI</label>
+                <input type="text" id="modify-imsi" class="form-input" placeholder="Enter IMSI">
+              </div>
+              <div class="form-group">
+                <label>MSISDN</label>
+                <input type="text" id="modify-msisdn" class="form-input" placeholder="Enter MSISDN">
+              </div>
+              <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="modify-email" class="form-input" placeholder="Enter Email">
+              </div>
+              <div class="form-group">
+                <label>Status</label>
+                <select id="modify-status" class="form-input">
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="INACTIVE">INACTIVE</option>
+                  <option value="SUSPENDED">SUSPENDED</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Plan</label>
+                <input type="text" id="modify-plan" class="form-input" placeholder="Enter Plan">
+              </div>
+            </div>
+            
+            <button class="btn" onclick="modifySubscriber()">✏️ Update Subscriber</button>
+            <div id="modify-subscriber-status" style="margin-top: 16px;"></div>
+          </div>
+        </div>
       </section>
 
-      <!-- QUERY -->
       <section id="query" class="page-section">
         <div class="page-header">
           <h1>🔍 Data Query Interface</h1>
-          <p>Execute SQL queries and perform data operations on your subscriber database.</p>
+          <p>Search and query subscriber data</p>
         </div>
 
-        <div class="card">
-          <h2>🗃️ SQL Query Builder</h2>
-          <textarea id="sql-query" class="form-input" style="height: 120px; font-family: 'Monaco', monospace;" placeholder="SELECT * FROM subscribers WHERE status = 'active' LIMIT 100;"></textarea>
-          <div style="margin: 16px 0;">
-            <button class="btn" onclick="query.execute()">🔍 Execute Query</button>
-            <button class="btn btn-secondary" onclick="query.validate()">✅ Validate</button>
-            <button class="btn btn-secondary" onclick="query.export()">📊 Export Results</button>
-            <button class="btn btn-danger" onclick="query.clear()">🗑️ Clear</button>
+        <div class="card" style="border-left: 4px solid var(--color-info);">
+          <h2>🔎 Query Subscribers</h2>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+            <div class="form-group">
+              <label>Query Type</label>
+              <select id="query-type-select" class="form-input">
+                <option value="uid">UID</option>
+                <option value="imsi">IMSI</option>
+                <option value="msisdn">MSISDN</option>
+                <option value="email">Email</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label>Data Source</label>
+              <select id="query-source-select" class="form-input">
+                <option value="cloud">Cloud (DynamoDB)</option>
+                <option value="legacy">Legacy (MySQL)</option>
+              </select>
+            </div>
           </div>
-          <div id="query-results"></div>
-        </div>
-
-        <div class="card">
-          <h2>⚡ Quick Queries</h2>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px;">
-            <button class="btn btn-secondary" onclick="query.quick('active')">👥 Active Users</button>
-            <button class="btn btn-secondary" onclick="query.quick('inactive')">😴 Inactive Users</button>
-            <button class="btn btn-secondary" onclick="query.quick('recent')">🆕 Recent Adds</button>
-            <button class="btn btn-secondary" onclick="query.quick('plans')">📋 Plan Summary</button>
-            <button class="btn btn-secondary" onclick="query.quick('errors')">⚠️ Error Records</button>
-            <button class="btn btn-secondary" onclick="query.quick('audit')">🔍 Audit Trail</button>
+          
+          <div class="form-group">
+            <label>Query Value</label>
+            <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
           </div>
+          
+          <button class="btn" onclick="executeQuery()">🔍 Execute Query</button>
+          
+          <div id="query-results-container" style="margin-top: 24px;"></div>
         </div>
       </section>
 
-      <!-- MONITORING -->
       <section id="monitoring" class="page-section">
         <div class="page-header">
           <h1>📈 System Monitoring</h1>
           <p>Real-time performance metrics and system health monitoring.</p>
         </div>
 
-        <div class="card">
-          <h2>📊 Performance Dashboard</h2>
-          <div class="stats-grid">
-            <div class="stat-card"><div class="icon">🚀</div><h3>API Response Time</h3><div class="stat-number" id="response-time">Loading...</div></div>
-            <div class="stat-card"><div class="icon">💾</div><h3>Database Load</h3><div class="stat-number" id="db-load">Loading...</div></div>
-            <div class="stat-card"><div class="icon">☁️</div><h3>Lambda Calls</h3><div class="stat-number" id="lambda-calls">Loading...</div></div>
-            <div class="stat-card"><div class="icon">🔄</div><h3>Running Jobs</h3><div class="stat-number" id="running-jobs">Loading...</div></div>
+        <div class="card" style="margin-bottom: 24px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h2>📊 Performance Dashboard</h2>
+            <button class="btn btn-secondary btn-sm" onclick="loadPerformance()">🔄 Refresh</button>
           </div>
-          <div style="margin-top: 20px;">
-            <button class="btn" onclick="monitoring.refresh()">🔄 Refresh Metrics</button>
-            <button class="btn" id="realtime-btn" onclick="monitoring.toggleRealtime()">📡 Start Live Monitor</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>🏥 Detailed Health Check</h2>
-          <div id="health-details">Loading health information...</div>
-          <button class="btn" onclick="monitoring.checkHealth()">🔄 Run Health Check</button>
+          <div id="performance-metrics-container"></div>
         </div>
       </section>
 
-      <!-- SETTINGS -->
       <section id="settings" class="page-section">
         <div class="page-header">
           <h1>⚙️ System Settings</h1>
@@ -500,7 +534,7 @@
 
         <div class="card">
           <h2>🔧 System Parameters</h2>
-          <div class="form-grid">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
             <div class="form-group"><label>Migration Batch Size</label><input type="number" class="form-input" value="1000" min="100" max="10000"></div>
             <div class="form-group"><label>API Timeout (seconds)</label><input type="number" class="form-input" value="30" min="10" max="900"></div>
             <div class="form-group"><label>Max Concurrent Jobs</label><input type="number" class="form-input" value="3" min="1" max="10"></div>
@@ -513,646 +547,705 @@
     </main>
   </div>
 
-  <!-- MODAL -->
-  <div class="modal-overlay" id="confirmation-modal">
+  <div class="modal-overlay" id="job-modal">
     <div class="modal">
-      <div class="modal-header">
-        <span class="icon">⚠️</span>
-        <h3 id="modal-title">Confirm Action</h3>
-      </div>
-      <div class="modal-body"><p id="modal-message">Are you sure you want to proceed?</p></div>
+      <h2 id="modal-job-title">Job Details</h2>
+      <div id="modal-job-content" style="margin: 20px 0;"></div>
       <div class="modal-actions">
-        <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
-        <button class="btn btn-danger" id="modal-confirm">Confirm</button>
+        <button class="btn btn-secondary" onclick="closeJobModal()">Close</button>
       </div>
     </div>
   </div>
+  
+  <div class="modal-overlay" id="confirmation-modal">
+     <div class="modal">
+       <h2 id="modal-title">Confirm Action</h2>
+       <div id="modal-message" style="margin: 20px 0;">Are you sure?</div>
+       <div class="modal-actions">
+         <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+         <button class="btn btn-danger" id="modal-confirm">Confirm</button>
+       </div>
+     </div>
+   </div>
 
   <script>
-    // === APP CONFIG (fixed) ===
-const APP_CONFIG = {
-    DEMO_LOGIN: false,
-    API_BASE: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/',
-    AUTH_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/auth/login',
-    HEALTH_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/health',
-    SUBSCRIBERS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscribers',
-    JOBS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/jobs',
-    QUERY_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/query',
-    SETTINGS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/settings',
-    MIGRATION_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/migration',
-    VERSION: '3.4.0',
-    REFRESH_INTERVAL: 30000
-};
+    // === CONFIG ===
+    let authToken = null;
+    let currentUser = null;
 
-    // === AUTH ===
-    const auth = {
-      currentUser: null,
-      checkAuth() {
-        const token = sessionStorage.getItem('authToken');
-        const username = sessionStorage.getItem('username');
-        if (token && username) {
-          this.currentUser = { username, token };
-          document.getElementById('login-screen').style.display = 'none';
-          document.getElementById('app-shell').style.display = 'block';
-          document.getElementById('username-display').textContent = username;
-          document.getElementById('user-avatar').textContent = username.charAt(0).toUpperCase();
-          setTimeout(() => { api.checkHealth(); dashboard.load(); }, 300);
-        } else {
-          document.getElementById('login-screen').style.display = 'flex';
-          document.getElementById('app-shell').style.display = 'none';
-        }
-      },
-      async login() {
-        const username = document.getElementById('username').value.trim();
-        const password = document.getElementById('password').value.trim();
-        const btn = document.getElementById('login-btn');
-        const err = document.getElementById('login-error');
-        if (!username || !password) { this.showLoginError('Please enter both username and password'); return; }
+    // === COMPLETE API CONFIGURATION ===
+    const APP_CONFIG = {
+      DEMO_LOGIN: false,
+      API_BASE: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws',
+      AUTH_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/auth/login',
+      HEALTH_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/health',
+      SUBSCRIBERS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/subscribers',
+      JOBS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/migration/jobs',
+      QUERY_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/query/subscribers',
+      SETTINGS_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/settings',
+      MIGRATION_API: 'https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/api/migration',
+      VERSION: '3.4.0',
+      REFRESH_INTERVAL: 30000
+    };
 
-        btn.disabled = true;
-        btn.innerHTML = '<div class="loading-spinner" style="width:20px;height:20px;border-width:2px"></div> <span>Signing in...</span>';
-        err.style.display = 'none';
-
-        try {
-          if (APP_CONFIG.DEMO_LOGIN) {
-            sessionStorage.setItem('authToken', `demo-token-${Date.now()}`);
-            sessionStorage.setItem('username', username);
-            utils.showNotification('🎭 Signed in (Dummy login)', 'success');
-            this.checkAuth();
-            return;
-          }
-          // Real login path — use AUTH_API
-          const res = await fetch(APP_CONFIG.AUTH_API, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-          });
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-          if (!data.success || !data.token) throw new Error(data.message || 'Login failed');
-          sessionStorage.setItem('authToken', data.token);
-          sessionStorage.setItem('username', username);
-          this.checkAuth();
-        } catch (e) {
-          this.showLoginError(e.message || 'Authentication failed');
-        } finally {
-          btn.disabled = false;
-          btn.innerHTML = '<span>🔑 Sign In to Portal</span>';
-        }
-      },
-      showLoginError(m) {
-        const el = document.getElementById('login-error');
-        el.textContent = m;
-        el.style.display = 'block';
-      },
-      logout() {
-        ui.showConfirmationModal('Sign Out','Are you sure you want to sign out?',()=> {
-          sessionStorage.clear(); this.currentUser=null; this.checkAuth(); utils.showNotification('👋 Signed out', 'info');
-        });
+    // === UTILITY: API CALL WRAPPER ===
+    async function apiCall(endpoint, options = {}) {
+      const defaultHeaders = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (authToken) {
+        defaultHeaders['Authorization'] = `Bearer ${authToken}`;
       }
-    };
-
-    // === API HELPER with routing for Function URLs ===
-const api = {
-    // Build full URL depending on endpoint and mapping rules
-    fullUrl(endpoint) {
-        // If endpoint is already a full URL, return it
-        if (endpoint.startsWith('http') || endpoint.startsWith('https')) return endpoint;
+      
+      const config = {
+        ...options,
+        headers: {
+          ...defaultHeaders,
+          ...(options.headers || {})
+        }
+      };
+      
+      try {
+        const url = endpoint.startsWith('http') ? endpoint : (endpoint.startsWith('/') ? `${APP_CONFIG.API_BASE}${endpoint}` : `${APP_CONFIG.API_BASE}/${endpoint}`);
+        const response = await fetch(url, config);
         
-        // Route subscribers endpoints to Function URL
-        if (endpoint === 'subscribers' || endpoint.startsWith('/subscribers')) {
-            const rest = endpoint.replace('/subscribers', '').replace('subscribers', '');
-            return APP_CONFIG.SUBSCRIBERS_API + rest;
+        // Handle non-JSON responses (like file downloads)
+        if (response.headers.get("Content-Type")?.includes("text/csv")) {
+          return { response, result: await response.blob() };
         }
-        
-        // Route jobs endpoints to Function URL  
-        if (endpoint === 'jobs' || endpoint.startsWith('/jobs')) {
-            const rest = endpoint.replace('/jobs', '').replace('jobs', '');
-            return APP_CONFIG.JOBS_API + rest;
-        }
-        
-        // Route query endpoints
-        if (endpoint === 'query' || endpoint.startsWith('/query')) {
-            return APP_CONFIG.QUERY_API;
-        }
-        
-        // Route settings endpoints
-        if (endpoint === 'settings' || endpoint.startsWith('/settings')) {
-            const rest = endpoint.replace('/settings', '').replace('settings', '');
-            return APP_CONFIG.SETTINGS_API + rest;
-        }
-        
-        // Route migration endpoints
-        if (endpoint === 'migration' || endpoint.startsWith('/migration')) {
-            const rest = endpoint.replace('/migration', '').replace('migration', '');
-            return APP_CONFIG.MIGRATION_API + rest;
-        }
-        
-        // By default, use API_BASE
-        return APP_CONFIG.API_BASE + (endpoint.startsWith('/') ? endpoint : '/' + endpoint);
-    },
-
-    // Unified request method  
-    async request(endpoint, options = {}) {
-        const token = sessionStorage.getItem('authToken');
-        const method = (options.method || 'GET').toUpperCase();
-        const headers = Object.assign({}, options.headers);
-        let body = options.body;
-        
-        const fullUrl = this.fullUrl(endpoint);
-        
-        // If body is an object (and not FormData) - stringify it
-        const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
-        if (!isFormData && body && typeof body === 'object') {
-            body = JSON.stringify(body);
-            headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-        }
-        
-        headers['Accept'] = headers['Accept'] || 'application/json';
-        
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
-        
-        const cfg = { method, headers, body };
-        
-        // For GET/HEAD, ensure no body
-        if (method === 'GET' || method === 'HEAD') {
-            delete cfg.body;
-        }
-        
-        const res = await fetch(fullUrl, cfg);
-        
-        if (res.status === 401) {
-            utils.showNotification('Unauthorized - session reset', 'error');
-            sessionStorage.clear();
-            auth.checkAuth();
-            return res;
-        }
-        
-        return res;
-    },
-
-    // Health check convenience
-    async checkHealth() {
-        const statusEl = document.getElementById('api-status');
-        statusEl.className = 'alert info';
-        statusEl.textContent = 'Testing backend connection...';
-        
-        try {
-            const response = await fetch(APP_CONFIG.HEALTH_API + '/health');
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            
-            statusEl.className = 'alert success';
-            statusEl.innerHTML = `<strong>Backend Connected!</strong><br>API Version: ${data.version} - Status: ${data.status}`;
-            
-            document.getElementById('api-health').textContent = 'Connected';
-            document.getElementById('lambda-health').textContent = 'Operational';
-            document.getElementById('db-health').textContent = data.environment?.rds_configured ? 'Connected' : 'DynamoDB';
-            return true;
-        } catch (error) {
-            statusEl.className = 'alert error';
-            statusEl.innerHTML = `<strong>Backend Offline</strong><br>Error: ${error.message}`;
-            
-            document.getElementById('api-health').textContent = 'Failed';
-            document.getElementById('lambda-health').textContent = 'Unknown';
-            document.getElementById('db-health').textContent = 'Unknown';
-            return false;
-        }
-    }
-};
-    // === UI ===
-    const ui = {
-      currentPage: 'dashboard',
-      showPage(pageId) {
-        document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
-        document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-
-        const section = document.getElementById(pageId);
-        if (section) { section.classList.add('active'); this.currentPage = pageId; }
-
-        const navItem = document.querySelector(`[data-page="${pageId}"]`);
-        if (navItem) { navItem.classList.add('active'); }
-
-        window.history.pushState({}, '', `#${pageId}`);
-        document.getElementById('sidebar').classList.remove('open');
-
-        this.loadPageData(pageId);
-      },
-      loadPageData(pageId) {
-        switch(pageId) {
-          case 'dashboard': dashboard.load(); break;
-          case 'monitoring': monitoring.refresh(); monitoring.checkHealth(); break;
-          case 'settings': settings.load(); break;
-          case 'migration': utils.showNotification('🔄 Migration tools ready', 'success'); break;
-          case 'provisioning': utils.showNotification('👥 Provisioning ready', 'success'); break;
-          case 'query': utils.showNotification('🔍 Query interface ready', 'success'); break;
-        }
-      },
-      toggleMobileMenu() { document.getElementById('sidebar').classList.toggle('open'); },
-      showConfirmationModal(title, message, onConfirm) {
-        document.getElementById('modal-title').textContent = title;
-        document.getElementById('modal-message').textContent = message;
-        const modal = document.getElementById('confirmation-modal');
-        modal.style.display = 'flex';
-        const confirmBtn = document.getElementById('modal-confirm');
-        const cancelBtn = document.getElementById('modal-cancel');
-
-        const confirmHandler = () => { onConfirm(); closeHandler(); };
-        const closeHandler = () => {
-          modal.style.display = 'none';
-          confirmBtn.removeEventListener('click', confirmHandler);
-          cancelBtn.removeEventListener('click', closeHandler);
-        };
-        confirmBtn.addEventListener('click', confirmHandler);
-        cancelBtn.addEventListener('click', closeHandler);
-      }
-    };
-
-    // === Dashboard ===
-    const dashboard = {
-      async load() {
-        // Subscribers
-        try {
-          const subRes = await api.request('/subscribers');
-          if (subRes.ok) {
-            const payload = await subRes.json();
-            // support both Function URL shape { success, subscribers } and array shape
-            const subsArr = Array.isArray(payload) ? payload : (payload.subscribers || []);
-            document.getElementById('total-subscribers').textContent = (subsArr.length || 0).toLocaleString();
-          } else {
-            throw new Error('Subscribers API failed');
-          }
-        } catch {
-          document.getElementById('total-subscribers').textContent = 'N/A';
-        }
-
-        // Jobs
-        try {
-          const jobsRes = await api.request('/jobs');
-          if (jobsRes.ok) {
-            const payload = await jobsRes.json();
-            const jobsArr = Array.isArray(payload) ? payload : (payload.jobs || []);
-            const activeJobs = jobsArr.filter(job => (job.status || '').toUpperCase() === 'RUNNING').length;
-            document.getElementById('active-migrations').textContent = activeJobs;
-          } else { throw new Error('Jobs API failed'); }
-        } catch {
-          document.getElementById('active-migrations').textContent = 'N/A';
-        }
-
-        // Status metrics (API_BASE)
-        try {
-          const statusRes = await api.request('/status');
-          if (statusRes.ok) {
-            const data = await statusRes.json();
-            document.getElementById('success-rate').textContent = data.success_rate || 'N/A';
-            document.getElementById('data-processed').textContent = data.data_processed || 'N/A';
-          } else { throw new Error('Status API failed'); }
-        } catch {
-          document.getElementById('success-rate').textContent = 'N/A';
-          document.getElementById('data-processed').textContent = 'N/A';
-        }
-        utils.showNotification('📊 Dashboard updated', 'success');
-      },
-      refresh() { this.load(); }
-    };
-
-    // === Migration ===
-    const migration = {
-      selectedFile: null,
-      handleFileSelect() {
-        const fileInput = document.getElementById('migration-file');
-        if (fileInput.files.length > 0) {
-          this.selectedFile = fileInput.files[0];
-          this.showFileInfo();
-        }
-      },
-      showFileInfo() {
-        const file = this.selectedFile;
-        const fileInfo = document.getElementById('file-info');
-        const fileDetails = document.getElementById('file-details');
-        fileDetails.innerHTML = `
-          <strong>📁 Filename:</strong> ${file.name}<br>
-          <strong>📏 Size:</strong> ${(file.size / 1024).toFixed(2)} KB<br>
-          <strong>📅 Modified:</strong> ${new Date(file.lastModified).toLocaleString()}<br>
-          <strong>🔍 Type:</strong> ${file.type || 'CSV'}
-        `;
-        fileInfo.style.display = 'block';
-        utils.showNotification('📁 File ' + file.name + ' ready for upload', 'success');
-      },
-      async startFileUpload() {
-        if (!this.selectedFile) { utils.showNotification('❌ No file selected', 'error'); return; }
-        const statusEl = document.getElementById('migration-status');
-        const progressEl = document.getElementById('upload-progress');
-        statusEl.innerHTML = '<div class="alert info">🚀 Starting file migration...</div>';
-        try {
-          const fd = new FormData();
-          fd.append('file', this.selectedFile);
-          const token = sessionStorage.getItem('authToken');
-          const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-          // Use API_BASE for migration upload (not function url)
-          const res = await fetch(`${APP_CONFIG.API_BASE}/migration/upload`, {
-            method: 'POST', headers: headers, body: fd
-          });
-          if (!res.ok) { const errText = await res.text(); throw new Error(errText || ('Upload failed (' + res.status + ')')); }
-          const data = await res.json();
-          statusEl.innerHTML = '<div class="alert success">✅ File uploaded successfully! Job ID: ' + (data.job_id || 'N/A') + '</div>';
-          progressEl.style.width = '100%';
-          utils.showNotification('🎉 File migration started!', 'success');
-        } catch (error) {
-          statusEl.innerHTML = '<div class="alert error">❌ Migration failed: ' + error.message + '</div>';
-          utils.showNotification('❌ Migration failed', 'error');
-        }
-      },
-      cancelUpload() {
-        this.selectedFile = null;
-        document.getElementById('file-info').style.display = 'none';
-        document.getElementById('migration-file').value = '';
-        document.getElementById('upload-progress').style.width = '0%';
-        document.getElementById('migration-status').innerHTML = '';
-        utils.showNotification('Upload cancelled', 'info');
-      },
-      async startBulk() {
-        const el = document.getElementById('migration-jobs');
-        el.innerHTML = '<div class="alert info">▶️ Starting bulk migration...</div>';
-        try {
-          // use API_BASE for starting workflow
-          const res = await api.request('/migration/jobs', { method: 'POST', body: { type: 'bulk_migration', batch_size: 1000, priority: 'high' } });
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
-          el.innerHTML = '<div class="alert success">✅ Bulk migration started! Job ID: ' + (data.job_id || 'N/A') + '</div>';
-          utils.showNotification('🚀 Bulk migration started', 'success');
-          setTimeout(() => this.checkJobs(), 2000);
-        } catch (error) {
-          el.innerHTML = '<div class="alert error">❌ Failed to start bulk migration: ' + error.message + '</div>';
-          utils.showNotification('❌ Bulk migration failed', 'error');
-        }
-      },
-      async checkJobs() {
-        const el = document.getElementById('migration-jobs');
-        el.innerHTML = '<div class="alert info">⏱️ Loading active jobs...</div>';
-        try {
-          const res = await api.request('/jobs');
-          if (!res.ok) throw new Error(await res.text());
-          const payload = await res.json();
-          const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
-          const activeJobs = Array.isArray(jobs) ? jobs.filter(j => ['RUNNING','PENDING','STARTING'].includes((j.status || '').toUpperCase())) : [];
-          this.renderJobs(activeJobs, 'Active Migration Jobs');
-        } catch (error) {
-          el.innerHTML = '<div class="alert error">❌ Unable to load jobs: ' + error.message + '</div>';
-        }
-      },
-      async loadHistory() {
-        const el = document.getElementById('migration-jobs');
-        el.innerHTML = '<div class="alert info">📋 Loading migration history...</div>';
-        try {
-          const res = await api.request('/jobs');
-          if (!res.ok) throw new Error(await res.text());
-          const payload = await res.json();
-          const jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
-          this.renderJobs(jobs, 'Migration Job History', true);
-        } catch (error) {
-          el.innerHTML = '<div class="alert error">❌ Unable to load history: ' + error.message + '</div>';
-        }
-      },
-      renderJobs(jobs, title, showActions = false) {
-        const el = document.getElementById('migration-jobs');
-        if (!jobs || !jobs.length) {
-          el.innerHTML = `
-            <div class="state-container">
-              <div class="icon">📋</div>
-              <h3>${title}</h3>
-              <p>No jobs found.</p>
-            </div>`;
-          return;
-        }
-        el.innerHTML = `
-          <div class="alert success">${title} (${jobs.length})</div>
-          <table class="results-table">
-            <thead>
-              <tr>
-                <th>Job ID</th><th>Type</th><th>Status</th><th>Progress</th><th>Created</th><th>Records</th>${showActions ? '<th>Actions</th>' : ''}
-              </tr>
-            </thead>
-            <tbody>
-              ${jobs.map(j => `
-                <tr>
-                  <td><strong>${j.job_id || j.id || ''}</strong></td>
-                  <td><span class="status-badge info">${j.type || 'migration'}</span></td>
-                  <td><span class="status-badge ${ (j.status || '').toUpperCase() === 'COMPLETED' ? 'success' : ( (j.status || '').toUpperCase() === 'FAILED' ? 'error' : 'info') }">${j.status || ''}</span></td>
-                  <td>
-                    <div class="progress-bar" style="width:80px;height:6px;"><div class="progress-fill" style="width:${j.progress || 0}%"></div></div>
-                    <small>${j.progress || 0}%</small>
-                  </td>
-                  <td>${j.created_at ? new Date(j.created_at).toLocaleString() : 'N/A'}</td>
-                  <td>${j.records_processed ? j.records_processed.toLocaleString() : '0'}</td>
-                  ${showActions ? `
-                    <td>
-                      ${ (j.status || '').toUpperCase() === 'RUNNING'
-                        ? `<button class="btn btn-danger" style="padding:6px 10px;font-size:11px" onclick="migration.cancelJob('${j.job_id || j.id}')">🛑 Cancel</button>`
-                        : `<button class="btn btn-secondary" style="padding:6px 10px;font-size:11px" onclick="migration.viewJobDetails('${j.job_id || j.id}')">👁️ Details</button>`
-                      }
-                    </td>` : ''
-                  }
-                </tr>`).join('')}
-            </tbody>
-          </table>
-          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-secondary" onclick="migration.checkJobs()" style="font-size:12px">🔄 Refresh</button>
-            <button class="btn btn-secondary" onclick="migration.loadHistory()" style="font-size:12px">📋 History</button>
-            <button class="btn btn-danger" onclick="migration.cancelAll()" style="font-size:12px">🛑 Cancel All</button>
-          </div>`;
-        utils.showNotification(`${title} loaded (${jobs.length} found)`, 'success');
-      },
-      async cancelAll() {
-        ui.showConfirmationModal('Cancel All Migrations','Are you sure you want to cancel ALL active migration jobs? This may leave some data in an inconsistent state.', async () => {
-          const el = document.getElementById('migration-jobs');
-          el.innerHTML = '<div class="alert info">🛑 Cancelling all jobs...</div>';
-          try {
-            const res = await api.request('/jobs/cancel-all', { method: 'POST', body: { reason: 'user_request', force: true } });
-            if (!res.ok) throw new Error(await res.text());
-            const data = await res.json();
-            el.innerHTML = `<div class="alert success">✅ All migrations cancelled! (${data.cancelled_count || 'N/A'} jobs)</div>`;
-            utils.showNotification('🛑 All migration jobs cancelled', 'success');
-            setTimeout(() => this.checkJobs(), 2000);
-          } catch (error) {
-            el.innerHTML = `<div class="alert error">❌ Cancel all failed: ${error.message}</div>`;
-            utils.showNotification('❌ Cancel all failed', 'error');
-          }
-        });
-      },
-      async cancelJob(jobId) {
-        try {
-          const res = await api.request(`/jobs/${jobId}/cancel`, { method: 'POST' });
-          if (!res.ok) throw new Error(await res.text());
-          utils.showNotification(`🛑 Job ${jobId} cancelled`, 'success');
-          this.checkJobs();
-        } catch (error) {
-          utils.showNotification(`❌ Cancel failed: ${error.message}`, 'error');
-        }
-      },
-      viewJobDetails(jobId) { utils.showNotification(`📊 Viewing details for job ${jobId}`, 'info'); }
-    };
-
-    // === Provisioning ===
-    const provisioning = {
-async create() {
-    const id = document.getElementById('subscriber-id').value.trim();
-    const email = document.getElementById('subscriber-email').value.trim();
-    const plan = document.getElementById('subscriber-plan').value.trim();
-    const status = document.getElementById('subscriber-status').value;
-    
-    // ✅ ADD THIS LINE:
-    const currentMode = document.getElementById('provisioning-mode').value;
-    
-    if (!id || !email || !plan) { 
-        utils.showNotification('❌ Please fill in all required fields', 'error'); 
-        return; 
-    }
-    
-    // ✅ UPDATE STATUS MESSAGE:
-    const statusEl = document.getElementById('create-status');
-    statusEl.innerHTML = `<div class="alert info">👤 Creating in ${currentMode} mode...</div>`;
-    
-    try {
-        // ✅ ADD MODE TO API CALL:
-        const response = await api.request('/subscribers', { 
-            method: 'POST', 
-            body: { 
-                uid: id, 
-                email: email, 
-                plan_id: plan, 
-                status: status,
-                mode: currentMode  // ← ADD THIS!
-            } 
-        });
-        
-        if (!response.ok) throw new Error(await response.text());
         
         const result = await response.json();
-        statusEl.innerHTML = `<div class="alert success">✅ Created in ${currentMode} mode!</div>`;
-        utils.showNotification(`👤 ${id} created in ${currentMode} mode!`, 'success');
         
-        this.clearForm();
-        dashboard.load();
+        // Handle unauthorized
+        if (response.status === 401) {
+          console.warn('Session expired, logging out...');
+          logout();
+          throw new Error('Session expired. Please login again.');
+        }
         
-    } catch (error) {
-        statusEl.innerHTML = `<div class="alert error">❌ Failed: ${error.message}</div>`;
+        return { response, result };
+      } catch (error) {
+        console.error('API call error:', error);
+        throw error;
+      }
     }
-},
 
-//Search
+    // === AUTH ===
+    function checkAuth() {
+      authToken = sessionStorage.getItem('authToken');
+      currentUser = sessionStorage.getItem('username');
+      
+      if (authToken && currentUser) {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app-shell').style.display = 'block';
+        document.getElementById('username-display').textContent = currentUser;
+        
+        // Load data after a brief delay to ensure token is set
+        setTimeout(() => {
+          loadDashboard();
+          refreshJobs();
+        }, 100);
+      } else {
+        document.getElementById('login-screen').style.display = 'flex';
+        document.getElementById('app-shell').style.display = 'none';
+      }
+    }
 
-async search() {
-    const query = document.getElementById('search-input').value.trim();
-    const currentMode = document.getElementById('provisioning-mode').value;
-    
-    if (!query) {
-        utils.showNotification('Please enter a search term', 'error');
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      
+      if (!username || !password) {
+        showNotification('Please enter username and password', 'error');
         return;
-    }
-    
-    if (currentMode === 'HYBRID') {
-        await this.hybridCloudFirstSearch(query);
-    } else if (currentMode === 'CLOUD') {
-        const results = await this.searchCloudOnly(query);
-        this.displayResults(results, query);
-    } else if (currentMode === 'LEGACY') {
-        const results = await this.searchLegacyOnly(query);
-        this.displayResults(results, query);
-    }
-},
-
-// ✅ FIX 5: Add hybrid cloud-first search
-async checkUidInCloud(uid) {
-    try {
-        const response = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscriber/${uid}?system=cloud`);
-        return response.ok && response.status !== 404;
-    } catch (error) {
-        return false;
-    }
-},
-
-async checkUidInLegacy(uid) {
-    try {
-        const response = await fetch(`https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/subscribers/${uid}?system=legacy`);
-        return response.ok && response.status !== 404;
-    } catch (error) {
-        return false;
-    }
-},
-
-async hybridCloudFirstSearch(queryText) {
-    const resultsEl = document.getElementById('search-results');
-    
-    try {
-        resultsEl.innerHTML = `<div class="alert info">🔍 Searching Cloud first...</div>`;
-        const cloudResults = await this.searchCloudOnly(queryText);
+      }
+      
+      const loginBtn = document.getElementById('login-btn');
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Signing in...';
+      
+      try {
+        // Direct fetch call without apiCall wrapper to avoid recursion
+        const response = await fetch(APP_CONFIG.AUTH_API, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ username, password })
+        });
         
-        if (cloudResults.length > 0) {
-            resultsEl.innerHTML = `<div class="alert success">✅ Found ${cloudResults.length} in Cloud</div>`;
-            this.displayResults(cloudResults, queryText);
-            return;
-        }
+        const result = await response.json();
+        console.log('Login response:', response.status, result);
         
-        resultsEl.innerHTML = `<div class="alert warning">⚠️ Not in Cloud, trying Legacy...</div>`;
-        const legacyResults = await this.searchLegacyOnly(queryText);
-        
-        if (legacyResults.length > 0) {
-            resultsEl.innerHTML = `<div class="alert warning">⚠️ Found ${legacyResults.length} in Legacy only</div>`;
-            this.displayResults(legacyResults, queryText);
+        if (response.ok && result.status === 'success' && result.data && result.data.token) {
+          authToken = result.data.token;
+          currentUser = result.data.user.username;
+          sessionStorage.setItem('authToken', authToken);
+          sessionStorage.setItem('username', result.data.user.username);
+          sessionStorage.setItem('userRole', result.data.user.role);
+          
+          console.log('Login successful, token saved:', authToken.substring(0, 20) + '...');
+          
+          // Show UI immediately
+          document.getElementById('login-screen').style.display = 'none';
+          document.getElementById('app-shell').style.display = 'block';
+          document.getElementById('username-display').textContent = currentUser;
+          
+          showNotification('✅ Login successful!', 'success');
+          
+          // Load data after UI is shown
+          setTimeout(() => {
+            loadDashboard();
+            refreshJobs();
+            settings.load(); // Load settings on login
+          }, 100);
         } else {
-            resultsEl.innerHTML = `<div class="alert error">❌ Not found in either system</div>`;
+          console.error('Login failed:', result);
+          throw new Error(result.message || result.error || 'Invalid credentials');
+        }
+      } catch (error) {
+        console.error('Login error:', error);
+        showNotification('❌ Login failed: ' + error.message, 'error');
+        loginBtn.disabled = false;
+        loginBtn.textContent = 'Sign In';
+      }
+    }
+
+    function logout() {
+      sessionStorage.clear();
+      authToken = null;
+      currentUser = null;
+      checkAuth();
+    }
+
+    async function testAPI() {
+      const statusEl = document.getElementById('api-status');
+      statusEl.className = 'alert info';
+      statusEl.textContent = 'Testing connection...';
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.HEALTH_API);
+        
+        if (response.ok) {
+          statusEl.className = 'alert success';
+          statusEl.textContent = `✅ Connected! Version: ${result.version || result.data?.version || 'Unknown'}`;
+        } else {
+          throw new Error('Health check failed');
+        }
+      } catch (error) {
+        statusEl.className = 'alert error';
+        statusEl.textContent = '❌ Connection failed: ' + error.message;
+      }
+    }
+
+    // === DASHBOARD ===
+    async function loadDashboard() {
+      try {
+        const { response, result } = await apiCall('/api/dashboard/stats');
+        
+        if (response.ok && result.data) {
+          document.getElementById('total-subscribers').textContent = 
+            result.data.totalSubscribers || '0';
+          
+          // Calculate success rate from performance metrics if available
+          try {
+            const perfResp = await apiCall('/api/dashboard/performance');
+            if (perfResp.response.ok && perfResp.result.data) {
+              const stats = perfResp.result.data.migration_stats;
+              const successRate = stats.total_jobs > 0 
+                ? Math.round((stats.completed_jobs / stats.total_jobs) * 100) 
+                : 0;
+              document.getElementById('success-rate').textContent = successRate + '%';
+            }
+          } catch (e) {
+            document.getElementById('success-rate').textContent = '-';
+          }
+        }
+      } catch (error) {
+        console.error('Dashboard load error:', error);
+        showNotification('Failed to load dashboard stats', 'error');
+      }
+      
+      testAPI();
+    }
+
+    // === CSV UPLOAD ===
+    async function uploadCSV() {
+      const fileInput = document.getElementById('csv-file-input');
+      const file = fileInput.files[0];
+      
+      if (!file) {
+        showNotification('Please select a CSV file', 'error');
+        return;
+      }
+      
+      if (!file.name.endsWith('.csv')) {
+        showNotification('Only CSV files are allowed', 'error');
+        return;
+      }
+      
+      const statusEl = document.getElementById('csv-upload-status');
+      statusEl.innerHTML = '<div class="alert info">📤 Uploading CSV...</div>';
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        // Use fetch directly for FormData (don't set Content-Type)
+        const response = await fetch(`${APP_CONFIG.MIGRATION_API}/csv-upload`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` },
+          body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.data) {
+          statusEl.innerHTML = `
+            <div class="alert success">
+              ✅ ${result.message}<br/>
+              <strong>Job ID:</strong> ${result.data.job_id}<br/>
+              <strong>Total Subscribers:</strong> ${result.data.total_subscribers}<br/>
+              <strong>Identifier Type:</strong> ${result.data.identifier_type}
+            </div>
+          `;
+          showNotification('Migration started successfully!', 'success');
+          fileInput.value = '';
+          
+          // Refresh jobs after 2 seconds
+          setTimeout(() => refreshJobs(), 2000);
+        } else {
+          throw new Error(result.message || 'Upload failed');
+        }
+      } catch (error) {
+        statusEl.innerHTML = `<div class="alert error">❌ Upload failed: ${error.message}</div>`;
+        showNotification('Upload failed', 'error');
+      }
+    }
+
+    // === MIGRATION JOBS ===
+    async function refreshJobs() {
+      const container = document.getElementById('migration-jobs-container');
+      container.innerHTML = '<div class="alert info">Loading jobs...</div>';
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.JOBS_API);
+        
+        if (response.ok && result.data && result.data.jobs) {
+          displayJobs(result.data.jobs);
+        } else {
+          throw new Error(result.message || 'Failed to load jobs');
+        }
+      } catch (error) {
+        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+      }
+    }
+
+    function displayJobs(jobs) {
+      const container = document.getElementById('migration-jobs-container');
+      
+      if (!jobs || jobs.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-light);">No migration jobs found</p>';
+        return;
+      }
+      
+      let html = '<table class="results-table"><thead><tr>';
+      html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Total</th><th>Success</th><th>Failed</th><th>Progress</th><th>Created</th><th>Actions</th>';
+      html += '</tr></thead><tbody>';
+      
+      jobs.forEach(job => {
+        const statusClass = job.status === 'COMPLETED' ? 'success' : 
+                            job.status === 'FAILED' ? 'error' : 'info';
+        
+        html += `<tr>
+          <td><strong>${job.job_id}</strong></td>
+          <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+          <td>${job.identifier_type || 'N/A'}</td>
+          <td>${job.total_subscribers || 0}</td>
+          <td style="color: var(--color-success);">${job.migrated_count || 0}</td>
+          <td style="color: var(--color-danger);">${job.failed_count || 0}</td>
+          <td>
+            <div class="progress-bar" style="width: 100px;">
+              <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
+            </div>
+            <small>${job.progress || 0}%</small>
+          </td>
+          <td>${new Date(job.created_at).toLocaleString()}</td>
+          <td>
+            <button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job.job_id}')">View</button>
+            ${job.status === 'COMPLETED' ? 
+              `<button class="btn btn-sm" onclick="downloadReport('${job.job_id}')" style="margin-left: 8px;">📥 Report</button>` 
+              : ''}
+          </td>
+        </tr>`;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }
+
+    async function viewJobDetails(jobId) {
+      try {
+        const { response, result } = await apiCall(`${APP_CONFIG.JOBS_API}/${jobId}`);
+        
+        if (response.ok && result.data) {
+          const job = result.data;
+          
+          let content = `
+            <div style="line-height: 1.8;">
+              <p><strong>Job ID:</strong> ${job.job_id}</p>
+              <p><strong>Status:</strong> <span class="status-badge ${job.status === 'COMPLETED' ? 'success' : 'info'}">${job.status}</span></p>
+              <p><strong>Identifier Type:</strong> ${job.identifier_type}</p>
+              <p><strong>Filename:</strong> ${job.filename}</p>
+              <p><strong>Created By:</strong> ${job.created_by}</p>
+              <p><strong>Total Subscribers:</strong> ${job.total_subscribers}</p>
+              <p><strong>Successfully Migrated:</strong> ${job.migrated_count}</p>
+              <p><strong>Failed:</strong> ${job.failed_count}</p>
+              <p><strong>Progress:</strong> ${job.progress}%</p>
+              <p><strong>Created At:</strong> ${new Date(job.created_at).toLocaleString()}</p>
+              ${job.completed_at ? `<p><strong>Completed At:</strong> ${new Date(job.completed_at).toLocaleString()}</p>` : ''}
+            </div>
+          `;
+          
+          if (job.status === 'COMPLETED') {
+            content += `<button class="btn" onclick="downloadReport('${job.job_id}')" style="margin-top: 16px;">📥 Download Full Report</button>`;
+          }
+          
+          document.getElementById('modal-job-title').textContent = `Job Details: ${jobId}`;
+          document.getElementById('modal-job-content').innerHTML = content;
+          document.getElementById('job-modal').style.display = 'flex';
+        }
+      } catch (error) {
+        showNotification('Failed to load job details', 'error');
+      }
+    }
+
+    async function downloadReport(jobId) {
+      try {
+        // Use fetch directly for blob response
+        const response = await fetch(`${APP_CONFIG.JOBS_API}/${jobId}/report`, {
+          headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `migration_report_${jobId}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          
+          showNotification('Report downloaded successfully!', 'success');
+        } else {
+          throw new Error('Download failed');
+        }
+      } catch (error) {
+        showNotification('Failed to download report', 'error');
+      }
+    }
+
+    function closeJobModal() {
+      document.getElementById('job-modal').style.display = 'none';
+    }
+
+    // === DATA QUERY ===
+    async function executeQuery() {
+      const queryType = document.getElementById('query-type-select').value;
+      const queryValue = document.getElementById('query-value-input').value.trim();
+      const source = document.getElementById('query-source-select').value;
+      
+      if (!queryValue) {
+        showNotification('Please enter a query value', 'error');
+        return;
+      }
+      
+      const container = document.getElementById('query-results-container');
+      container.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
+          method: 'POST',
+          body: JSON.stringify({
+            query_type: queryType,
+            query_value: queryValue,
+            source: source
+          })
+        });
+        
+        if (response.ok && result.data) {
+          displayQueryResults(result.data.results, container);
+        } else {
+          throw new Error(result.message || 'Query failed');
+        }
+      } catch (error) {
+        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+      }
+    }
+
+    function displayQueryResults(results, container) {
+      if (!results || results.length === 0) {
+        container.innerHTML = '<div class="alert info">No results found</div>';
+        return;
+      }
+      
+      let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Created At</th>';
+      html += '</tr></thead><tbody>';
+      
+      results.forEach(sub => {
+        html += `<tr>
+          <td><strong>${sub.uid || '-'}</strong></td>
+          <td>${sub.imsi || '-'}</td>
+          <td>${sub.msisdn || '-'}</td>
+          <td>${sub.email || '-'}</td>
+          <td><span class="status-badge success">${sub.status || 'N/A'}</span></td>
+          <td>${sub.plan || '-'}</td>
+          <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
+        </tr>`;
+      });
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+      showNotification(`Found ${results.length} subscriber(s)`, 'success');
+    }
+
+    // === PERFORMANCE DASHBOARD ===
+    async function loadPerformance() {
+      const container = document.getElementById('performance-metrics-container');
+      container.innerHTML = '<div class="alert info">Loading performance metrics...</div>';
+      
+      try {
+        const { response, result } = await apiCall('/api/dashboard/performance');
+        
+        if (response.ok && result.data) {
+          displayPerformanceMetrics(result.data, container);
+        } else {
+          throw new Error(result.message || 'Failed to load metrics');
+        }
+      } catch (error) {
+        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+      }
+    }
+
+    function displayPerformanceMetrics(metrics, container) {
+      const stats = metrics.migration_stats;
+      
+      let html = '<div class="stats-grid">';
+      
+      html += `
+        <div class="stat-card">
+          <h3>Total Jobs</h3>
+          <div class="stat-number" style="color: var(--color-primary);">${stats.total_jobs}</div>
+        </div>
+        <div class="stat-card">
+          <h3>Completed</h3>
+          <div class="stat-number" style="color: var(--color-success);">${stats.completed_jobs}</div>
+        </div>
+        <div class="stat-card">
+          <h3>Failed</h3>
+          <div class="stat-number" style="color: var(--color-danger);">${stats.failed_jobs}</div>
+        </div>
+        <div class="stat-card">
+          <h3>In Progress</h3>
+          <div class="stat-number" style="color: var(--color-info);">${stats.in_progress_jobs}</div>
+        </div>
+      `;
+      
+      html += '</div>';
+      
+      html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px;">';
+      
+      html += `
+        <div class="card">
+          <h3>Migration Summary</h3>
+          <p><strong>Total Migrated:</strong> ${stats.total_migrated}</p>
+          <p><strong>Total Failed:</strong> ${stats.total_failed}</p>
+          <p><strong>Success Rate:</strong> ${stats.total_jobs > 0 ? Math.round((stats.completed_jobs / stats.total_jobs) * 100) : 0}%</p>
+        </div>
+        
+        <div class="card">
+          <h3>System Health</h3>
+          <p><strong>Database:</strong> <span class="status-badge success">${metrics.system_health.database_status}</span></p>
+          <p><strong>API:</strong> <span class="status-badge success">${metrics.system_health.api_status}</span></p>
+          <p><strong>Storage:</strong> <span class="status-badge success">${metrics.system_health.storage_status}</span></p>
+        </div>
+      `;
+      
+      html += '</div>';
+      
+      container.innerHTML = html;
+    }
+
+    // === UI NAVIGATION ===
+    function showPage(pageId) {
+      document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+      
+      const section = document.getElementById(pageId);
+      if (section) section.classList.add('active');
+      
+      const navItem = document.querySelector(`[data-page="${pageId}"]`);
+      if (navItem) navItem.classList.add('active');
+      
+      // Load page-specific data
+      if (pageId === 'dashboard') { loadDashboard(); }
+      if (pageId === 'migration') { refreshJobs(); }
+      if (pageId === 'provisioning') { settings.load(); } // Load mode for provisioning page
+      if (pageId === 'query') { /* No auto-load */ }
+      if (pageId === 'monitoring') { loadPerformance(); }
+      if (pageId === 'settings') { settings.load(); }
+    }
+    
+    // === MODAL UTILITY ===
+    function showConfirmationModal(title, message, onConfirm) {
+      document.getElementById('modal-title').textContent = title;
+      document.getElementById('modal-message').textContent = message;
+      const modal = document.getElementById('confirmation-modal');
+      modal.style.display = 'flex';
+      const confirmBtn = document.getElementById('modal-confirm');
+      const cancelBtn = document.getElementById('modal-cancel');
+
+      const confirmHandler = () => { onConfirm(); closeHandler(); };
+      const closeHandler = () => {
+        modal.style.display = 'none';
+        confirmBtn.removeEventListener('click', confirmHandler);
+        cancelBtn.removeEventListener('click', closeHandler);
+      };
+      
+      // Clear old listeners before adding new ones
+      confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+      cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+      
+      document.getElementById('modal-confirm').addEventListener('click', confirmHandler);
+      document.getElementById('modal-cancel').addEventListener('click', closeHandler);
+    }
+
+    // === MIGRATION OPERATIONS (STUBS) ===
+    const migration = {
+      async startBulk() {
+        showNotification('🚀 Bulk migration feature - not implemented', 'info');
+      },
+      async checkJobs() {
+        refreshJobs();
+      },
+      async loadHistory() {
+        refreshJobs();
+      },
+      async cancelAll() {
+        showNotification('🛑 Cancel all feature - not implemented', 'warning');
+      }
+    };
+
+    // === PROVISIONING (FIXED: MERGED OLD AND NEW LOGIC) ===
+    const provisioning = {
+      // Point to the global createSubscriber function
+      create: () => createSubscriber(),
+      
+      // Use the new form's clear function
+      clearForm() {
+        document.getElementById('create-uid').value = '';
+        document.getElementById('create-imsi').value = '';
+        document.getElementById('create-msisdn').value = '';
+        document.getElementById('create-email').value = '';
+        document.getElementById('create-plan').value = '';
+        document.getElementById('create-status').value = 'ACTIVE';
+        document.getElementById('create-subscriber-status').innerHTML = '';
+      },
+      
+      // Load all stub
+      loadAll() {
+        showNotification('📋 Load all feature - implement pagination', 'info');
+      },
+      
+      // Point "Edit" button to the searchForModify function
+      edit(uid) {
+        document.getElementById('modify-search-uid').value = uid;
+        searchForModify();
+        showNotification(`Loading ${uid} for modification...`, 'info');
+      },
+
+      // Search function from old file, adapted for new API
+      async search() {
+        const query = document.getElementById('search-input').value.trim();
+        const currentMode = document.getElementById('provisioning-mode').value;
+        const resultsEl = document.getElementById('search-results');
+        
+        if (!query) {
+          showNotification('Please enter a search term', 'error');
+          return;
         }
         
-    } catch (error) {
-        resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
-    }
-},
-
-async searchCloudOnly(queryText) {
-    try {
-        const response = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/search?q=${encodeURIComponent(queryText)}&system=cloud`);
-        if (!response.ok) throw new Error('Cloud search failed');
-        const data = await response.json();
-        return data.subscribers || [];
-    } catch (error) {
-        throw error;
-    }
-},
-
-async searchLegacyOnly(queryText) {
-    try {
-        const response = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscribers/search?q=${encodeURIComponent(queryText)}&system=legacy`);
-        if (!response.ok) throw new Error('Legacy search failed');
-        const data = await response.json();
-        return data.subscribers || [];
-    } catch (error) {
-        throw error;
-    }
-},
-      async load() {
-    try {
-        const response = await api.request('settings/provisioning-mode');
-        if (response.ok) {
-            const data = await response.json();
-            if (data.mode && ['CLOUD', 'LEGACY', 'HYBRID'].includes(data.mode)) {
-                document.getElementById('provisioning-mode').value = data.mode;
-                return;
-            }
+        resultsEl.innerHTML = `<div class="alert info">🔍 Searching...</div>`;
+        
+        try {
+          if (currentMode === 'HYBRID') {
+            await this.hybridCloudFirstSearch(query, resultsEl);
+          } else if (currentMode === 'CLOUD') {
+            const { result } = await this.searchCloudOnly(query);
+            this.displayResults(result.data.subscribers || [], query, resultsEl);
+          } else if (currentMode === 'LEGACY') {
+            const { result } = await this.searchLegacyOnly(query);
+            this.displayResults(result.data.subscribers || [], query, resultsEl);
+          }
+        } catch (error) {
+           resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
         }
-        // Fallback to localStorage
-        const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
-        document.getElementById('provisioning-mode').value = savedMode;
-    } catch (error) {
-        // Use localStorage on any error
-        const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
-        document.getElementById('provisioning-mode').value = savedMode;
-        console.log('Settings load failed, using localStorage fallback');
-    }
-},
-      displayResults(data, query) {
-        const resultsEl = document.getElementById('search-results');
+      },
+
+      async hybridCloudFirstSearch(queryText, resultsEl) {
+        try {
+          resultsEl.innerHTML = `<div class="alert info">🔍 Searching Cloud first...</div>`;
+          const { result: cloudResult } = await this.searchCloudOnly(queryText);
+          const cloudSubs = cloudResult.data.subscribers || [];
+          
+          if (cloudSubs.length > 0) {
+            resultsEl.innerHTML = `<div class="alert success">✅ Found ${cloudSubs.length} in Cloud</div>`;
+            this.displayResults(cloudSubs, queryText, resultsEl);
+            return;
+          }
+          
+          resultsEl.innerHTML = `<div class="alert warning">⚠️ Not in Cloud, trying Legacy...</div>`;
+          const { result: legacyResult } = await this.searchLegacyOnly(queryText);
+          const legacySubs = legacyResult.data.subscribers || [];
+          
+          if (legacySubs.length > 0) {
+            resultsEl.innerHTML = `<div class="alert warning">⚠️ Found ${legacySubs.length} in Legacy only</div>`;
+            this.displayResults(legacySubs, queryText, resultsEl);
+          } else {
+            resultsEl.innerHTML = `<div class="state-container"><div class="icon">🔍</div><h3>No Results Found</h3><p>Not found in either system for "${queryText}".</p></div>`;
+          }
+        } catch (error) {
+          resultsEl.innerHTML = `<div class="alert error">❌ Search failed: ${error.message}</div>`;
+        }
+      },
+
+      // --- API Calls (fixed to use apiCall) ---
+      async searchCloudOnly(queryText) {
+        return apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/search?q=${encodeURIComponent(queryText)}&system=cloud`);
+      },
+      async searchLegacyOnly(queryText) {
+        return apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/search?q=${encodeURIComponent(queryText)}&system=legacy`);
+      },
+      async checkUidInCloud(uid) {
+        try {
+          const { response } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}?system=cloud`);
+          return response.ok && response.status !== 404;
+        } catch (e) { return false; }
+      },
+      async checkUidInLegacy(uid) {
+         try {
+          const { response } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}?system=legacy`);
+          return response.ok && response.status !== 404;
+        } catch (e) { return false; }
+      },
+      
+      // --- Display & Delete (from old file) ---
+      displayResults(data, query, resultsEl) {
         if (!data || !Array.isArray(data) || data.length === 0) {
           resultsEl.innerHTML = `
             <div class="state-container">
@@ -1166,409 +1259,326 @@ async searchLegacyOnly(queryText) {
           <h3>🔍 Search Results (${data.length} found)</h3>
           <table class="results-table">
             <thead>
-              <tr><th>Subscriber ID</th><th>Email</th><th>Plan</th><th>Status</th><th>Created</th><th>Actions</th></tr>
+              <tr><th>Subscriber ID</th><th>Email</th><th>Plan</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               ${data.map(sub => `
                 <tr>
                   <td><strong>${sub.uid || 'N/A'}</strong></td>
                   <td>${sub.email || 'N/A'}</td>
-                  <td><span class="status-badge info">${sub.plan_id || 'N/A'}</span></td>
-                  <td><span class="status-badge ${sub.status === 'active' ? 'success' : sub.status === 'inactive' ? 'error' : 'warning'}">${sub.status || 'N/A'}</span></td>
-                  <td>${sub.created_at ? new Date(sub.created_at).toLocaleDateString() : 'N/A'}</td>
+                  <td><span class="status-badge info">${sub.plan_id || sub.plan || 'N/A'}</span></td>
+                  <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
                   <td>
-                    <button class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
-                    <button class="btn btn-danger" style="padding: 8px 12px; font-size: 12px;" onclick="provisioning.confirmDelete('${sub.uid}')">🗑️ Delete</button>
+                    <button class="btn btn-sm btn-secondary" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
+                    <button class="btn btn-sm btn-danger" onclick="provisioning.confirmDelete('${sub.uid}')" style="margin-left: 8px;">🗑️ Delete</button>
                   </td>
                 </tr>`).join('')}
             </tbody>
           </table>`;
-        utils.showNotification(`✅ Found ${data.length} subscribers`, 'success');
+        showNotification(`✅ Found ${data.length} subscribers`, 'success');
       },
-      clearForm() {
-        document.getElementById('subscriber-id').value = '';
-        document.getElementById('subscriber-email').value = '';
-        document.getElementById('subscriber-plan').value = '';
-        document.getElementById('subscriber-status').value = 'active';
-        document.getElementById('create-status').innerHTML = '';
-      },
+
       confirmDelete(uid) {
-        ui.showConfirmationModal('Delete Subscriber', `Are you sure you want to permanently delete subscriber ${uid}? This action cannot be undone.`, () => this.delete(uid));
+        showConfirmationModal('Delete Subscriber', `Are you sure you want to permanently delete subscriber ${uid}? This action cannot be undone.`, () => this.delete(uid));
       },
+
       async delete(uid) {
-    const currentMode = document.getElementById('provisioning-mode').value;
-    
-    try {
-        if (currentMode === 'HYBRID') {
+        const currentMode = document.getElementById('provisioning-mode').value;
+        try {
+          if (currentMode === 'HYBRID') {
             await this.hybridDelete(uid);
-        } else if (currentMode === 'CLOUD') {
+          } else if (currentMode === 'CLOUD') {
             await this.deleteFromCloudOnly(uid);
-        } else if (currentMode === 'LEGACY') {
+          } else if (currentMode === 'LEGACY') {
             await this.deleteFromLegacyOnly(uid);
-        }
-        
-        // Refresh data after successful delete
-        this.search();
-        dashboard.load();
-        
-    } catch (error) {
-        utils.showNotification(`Delete failed: ${error.message}`, 'error');
-    }
-},
-
-// ✅ HYBRID DELETE: Check both systems and delete from wherever found
-async hybridDelete(uid) {
-    // Step 1: Check existence in both systems
-    const cloudExists = await this.checkUidInCloud(uid);
-    const legacyExists = await this.checkUidInLegacy(uid);
-    
-    if (!cloudExists && !legacyExists) {
-        throw new Error(`UID ${uid} not found in either Cloud or Legacy system`);
-    }
-    
-    const deleteResults = [];
-    
-    // Step 2: Delete from Cloud if exists
-    if (cloudExists) {
-        try {
-            const cloudResponse = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscriber/${uid}?system=cloud`, {
-                method: 'DELETE'
-            });
-            
-            if (cloudResponse.ok) {
-                deleteResults.push('✅ Deleted from Cloud');
-            } else {
-                deleteResults.push('⚠️ Cloud delete failed');
-            }
-        } catch (error) {
-            deleteResults.push('❌ Cloud delete error');
-        }
-    }
-    
-    // Step 3: Delete from Legacy if exists  
-    if (legacyExists) {
-        try {
-            const legacyResponse = await fetch(`https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/subscribers/${uid}?system=legacy`, {
-                method: 'DELETE'
-            });
-            
-            if (legacyResponse.ok) {
-                deleteResults.push('✅ Deleted from Legacy');
-            } else {
-                deleteResults.push('⚠️ Legacy delete failed');
-            }
-        } catch (error) {
-            deleteResults.push('❌ Legacy delete error');
-        }
-    }
-    
-    // Step 4: Show comprehensive results
-    const successCount = deleteResults.filter(r => r.includes('✅')).length;
-    const totalSystems = (cloudExists ? 1 : 0) + (legacyExists ? 1 : 0);
-    
-    if (successCount === totalSystems) {
-        utils.showNotification(`🎊 UID ${uid} deleted from all systems! ${deleteResults.join(', ')}`, 'success');
-    } else {
-        utils.showNotification(`⚠️ Partial delete: ${deleteResults.join(', ')}`, 'warning');
-    }
-},
-
-// ✅ CLOUD-ONLY DELETE
-async deleteFromCloudOnly(uid) {
-    const response = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscriber/${uid}?system=cloud`, {
-        method: 'DELETE'
-    });
-    
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Cloud delete failed: ${errText}`);
-    }
-    
-    utils.showNotification(`☁️ UID ${uid} deleted from Cloud system`, 'success');
-},
-
-// ✅ LEGACY-ONLY DELETE
-async deleteFromLegacyOnly(uid) {
-    const response = await fetch(`https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/subscribers/${uid}?system=legacy`, {
-        method: 'DELETE'
-    });
-    
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Legacy delete failed: ${errText}`);
-    }
-    
-    utils.showNotification(`🗄️ UID ${uid} deleted from Legacy system`, 'success');
-},
-
-async update(uid) {
-    const currentMode = document.getElementById('provisioning-mode').value;
-    
-    if (currentMode === 'HYBRID') {
-        await this.hybridUpdate(uid);
-    } else if (currentMode === 'CLOUD') {
-        await this.updateCloudOnly(uid);
-    } else if (currentMode === 'LEGACY') {
-        await this.updateLegacyOnly(uid);
-    }
-},
-
-async hybridUpdate(uid) {
-    // Check where subscriber exists
-    const cloudExists = await this.checkUidInCloud(uid);
-    const legacyExists = await this.checkUidInLegacy(uid);
-    
-    if (!cloudExists && !legacyExists) {
-        throw new Error(`UID ${uid} not found in either system`);
-    }
-    
-    const updateData = this.getUpdateData(); // Get form data
-    const updateResults = [];
-    
-    // Update Cloud if exists
-    if (cloudExists) {
-        try {
-            const cloudResponse = await fetch(`https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/subscriber/${uid}?system=cloud`, {
-                method: 'PUT',
-                body: JSON.stringify(updateData)
-            });
-            
-            if (cloudResponse.ok) {
-                updateResults.push('✅ Updated in Cloud');
-            } else {
-                updateResults.push('⚠️ Cloud update failed');
-            }
-        } catch (error) {
-            updateResults.push('❌ Cloud update error');
-        }
-    }
-    
-    // Update Legacy if exists
-    if (legacyExists) {
-        try {
-            const legacyResponse = await fetch(`https://u5f4sinkv3.execute-api.us-east-1.amazonaws.com/prod/subscribers/${uid}?system=legacy`, {
-                method: 'PUT', 
-                body: JSON.stringify(updateData)
-            });
-            
-            if (legacyResponse.ok) {
-                updateResults.push('✅ Updated in Legacy');
-            } else {
-                updateResults.push('⚠️ Legacy update failed');
-            }
-        } catch (error) {
-            updateResults.push('❌ Legacy update error');
-        }
-    }
-    
-    utils.showNotification(`🔄 Update results: ${updateResults.join(', ')}`, 'success');
-},
-};
-
-    // === Query ===
-    const query = {
-      quick(type) {
-        const queries = {
-          'active': 'SELECT * FROM subscribers WHERE status = "active" ORDER BY created_at DESC LIMIT 100;',
-          'inactive': 'SELECT * FROM subscribers WHERE status = "inactive" LIMIT 100;',
-          'recent': 'SELECT * FROM subscribers WHERE created_at > DATE_SUB(NOW(), INTERVAL 7 DAY) ORDER BY created_at DESC;',
-          'plans': 'SELECT plan_id, COUNT(*) as count FROM subscribers GROUP BY plan_id;',
-          'errors': 'SELECT * FROM migration_jobs WHERE status = "FAILED" ORDER BY created_at DESC LIMIT 50;',
-          'audit': 'SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 100;'
-        };
-        const textarea = document.getElementById('sql-query');
-        textarea.value = queries[type] || '';
-        utils.showNotification(`📝 ${type.toUpperCase()} query loaded`, 'info');
-      },
-      async execute() {
-        const queryText = document.getElementById('sql-query').value.trim();
-        if (!queryText) { utils.showNotification('❌ Please enter a query', 'error'); return; }
-        await this.runQuery(queryText);
-      },
-      async runQuery(sql) {
-        const resultsEl = document.getElementById('query-results');
-        resultsEl.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
-        try {
-          const res = await api.request('/query', { method: 'POST', body: { sql_query: sql } });
-          const text = await res.text();
-          if (!res.ok) {
-            let err = 'Query failed'; try { err = JSON.parse(text).error || err; } catch {}
-            throw new Error(err);
           }
-          let payload = {}; try { payload = JSON.parse(text); } catch { throw new Error('Invalid JSON from /query'); }
-          const headers = Array.isArray(payload.headers) ? payload.headers : [];
-          const rows = Array.isArray(payload.rows) ? payload.rows : [];
-          resultsEl.innerHTML = `
-            <div class="alert success">✅ Query executed successfully! ${rows.length} rows returned</div>
-            <table class="results-table">
-              <thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead>
-              <tbody>${rows.map(r => `<tr>${Array.isArray(r) ? r.map(c => `<td>${c ?? ''}</td>`).join('') : '<td>Invalid row data</td>'}</tr>`).join('')}</tbody>
-            </table>`;
-          utils.showNotification('✅ Query executed', 'success');
+          this.search(); // Refresh results
         } catch (error) {
-          resultsEl.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
-          utils.showNotification(`❌ ${error.message}`, 'error');
+          showNotification(`Delete failed: ${error.message}`, 'error');
         }
       },
-      validate() {
-        const queryText = document.getElementById('sql-query').value.trim();
-        if (!queryText) { utils.showNotification('❌ No query to validate', 'error'); return; }
-        utils.showNotification('✅ Query syntax looks valid (client-side check)', 'success');
+
+      async hybridDelete(uid) {
+        const cloudExists = await this.checkUidInCloud(uid);
+        const legacyExists = await this.checkUidInLegacy(uid);
+        if (!cloudExists && !legacyExists) throw new Error(`UID ${uid} not found in either system`);
+        
+        let results = [];
+        if (cloudExists) {
+          try {
+            await this.deleteFromCloudOnly(uid);
+            results.push('✅ Cloud');
+          } catch (e) { results.push('❌ Cloud'); }
+        }
+        if (legacyExists) {
+           try {
+            await this.deleteFromLegacyOnly(uid);
+            results.push('✅ Legacy');
+          } catch (e) { results.push('❌ Legacy'); }
+        }
+        showNotification(`Hybrid Delete: ${results.join(', ')}`, 'success');
       },
-      clear() { document.getElementById('sql-query').value = ''; document.getElementById('query-results').innerHTML = ''; },
-      export() {
-        const table = document.querySelector('#query-results .results-table');
-        if (!table) { utils.showNotification('❌ No query results to export', 'error'); return; }
-        utils.showNotification('📊 Export functionality - implement CSV download', 'info');
+
+      async deleteFromCloudOnly(uid) {
+        const { response } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}?system=cloud`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Cloud delete failed');
+        showNotification(`☁️ UID ${uid} deleted from Cloud`, 'success');
+      },
+
+      async deleteFromLegacyOnly(uid) {
+        const { response } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}?system=legacy`, { method: 'DELETE' });
+        if (!response.ok) throw new Error('Legacy delete failed');
+        showNotification(`🏛️ UID ${uid} deleted from Legacy`, 'success');
       }
     };
 
-    // === Monitoring ===
+    // === MONITORING ===
     const monitoring = {
       realtimeActive: false,
-      async refresh() {
-        try {
-          const response = await api.request('/status');
-          if (response.ok) {
-            const data = await response.json();
-            document.getElementById('response-time').textContent = data.response_time || 'N/A';
-            document.getElementById('db-load').textContent = data.db_load || 'N/A';
-            document.getElementById('lambda-calls').textContent = data.lambda_calls || 'N/A';
-            document.getElementById('running-jobs').textContent = data.running_jobs || 'N/A';
-          } else { throw new Error('Status API failed'); }
-        } catch {
-          document.getElementById('response-time').textContent = 'N/A';
-          document.getElementById('db-load').textContent = 'N/A';
-          document.getElementById('lambda-calls').textContent = 'N/A';
-          document.getElementById('running-jobs').textContent = 'N/A';
-        }
-        utils.showNotification('📊 Metrics refreshed', 'success');
-      },
+      refresh: loadPerformance,
       async checkHealth() {
-        const healthEl = document.getElementById('health-details');
-        healthEl.innerHTML = '<div class="alert info">🏥 Running comprehensive health check...</div>';
-        try {
-          const response = await api.request('/status');
-          if (!response.ok) throw new Error(await response.text());
-          const data = await response.json();
-          healthEl.innerHTML = `
-            <div class="alert success">✅ System Status: ${data.status?.toUpperCase() || 'UNKNOWN'}</div>
-            <div class="health-grid">
-              <div class="health-item"><span class="label">DynamoDB Tables</span><span class="status">🟢 ${data.environment?.tables_configured || 'N/A'} Active</span></div>
-              <div class="health-item"><span class="label">RDS Database</span><span class="status">🟢 ${data.environment?.rds_configured ? 'Connected' : 'DynamoDB Mode'}</span></div>
-              <div class="health-item"><span class="label">Lambda Functions</span><span class="status">🟢 ${data.environment?.lambda_count || 'N/A'} Active</span></div>
-              <div class="health-item"><span class="label">API Gateway</span><span class="status">🟢 Responding</span></div>
-            </div>
-            <p style="margin-top: 16px; color: var(--text-light);"><strong>🕒 Last Updated:</strong> ${new Date(data.timestamp || Date.now()).toLocaleString()}</p>`;
-        } catch (error) {
-          healthEl.innerHTML = `<div class="alert error">❌ Health check failed: ${error.message}</div>`;
-        }
+        await testAPI();
       },
       toggleRealtime() {
         const btn = document.getElementById('realtime-btn');
         if (this.realtimeActive) {
-          this.realtimeActive = false; btn.textContent = '📡 Start Live Monitor'; utils.showNotification('⏹️ Real-time monitoring stopped', 'info');
+          this.realtimeActive = false;
+          btn.textContent = '📡 Start Live Monitor';
+          showNotification('⏹️ Real-time monitoring stopped', 'info');
         } else {
-          this.realtimeActive = true; btn.textContent = '⏹️ Stop Live Monitor'; utils.showNotification('📡 Real-time monitoring started', 'success');
-          const loop = () => { if (!this.realtimeActive) return; this.refresh(); setTimeout(loop, 5000); }; loop();
+          this.realtimeActive = true;
+          btn.textContent = '⏹️ Stop Live Monitor';
+          showNotification('📡 Real-time monitoring started', 'success');
+          const loop = () => {
+            if (!this.realtimeActive) return;
+            this.refresh();
+            setTimeout(loop, 5000);
+          };
+          loop();
         }
       }
     };
 
-    // === Settings ===
-const settings = {
-    async load() {
-    try {
-        const response = await fetch('https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/settings/provisioning-mode');
+    // === SETTINGS ===
+    const settings = {
+      async load() {
+        // Try to load from backend
+        try {
+          const { response, result } = await apiCall(`${APP_CONFIG.SETTINGS_API}/provisioning-mode`);
+          if (response.ok && result.data && result.data.mode) {
+             document.getElementById('provisioning-mode').value = result.data.mode;
+             localStorage.setItem('provisioning-mode', result.data.mode); // Sync local
+             return;
+          }
+        } catch (e) {
+          console.warn('Could not load settings from backend, using localStorage.');
+        }
+        // Fallback to localStorage
+        const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
+        document.getElementById('provisioning-mode').value = savedMode;
+      },
+      async saveMode() {
+        const mode = document.getElementById('provisioning-mode').value;
+        localStorage.setItem('provisioning-mode', mode);
+        
+        // Try to save to backend
+        try {
+           const { response, result } = await apiCall(`${APP_CONFIG.SETTINGS_API}/provisioning-mode`, {
+             method: 'POST',
+             body: JSON.stringify({ mode: mode })
+           });
+           if (!response.ok) throw new Error(result.message);
+           showNotification('💾 Provisioning mode saved: ' + mode, 'success');
+        } catch (e) {
+           showNotification('💾 Mode saved locally (backend sync failed)', 'warning');
+        }
+      },
+      saveConfig() {
+        showNotification('💾 System parameters saved', 'success');
+      }
+    }
+
+    // === CREATE SUBSCRIBER (Global Function) ===
+    async function createSubscriber() {
+      const uid = document.getElementById('create-uid').value.trim();
+      const imsi = document.getElementById('create-imsi').value.trim();
+      const msisdn = document.getElementById('create-msisdn').value.trim();
+      const email = document.getElementById('create-email').value.trim();
+      const status = document.getElementById('create-status').value;
+      const plan = document.getElementById('create-plan').value.trim();
+      
+      if (!uid || !imsi || !msisdn) {
+        showNotification('UID, IMSI, and MSISDN are required', 'error');
+        return;
+      }
+      
+      const statusEl = document.getElementById('create-subscriber-status');
+      statusEl.innerHTML = '<div class="alert info">Creating subscriber...</div>';
+      
+      try {
+        // FIXED: Call the correct /api/subscribers endpoint
+        const { response, result } = await apiCall(APP_CONFIG.SUBSCRIBERS_API, {
+          method: 'POST',
+          body: JSON.stringify({
+            uid: uid,
+            imsi: imsi,
+            msisdn: msisdn,
+            email: email,
+            status: status,
+            plan: plan
+          })
+        });
+        
         if (response.ok) {
-            const data = await response.json();
-            if (['CLOUD','LEGACY','HYBRID'].includes(data.mode)) {
-                document.getElementById('provisioning-mode').value = data.mode;
-                return;
-            }
+          statusEl.innerHTML = '<div class="alert success">✅ Subscriber created successfully!</div>';
+          showNotification('Subscriber created successfully!', 'success');
+          
+          provisioning.clearForm(); // Use the correct clear function
+          
+          setTimeout(() => statusEl.innerHTML = '', 3000);
+        } else {
+          throw new Error(result.message || 'Create failed');
         }
-    } catch (error) {
-        console.log('Settings load failed, using localStorage fallback');
-    }
-    
-    // **FIX: Load from localStorage on startup**
-    const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
-    document.getElementById('provisioning-mode').value = savedMode;
-},
-    
-   async saveMode() {
-    const mode = document.getElementById('provisioning-mode').value;
-    
-    // Save to localStorage immediately
-    localStorage.setItem('provisioning-mode', mode);
-    
-    // Try to save to backend
-    try {
-        const response = await fetch('https://5pyhb5k5xn2vvefedfal4y22zq0swyof.lambda-url.us-east-1.on.aws/settings/provisioning-mode', {
-            method: 'POST',
-            body: { mode: mode }
-        });
-        utils.showNotification('Mode saved successfully', 'success');
-    } catch (error) {
-        utils.showNotification('Mode saved locally (backend unavailable)', 'warning');
-    }
-},
-    
-    async saveConfig() {
-        utils.showNotification('💾 System parameters saved', 'success');
-    }
-};
-    // === Utils ===
-    const utils = {
-      showNotification(message, type = 'info') {
-        const notification = document.createElement('div');
-        notification.className = `alert ${type}`;
-        notification.textContent = message;
-        notification.style.cssText = `
-          position: fixed; top: 20px; right: 20px; z-index: 1001;
-          max-width: 400px; box-shadow: var(--shadow-lg);
-          animation: slideIn 0.3s ease; border: 1px solid var(--border-color);
-        `;
-        document.body.appendChild(notification);
-        setTimeout(() => {
-          notification.style.animation = 'slideOut 0.3s ease';
-          setTimeout(() => notification.remove(), 300);
-        }, 4000);
+      } catch (error) {
+        statusEl.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+        showNotification('Failed to create subscriber', 'error');
       }
-    };
+    }
 
-    // === Init ===
+    // === SEARCH FOR MODIFY (Global Function) ===
+    async function searchForModify(uidToSearch) {
+      // Allow function to be called with a UID (from edit button) or from the search box
+      const uid = uidToSearch || document.getElementById('modify-search-uid').value.trim();
+      
+      if (!uid) {
+        showNotification('Please enter UID', 'error');
+        return;
+      }
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
+          method: 'POST',
+          body: JSON.stringify({
+            query_type: 'uid',
+            query_value: uid,
+            source: 'cloud' // Modify form only works on cloud records for simplicity
+          })
+        });
+        
+        if (response.ok && result.data && result.data.results && result.data.results.length > 0) {
+          const subscriber = result.data.results[0];
+          
+          // Populate modify form
+          document.getElementById('modify-uid').value = subscriber.uid || '';
+          document.getElementById('modify-imsi').value = subscriber.imsi || '';
+          document.getElementById('modify-msisdn').value = subscriber.msisdn || '';
+          document.getElementById('modify-email').value = subscriber.email || '';
+          document.getElementById('modify-status').value = subscriber.status || 'ACTIVE';
+          document.getElementById('modify-plan').value = subscriber.plan || '';
+          
+          // Show form
+          document.getElementById('modify-form-container').style.display = 'block';
+          showNotification('Subscriber found! Modify the fields below.', 'success');
+        } else {
+          showNotification('Subscriber not found in Cloud DB', 'error');
+          document.getElementById('modify-form-container').style.display = 'none';
+        }
+      } catch (error) {
+        showNotification('Search failed: ' + error.message, 'error');
+      }
+    }
+
+    // === MODIFY SUBSCRIBER (Global Function) ===
+    async function modifySubscriber() {
+      const uid = document.getElementById('modify-uid').value.trim();
+      const imsi = document.getElementById('modify-imsi').value.trim();
+      const msisdn = document.getElementById('modify-msisdn').value.trim();
+      const email = document.getElementById('modify-email').value.trim();
+      const status = document.getElementById('modify-status').value;
+      const plan = document.getElementById('modify-plan').value.trim();
+      
+      if (!uid) {
+        showNotification('UID is required', 'error');
+        return;
+      }
+      
+      const statusEl = document.getElementById('modify-subscriber-status');
+      statusEl.innerHTML = '<div class="alert info">Updating subscriber...</div>';
+      
+      try {
+        // FIXED: Call the correct /api/subscribers/:uid endpoint
+        const { response, result } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            uid: uid,
+            imsi: imsi,
+            msisdn: msisdn,
+            email: email,
+            status: status,
+            plan: plan
+          })
+        });
+        
+        if (response.ok) {
+          statusEl.innerHTML = '<div class="alert success">✅ Subscriber updated successfully!</div>';
+          showNotification('Subscriber updated successfully!', 'success');
+          
+          setTimeout(() => {
+            statusEl.innerHTML = '';
+            document.getElementById('modify-form-container').style.display = 'none';
+            document.getElementById('modify-search-uid').value = '';
+          }, 3000);
+        } else {
+          throw new Error(result.message || 'Update failed');
+        }
+      } catch (error) {
+        statusEl.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+        showNotification('Failed to update subscriber', 'error');
+      }
+    }
+
+    // === UTILITIES ===
+    function showNotification(message, type = 'info') {
+      const notification = document.createElement('div');
+      notification.className = `alert ${type}`;
+      notification.textContent = message;
+      notification.style.cssText = `
+        position: fixed; top: 20px; right: 20px; z-index: 3000;
+        max-width: 400px; box-shadow: var(--shadow-lg);
+      `;
+      document.body.appendChild(notification);
+      setTimeout(() => notification.remove(), 4000);
+    }
+
+    // === INIT ===
     document.addEventListener('DOMContentLoaded', function() {
-      // listeners
-      document.getElementById('login-btn').addEventListener('click', () => auth.login());
-      document.getElementById('logout-btn').addEventListener('click', () => auth.logout());
-
-      const fileInput = document.getElementById('migration-file');
-      const dropZone = document.getElementById('file-drop-zone');
-      if (fileInput) fileInput.addEventListener('change', () => migration.handleFileSelect());
-      if (dropZone) {
-        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
-        dropZone.addEventListener('drop', (e) => {
-          e.preventDefault(); dropZone.classList.remove('dragover');
-          const files = e.dataTransfer.files; if (files.length > 0) { fileInput.files = files; migration.handleFileSelect(); }
-        });
-      }
-
+      document.getElementById('login-btn').addEventListener('click', login);
+      document.getElementById('logout-btn').addEventListener('click', logout);
+      
       document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', (e) => { const page = e.currentTarget.dataset.page; if (page) ui.showPage(page); });
+        item.addEventListener('click', (e) => {
+          const page = e.currentTarget.dataset.page;
+          if (page) showPage(page);
+        });
       });
-
-      window.addEventListener('popstate', function() {
-        const hash = window.location.hash.substring(1);
-        if (hash && document.getElementById(hash)) { ui.showPage(hash); }
+      
+      // Enter key for login
+      document.getElementById('password').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') login();
       });
-
-      document.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') { auth.login(); }
-      });
-
-      auth.checkAuth();
+      
+      // Auto-refresh jobs every 30 seconds
+      setInterval(() => {
+        const token = sessionStorage.getItem('authToken');
+        if (token && document.getElementById('migration').classList.contains('active')) {
+          refreshJobs();
+        }
+        if (token && document.getElementById('monitoring').classList.contains('active')) {
+          loadPerformance();
+        }
+      }, APP_CONFIG.REFRESH_INTERVAL);
+      
+      checkAuth();
     });
   </script>
 </body>

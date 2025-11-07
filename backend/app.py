@@ -20,7 +20,7 @@ import boto3
 import jwt
 import pymysql
 from cryptography.fernet import Fernet
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, request, Response
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -94,7 +94,7 @@ validate_environment()
 
 # SECURITY: Strict configuration with environment variables only
 CONFIG = {
-    "VERSION": "2.3.0-secure-production",
+    "VERSION": "2.5.0-complete-migration",  # Updated version
     "JWT_SECRET": os.environ["JWT_SECRET"],  # Required from environment
     "JWT_ALGORITHM": "HS256",
     "JWT_EXPIRY_HOURS": int(os.getenv("JWT_EXPIRY_HOURS", "8")),  # Reduced from 24h
@@ -651,7 +651,7 @@ def secure_audit_log(action: str, resource: str, user: str = "system", details: 
         logger.error("Audit logging failed: %s", str(e))
 
 
-# === SECURE ROUTES ===
+# === EXISTING SECURE ROUTES (NO CHANGES) ===
 
 
 @app.route("/api/health", methods=["GET"])
@@ -786,7 +786,722 @@ def get_secure_dashboard_stats():
         return create_secure_response(message="Failed to retrieve dashboard statistics", status_code=500)
 
 
-# SECURITY: Secure error handlers
+# ========================================================================
+# NEW ENHANCED MIGRATION ROUTES (EXISTING - NO CHANGES)
+# ========================================================================
+
+
+@app.route("/api/migration/csv-upload", methods=["POST"])
+@require_auth(["write", "admin"])
+@limiter.limit("10 per hour")
+def csv_migration_upload():
+    """
+    Enhanced CSV upload with automatic identifier detection and full profile migration.
+    Supports: uid, imsi, msisdn
+    Auto-detects identifier type from CSV header (first line).
+    """
+    try:
+        if 'file' not in request.files:
+            raise BadRequest("No file uploaded")
+        
+        file = request.files['file']
+        if not file or file.filename == '':
+            raise BadRequest("Empty file")
+        
+        # Validate file type
+        if not file.filename.endswith('.csv'):
+            raise BadRequest("Only CSV files are allowed")
+        
+        # Read CSV content
+        content = file.read().decode('utf-8')
+        lines = content.strip().split('\n')
+        
+        if len(lines) < 2:
+            raise BadRequest("CSV must contain header and at least one data row")
+        
+        # Auto-detect identifier type from header (first line)
+        header = lines[0].strip().lower()
+        identifier_type = None
+        
+        if 'uid' in header:
+            identifier_type = 'uid'
+        elif 'imsi' in header:
+            identifier_type = 'imsi'
+        elif 'msisdn' in header:
+            identifier_type = 'msisdn'
+        else:
+            raise BadRequest("Invalid CSV header. Must contain: uid, imsi, or msisdn")
+        
+        # Extract identifiers from remaining lines
+        identifiers = []
+        for line in lines[1:]:
+            line = line.strip()
+            if line:
+                identifiers.append(line)
+        
+        if not identifiers:
+            raise BadRequest("No valid identifiers found in CSV")
+        
+        # Create migration job
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        job = {
+            'job_id': job_id,
+            'identifier_type': identifier_type,
+            'total_subscribers': len(identifiers),
+            'identifiers': identifiers,
+            'status': 'PENDING',
+            'created_at': datetime.utcnow().isoformat(),
+            'created_by': g.current_user['username'],
+            'filename': file.filename,
+            'progress': 0,
+            'migrated_count': 0,
+            'failed_count': 0,
+            'success_details': [],
+            'failure_details': []
+        }
+        
+        # Save job to DynamoDB
+        tables['migration_jobs'].put_item(Item=job)
+        
+        # Start migration process (synchronous for now, can be made async with Lambda/SQS)
+        migrate_subscribers_batch(job_id, identifiers, identifier_type)
+        
+        secure_audit_log(
+            'csv_migration_started',
+            'migration',
+            g.current_user['username'],
+            {'job_id': job_id, 'count': len(identifiers), 'type': identifier_type}
+        )
+        
+        return create_secure_response(
+            data={
+                'job_id': job_id,
+                'status': 'started',
+                'total_subscribers': len(identifiers),
+                'identifier_type': identifier_type
+            },
+            message=f"Migration job created successfully. Detected identifier: {identifier_type}"
+        )
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"CSV upload error: {str(e)}")
+        return create_secure_response(message="Failed to process CSV upload", status_code=500)
+
+
+def migrate_subscribers_batch(job_id, identifiers, identifier_type):
+    """
+    Background function to migrate full subscriber profiles from legacy to cloud.
+    Fetches complete profile based on identifier and migrates to DynamoDB.
+    """
+    try:
+        connection = get_legacy_db_connection()
+        if not connection:
+            raise Exception("Cannot connect to legacy database")
+        
+        migrated = 0
+        failed = 0
+        success_details = []
+        failure_details = []
+        
+        with connection.cursor() as cursor:
+            for idx, identifier in enumerate(identifiers):
+                try:
+                    # Fetch full profile from legacy DB based on identifier type
+                    if identifier_type == 'uid':
+                        query = "SELECT * FROM subscribers WHERE uid = %s AND status != 'DELETED'"
+                    elif identifier_type == 'imsi':
+                        query = "SELECT * FROM subscribers WHERE imsi = %s AND status != 'DELETED'"
+                    else:  # msisdn
+                        query = "SELECT * FROM subscribers WHERE msisdn = %s AND status != 'DELETED'"
+                    
+                    cursor.execute(query, (identifier,))
+                    subscriber = cursor.fetchone()
+                    
+                    if subscriber:
+                        # Migrate full profile to DynamoDB (cloud)
+                        cloud_subscriber = {
+                            'uid': subscriber['uid'],
+                            'imsi': subscriber.get('imsi', ''),
+                            'msisdn': subscriber.get('msisdn', ''),
+                            'email': subscriber.get('email', ''),
+                            'status': subscriber.get('status', 'ACTIVE'),
+                            'plan': subscriber.get('plan', ''),
+                            'created_at': str(subscriber.get('created_at', '')),
+                            'migrated_at': datetime.utcnow().isoformat(),
+                            'migrated_from': 'legacy',
+                            'migration_job_id': job_id
+                        }
+                        
+                        # Add any additional fields from legacy DB
+                        for key, value in subscriber.items():
+                            if key not in cloud_subscriber and value is not None:
+                                cloud_subscriber[key] = str(value)
+                        
+                        tables['subscribers'].put_item(Item=cloud_subscriber)
+                        migrated += 1
+                        success_details.append({
+                            'identifier': identifier,
+                            'uid': subscriber['uid'],
+                            'status': 'SUCCESS',
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                    else:
+                        failed += 1
+                        failure_details.append({
+                            'identifier': identifier,
+                            'reason': 'Subscriber not found in legacy database',
+                            'status': 'FAILED',
+                            'timestamp': datetime.utcnow().isoformat()
+                        })
+                        
+                except Exception as sub_error:
+                    failed += 1
+                    failure_details.append({
+                        'identifier': identifier,
+                        'reason': str(sub_error),
+                        'status': 'FAILED',
+                        'timestamp': datetime.utcnow().isoformat()
+                    })
+                
+                # Update job progress
+                progress = int((migrated + failed) / len(identifiers) * 100)
+                tables['migration_jobs'].update_item(
+                    Key={'job_id': job_id},
+                    UpdateExpression='SET progress = :p, migrated_count = :m, failed_count = :f, #status = :s',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':p': progress,
+                        ':m': migrated,
+                        ':f': failed,
+                        ':s': 'IN_PROGRESS'
+                    }
+                )
+        
+        connection.close()
+        
+        # Mark job as completed
+        tables['migration_jobs'].update_item(
+            Key={'job_id': job_id},
+            UpdateExpression='SET #status = :s, completed_at = :c, success_details = :sd, failure_details = :fd, progress = :p',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':s': 'COMPLETED',
+                ':c': datetime.utcnow().isoformat(),
+                ':sd': success_details,
+                ':fd': failure_details,
+                ':p': 100
+            }
+        )
+        
+        logger.info(f"Migration job {job_id} completed: {migrated} succeeded, {failed} failed")
+        
+    except Exception as e:
+        logger.error(f"Migration batch error for job {job_id}: {str(e)}")
+        # Mark job as failed
+        tables['migration_jobs'].update_item(
+            Key={'job_id': job_id},
+            UpdateExpression='SET #status = :s, error = :e',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':s': 'FAILED',
+                ':e': str(e)
+            }
+        )
+
+
+@app.route("/api/migration/jobs/<job_id>", methods=["GET"])
+@require_auth(["read"])
+def get_migration_job_details(job_id):
+    """Get detailed migration job information including success/fail details."""
+    try:
+        response = tables['migration_jobs'].get_item(Key={'job_id': job_id})
+        
+        if 'Item' not in response:
+            return create_secure_response(message="Job not found", status_code=404)
+        
+        job = response['Item']
+        return create_secure_response(data=job)
+        
+    except Exception as e:
+        logger.error(f"Failed to get job details: {str(e)}")
+        return create_secure_response(message="Failed to retrieve job details", status_code=500)
+
+
+@app.route("/api/migration/jobs", methods=["GET"])
+@require_auth(["read"])
+def list_migration_jobs():
+    """List all migration jobs with pagination."""
+    try:
+        response = tables['migration_jobs'].scan(Limit=100)
+        
+        jobs = response.get('Items', [])
+        
+        # Sort by created_at descending
+        jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return create_secure_response(data={'jobs': jobs, 'count': len(jobs)})
+        
+    except Exception as e:
+        logger.error(f"Failed to list jobs: {str(e)}")
+        return create_secure_response(message="Failed to list jobs", status_code=500)
+
+
+@app.route("/api/migration/jobs/<job_id>/report", methods=["GET"])
+@require_auth(["read"])
+def download_migration_report(job_id):
+    """
+    Generate and download detailed migration report as CSV.
+    Report includes: job summary, success details, failure details with reasons.
+    """
+    try:
+        response = tables['migration_jobs'].get_item(Key={'job_id': job_id})
+        
+        if 'Item' not in response:
+            return create_secure_response(message="Job not found", status_code=404)
+        
+        job = response['Item']
+        
+        # Generate CSV report
+        csv_lines = []
+        csv_lines.append("MIGRATION JOB REPORT")
+        csv_lines.append(f"Job ID,{job_id}")
+        csv_lines.append(f"Status,{job.get('status', 'UNKNOWN')}")
+        csv_lines.append(f"Identifier Type,{job.get('identifier_type', 'N/A')}")
+        csv_lines.append(f"Filename,{job.get('filename', 'N/A')}")
+        csv_lines.append(f"Created By,{job.get('created_by', 'N/A')}")
+        csv_lines.append(f"Created At,{job.get('created_at', '')}")
+        csv_lines.append(f"Completed At,{job.get('completed_at', 'In Progress')}")
+        csv_lines.append(f"Total Subscribers,{job.get('total_subscribers', 0)}")
+        csv_lines.append(f"Successfully Migrated,{job.get('migrated_count', 0)}")
+        csv_lines.append(f"Failed,{job.get('failed_count', 0)}")
+        csv_lines.append(f"Progress,{job.get('progress', 0)}%")
+        csv_lines.append("")
+        
+        # Success details
+        csv_lines.append("SUCCESS DETAILS")
+        csv_lines.append("Identifier,UID,Status,Timestamp")
+        for detail in job.get('success_details', []):
+            csv_lines.append(
+                f"{detail.get('identifier', '')},"
+                f"{detail.get('uid', '')},"
+                f"{detail.get('status', '')},"
+                f"{detail.get('timestamp', '')}"
+            )
+        
+        csv_lines.append("")
+        
+        # Failure details
+        csv_lines.append("FAILURE DETAILS")
+        csv_lines.append("Identifier,Reason,Status,Timestamp")
+        for detail in job.get('failure_details', []):
+            csv_lines.append(
+                f"{detail.get('identifier', '')},"
+                f"\"{detail.get('reason', '')}\"," # Quote reason in case it contains commas
+                f"{detail.get('status', '')},"
+                f"{detail.get('timestamp', '')}"
+            )
+        
+        report_csv = '\n'.join(csv_lines)
+        
+        return Response(
+            report_csv,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename=migration_report_{job_id}.csv'}
+        )
+        
+    except Exception as e:
+        logger.error(f"Report generation error: {str(e)}")
+        return create_secure_response(message="Failed to generate report", status_code=500)
+
+
+@app.route("/api/query/subscribers", methods=["POST"])
+@require_auth(["read"])
+@limiter.limit("20 per minute")
+def query_subscribers():
+    """
+    Advanced subscriber query interface with filters.
+    Supports querying by: uid, imsi, msisdn, email
+    Supports sources: cloud (DynamoDB) or legacy (MySQL)
+    """
+    try:
+        data = request.get_json()
+        
+        query_type = data.get('query_type', 'uid')  # uid, imsi, msisdn, email
+        query_value = data.get('query_value', '').strip()
+        source = data.get('source', 'cloud')  # cloud or legacy
+        
+        if not query_value:
+            raise BadRequest("Query value required")
+        
+        results = []
+        
+        if source == 'cloud':
+            # Query DynamoDB
+            if query_type == 'uid':
+                response = tables['subscribers'].get_item(Key={'uid': query_value})
+                if 'Item' in response:
+                    results.append(response['Item'])
+            else:
+                # Scan with filter (not most efficient but works for demo)
+                response = tables['subscribers'].scan(
+                    FilterExpression=f"#{query_type} = :val",
+                    ExpressionAttributeNames={f'#{query_type}': query_type},
+                    ExpressionAttributeValues={':val': query_value},
+                    Limit=100
+                )
+                results = response.get('Items', [])
+        
+        elif source == 'legacy':
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    query = f"SELECT * FROM subscribers WHERE {query_type} = %s AND status != 'DELETED' LIMIT 100"
+                    cursor.execute(query, (query_value,))
+                    results = cursor.fetchall()
+                connection.close()
+            else:
+                raise Exception("Legacy database connection not available")
+        
+        return create_secure_response(
+            data={
+                'results': results,
+                'count': len(results),
+                'query_type': query_type,
+                'source': source
+            }
+        )
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Query error: {str(e)}")
+        return create_secure_response(message="Query failed", status_code=500)
+
+
+@app.route("/api/dashboard/performance", methods=["GET"])
+@require_auth(["read"])
+def get_performance_metrics():
+    """
+    Get performance dashboard metrics.
+    Includes: migration statistics, system health, recent jobs.
+    """
+    try:
+        metrics = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'migration_stats': {
+                'total_jobs': 0,
+                'completed_jobs': 0,
+                'failed_jobs': 0,
+                'in_progress_jobs': 0,
+                'total_migrated': 0,
+                'total_failed': 0
+            },
+            'system_health': {
+                'database_status': 'healthy',
+                'api_status': 'healthy',
+                'storage_status': 'healthy'
+            },
+            'recent_jobs': []
+        }
+        
+        # Get migration job statistics
+        response = tables['migration_jobs'].scan()
+        jobs = response.get('Items', [])
+        
+        metrics['migration_stats']['total_jobs'] = len(jobs)
+        
+        for job in jobs:
+            status = job.get('status', 'UNKNOWN')
+            if status == 'COMPLETED':
+                metrics['migration_stats']['completed_jobs'] += 1
+                metrics['migration_stats']['total_migrated'] += job.get('migrated_count', 0)
+                metrics['migration_stats']['total_failed'] += job.get('failed_count', 0)
+            elif status == 'FAILED':
+                metrics['migration_stats']['failed_jobs'] += 1
+            elif status in ['PENDING', 'IN_PROGRESS']:
+                metrics['migration_stats']['in_progress_jobs'] += 1
+        
+        # Get recent jobs (last 10)
+        jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        metrics['recent_jobs'] = jobs[:10]
+        
+        # Check system health
+        try:
+            tables['subscribers'].scan(Limit=1)
+        except Exception:
+            metrics['system_health']['database_status'] = 'unhealthy'
+        
+        return create_secure_response(data=metrics)
+        
+    except Exception as e:
+        logger.error(f"Performance metrics error: {str(e)}")
+        return create_secure_response(message="Failed to get performance metrics", status_code=500)
+
+
+# ========================================================================
+# NEW PROVISIONING ENDPOINTS - ADDED BELOW
+# ========================================================================
+
+
+@app.route("/api/subscribers", methods=["POST"])
+@require_auth(["write", "admin"])
+@limiter.limit("30 per minute")
+def create_subscriber():
+    """Create new subscriber in DynamoDB and optionally in Legacy DB."""
+    try:
+        data = request.get_json()
+        
+        validated_data = InputValidator.validate_json(
+            data,
+            required_fields=["uid", "imsi", "msisdn"],
+            optional_fields=["email", "status", "plan", "system"]
+        )
+        
+        subscriber = {
+            'uid': InputValidator.sanitize_string(validated_data['uid'], 50, 'uid'),
+            'imsi': InputValidator.sanitize_string(validated_data['imsi'], 15, 'imsi'),
+            'msisdn': InputValidator.sanitize_string(validated_data['msisdn'], 15, 'msisdn'),
+            'email': InputValidator.sanitize_string(validated_data.get('email', ''), 100, 'email') if validated_data.get('email') else '',
+            'status': validated_data.get('status', 'ACTIVE'),
+            'plan': InputValidator.sanitize_string(validated_data.get('plan', ''), 50),
+            'created_at': datetime.utcnow().isoformat(),
+            'created_by': g.current_user['username']
+        }
+        
+        system = validated_data.get('system', 'cloud')
+        
+        # Create in Cloud (DynamoDB)
+        if system in ['cloud', 'both']:
+            tables['subscribers'].put_item(Item=subscriber)
+            secure_audit_log('create_subscriber_cloud', 'subscribers', g.current_user['username'],
+                           {'uid': subscriber['uid']})
+        
+        # Create in Legacy (MySQL)
+        if system in ['legacy', 'both'] and CONFIG.get("LEGACY_DB_SECRET_ARN"):
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    insert_query = """
+                        INSERT INTO subscribers (uid, imsi, msisdn, email, status, plan, created_at, created_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """
+                    cursor.execute(insert_query, (
+                        subscriber['uid'],
+                        subscriber['imsi'],
+                        subscriber['msisdn'],
+                        subscriber['email'],
+                        subscriber['status'],
+                        subscriber['plan'],
+                        subscriber['created_at'],
+                        subscriber['created_by']
+                    ))
+                    connection.commit()
+                connection.close()
+                secure_audit_log('create_subscriber_legacy', 'subscribers', g.current_user['username'],
+                               {'uid': subscriber['uid']})
+        
+        return create_secure_response(data=subscriber, message="Subscriber created successfully")
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Create subscriber error: {str(e)}")
+        return create_secure_response(message="Failed to create subscriber", status_code=500, error=e)
+
+
+@app.route("/api/subscribers/<uid>", methods=["PUT"])
+@require_auth(["write", "admin"])
+@limiter.limit("30 per minute")
+def update_subscriber(uid):
+    """Update existing subscriber in specified system(s)."""
+    try:
+        data = request.get_json()
+        system = data.get('system', 'cloud')
+        
+        update_expr = "SET "
+        expr_values = {}
+        expr_names = {}
+        
+        fields_to_update = ["imsi", "msisdn", "email", "status", "plan"]
+        updates = []
+        
+        for field in fields_to_update:
+            if field in data and data[field] is not None:
+                updates.append(f"#{field} = :{field}")
+                expr_names[f"#{field}"] = field
+                expr_values[f":{field}"] = data[field]
+        
+        if not updates:
+            raise BadRequest("No fields to update")
+        
+        update_expr += ", ".join(updates)
+        update_expr += ", updated_at = :updated_at, updated_by = :updated_by"
+        expr_values[":updated_at"] = datetime.utcnow().isoformat()
+        expr_values[":updated_by"] = g.current_user['username']
+        
+        # Update Cloud
+        if system in ['cloud', 'both']:
+            tables['subscribers'].update_item(
+                Key={'uid': uid},
+                UpdateExpression=update_expr,
+                ExpressionAttributeNames=expr_names,
+                ExpressionAttributeValues=expr_values
+            )
+            secure_audit_log('update_subscriber_cloud', 'subscribers', g.current_user['username'],
+                           {'uid': uid, 'fields': list(data.keys())})
+        
+        # Update Legacy
+        if system in ['legacy', 'both'] and CONFIG.get("LEGACY_DB_SECRET_ARN"):
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    set_clause = ", ".join([f"{field} = %s" for field in data.keys() if field in fields_to_update])
+                    set_clause += ", updated_at = %s, updated_by = %s"
+                    
+                    values = [data[field] for field in data.keys() if field in fields_to_update]
+                    values.extend([datetime.utcnow().isoformat(), g.current_user['username'], uid])
+                    
+                    update_query = f"UPDATE subscribers SET {set_clause} WHERE uid = %s"
+                    cursor.execute(update_query, values)
+                    connection.commit()
+                connection.close()
+                secure_audit_log('update_subscriber_legacy', 'subscribers', g.current_user['username'],
+                               {'uid': uid, 'fields': list(data.keys())})
+        
+        return create_secure_response(message="Subscriber updated successfully")
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Update subscriber error: {str(e)}")
+        return create_secure_response(message="Failed to update subscriber", status_code=500, error=e)
+
+
+@app.route("/api/subscribers/<uid>", methods=["DELETE"])
+@require_auth(["write", "admin"])
+@limiter.limit("30 per minute")
+def delete_subscriber(uid):
+    """Delete subscriber from specified system."""
+    try:
+        system = request.args.get('system', 'cloud')
+        
+        if system == 'cloud' or system == 'both':
+            tables['subscribers'].delete_item(Key={'uid': uid})
+            secure_audit_log('delete_subscriber_cloud', 'subscribers', g.current_user['username'], {'uid': uid})
+        
+        if (system == 'legacy' or system == 'both') and CONFIG.get("LEGACY_DB_SECRET_ARN"):
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("DELETE FROM subscribers WHERE uid = %s", (uid,))
+                    connection.commit()
+                connection.close()
+                secure_audit_log('delete_subscriber_legacy', 'subscribers', g.current_user['username'], {'uid': uid})
+        
+        return create_secure_response(message=f"Subscriber deleted from {system}")
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Delete subscriber error: {str(e)}")
+        return create_secure_response(message="Failed to delete subscriber", status_code=500, error=e)
+
+
+@app.route("/api/subscribers/search", methods=["GET"])
+@require_auth(["read"])
+@limiter.limit("30 per minute")
+def search_subscribers():
+    """Search subscribers by query string in specified system."""
+    try:
+        query = request.args.get('q', '').strip()
+        system = request.args.get('system', 'cloud')
+        
+        if not query:
+            raise BadRequest("Query parameter 'q' required")
+        
+        results = []
+        
+        if system == 'cloud':
+            # Scan and filter (simple implementation)
+            response = tables['subscribers'].scan()
+            items = response.get('Items', [])
+            
+            query_lower = query.lower()
+            for item in items:
+                if (query_lower in str(item.get('uid', '')).lower() or
+                    query_lower in str(item.get('email', '')).lower() or
+                    query_lower in str(item.get('imsi', '')).lower() or
+                    query_lower in str(item.get('msisdn', '')).lower()):
+                    results.append(item)
+        
+        elif system == 'legacy':
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    sql = """
+                        SELECT * FROM subscribers 
+                        WHERE (uid LIKE %s OR email LIKE %s OR imsi LIKE %s OR msisdn LIKE %s)
+                        AND status != 'DELETED'
+                        LIMIT 100
+                    """
+                    search_term = f"%{query}%"
+                    cursor.execute(sql, (search_term, search_term, search_term, search_term))
+                    results = cursor.fetchall()
+                connection.close()
+            else:
+                raise Exception("Legacy database not available")
+        
+        return create_secure_response(data={'subscribers': results, 'count': len(results)})
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Search error: {str(e)}")
+        return create_secure_response(message="Search failed", status_code=500, error=e)
+
+
+@app.route("/api/subscribers/<uid>", methods=["GET"])
+@require_auth(["read"])
+@limiter.limit("30 per minute")
+def get_subscriber(uid):
+    """Get single subscriber by UID from specified system."""
+    try:
+        system = request.args.get('system', 'cloud')
+        
+        if system == 'cloud':
+            response = tables['subscribers'].get_item(Key={'uid': uid})
+            if 'Item' in response:
+                return create_secure_response(data=response['Item'])
+            else:
+                return create_secure_response(message="Subscriber not found", status_code=404)
+        
+        elif system == 'legacy':
+            connection = get_legacy_db_connection()
+            if connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT * FROM subscribers WHERE uid = %s AND status != 'DELETED'", (uid,))
+                    result = cursor.fetchone()
+                connection.close()
+                
+                if result:
+                    return create_secure_response(data=result)
+                else:
+                    return create_secure_response(message="Subscriber not found", status_code=404)
+            else:
+                raise Exception("Legacy database not available")
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Get subscriber error: {str(e)}")
+        return create_secure_response(message="Failed to retrieve subscriber", status_code=500, error=e)
+
+
+# === EXISTING ERROR HANDLERS (NO CHANGES) ===
+
+
 @app.errorhandler(400)
 def handle_bad_request(e):
     return create_secure_response(message="Invalid request", status_code=400)
@@ -890,7 +1605,7 @@ def lambda_handler(event, context):
                         "message": "API is operational",
                         "version": CONFIG["VERSION"],
                         "timestamp": datetime.utcnow().isoformat(),
-                        "features": ["authentication", "subscriber_management", "audit_logging"],
+                        "features": ["authentication", "subscriber_management", "audit_logging", "csv_migration", "performance_dashboard", "provisioning"],
                     }
                 ),
                 "isBase64Encoded": False,
