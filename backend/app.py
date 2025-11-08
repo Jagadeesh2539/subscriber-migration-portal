@@ -1225,7 +1225,7 @@ def cancel_migration_job(job_id):
 @require_auth(["admin"])  # Admin only
 @limiter.limit("5 per hour")
 def bulk_delete_subscribers():
-    """Bulk delete subscribers from DynamoDB via CSV."""
+    """Bulk delete subscribers from DynamoDB via CSV with full job tracking."""
     try:
         data = request.get_json()
         csv_data = data.get('csv_data', '')
@@ -1244,36 +1244,112 @@ def bulk_delete_subscribers():
         if not uids:
             raise BadRequest("No UIDs found in CSV")
         
-        # Create deletion job
+        # Create deletion job (SAME FORMAT AS MIGRATION JOBS)
         job_id = f"delete_{uuid.uuid4().hex[:12]}"
         job = {
             'job_id': job_id,
             'job_type': 'bulk_delete',
+            'identifier_type': 'uid',
             'total_subscribers': len(uids),
-            'status': 'COMPLETED',  # Execute synchronously
+            'status': 'IN_PROGRESS',
+            'progress': 0,
+            'migrated_count': 0,  # Use as deleted_count
+            'failed_count': 0,
             'created_at': datetime.utcnow().isoformat(),
             'created_by': g.current_user['username'],
-            'deleted_count': 0,
-            'failed_count': 0
+            'filename': 'bulk_delete.csv',
+            'success_details': [],
+            'failure_details': []
         }
-        
-        # Execute deletions
-        deleted = 0
-        failed = 0
-        for uid in uids:
-            try:
-                tables['subscribers'].delete_item(Key={'uid': uid})
-                deleted += 1
-            except Exception:
-                failed += 1
-        
-        job['deleted_count'] = deleted
-        job['failed_count'] = failed
         
         tables['migration_jobs'].put_item(Item=job)
         
+        # Execute deletions with progress tracking
+        deleted = 0
+        failed = 0
+        success_details = []
+        failure_details = []
+        
+        for idx, uid in enumerate(uids):
+            try:
+                tables['subscribers'].delete_item(Key={'uid': uid})
+                deleted += 1
+                success_details.append({
+                    'identifier': uid,
+                    'uid': uid,
+                    'status': 'DELETED',
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+            except Exception as e:
+                failed += 1
+                failure_details.append({
+                    'identifier': uid,
+                    'reason': str(e),
+                    'status': 'FAILED',
+                    'timestamp': datetime.utcnow().isoformat()
+                })
+            
+            # Update progress every 10 items or at the end
+            if (idx + 1) % 10 == 0 or idx == len(uids) - 1:
+                progress = int((idx + 1) / len(uids) * 100)
+                tables['migration_jobs'].update_item(
+                    Key={'job_id': job_id},
+                    UpdateExpression='SET progress = :p, migrated_count = :m, failed_count = :f',
+                    ExpressionAttributeValues={
+                        ':p': progress,
+                        ':m': deleted,
+                        ':f': failed
+                    }
+                )
+        
+        # Generate deletion report and upload to S3
+        report_lines = ['BULK DELETION REPORT']
+        report_lines.append(f'Job ID,{job_id}')
+        report_lines.append(f'Total UIDs,{len(uids)}')
+        report_lines.append(f'Successfully Deleted,{deleted}')
+        report_lines.append(f'Failed,{failed}')
+        report_lines.append('')
+        report_lines.append('DELETED UIDS')
+        report_lines.append('UID,Status,Timestamp')
+        
+        for detail in success_details:
+            report_lines.append(f"{detail['uid']},{detail['status']},{detail['timestamp']}")
+        
+        report_lines.append('')
+        report_lines.append('FAILED UIDS')
+        report_lines.append('UID,Reason,Status,Timestamp')
+        
+        for detail in failure_details:
+            report_lines.append(f"{detail['identifier']},\"{detail['reason']}\",{detail['status']},{detail['timestamp']}")
+        
+        report_csv = '\n'.join(report_lines)
+        
+        # Upload report to S3
+        report_key = f"deletion_reports/{job_id}_report.csv"
+        aws_clients['s3'].put_object(
+            Bucket=CONFIG['MIGRATION_UPLOAD_BUCKET_NAME'],
+            Key=report_key,
+            Body=report_csv,
+            ContentType='text/csv'
+        )
+        
+        # Mark job as completed
+        tables['migration_jobs'].update_item(
+            Key={'job_id': job_id},
+            UpdateExpression='SET #status = :s, completed_at = :c, success_details = :sd, failure_details = :fd, progress = :p, report_s3_key = :r',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':s': 'COMPLETED',
+                ':c': datetime.utcnow().isoformat(),
+                ':sd': success_details,
+                ':fd': failure_details,
+                ':p': 100,
+                ':r': report_key
+            }
+        )
+        
         secure_audit_log('bulk_delete', 'subscribers', g.current_user['username'], 
-                        {'job_id': job_id, 'count': deleted})
+                        {'job_id': job_id, 'deleted': deleted, 'failed': failed})
         
         return create_secure_response(data={'job_id': job_id, 'deleted': deleted, 'failed': failed})
         
