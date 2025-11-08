@@ -1130,37 +1130,41 @@ def query_subscribers():
         
         query_type = data.get('query_type', 'uid')  # uid, imsi, msisdn, email
         query_value = data.get('query_value', '').strip()
-        source = data.get('source', 'cloud')  # cloud or legacy
+        data_source = data.get('data_source', 'both').lower()  # cloud, legacy, or both
         
         if not query_value:
             raise BadRequest("Query value required")
         
         results = []
         
-        if source == 'cloud':
-            # Query DynamoDB
-            if query_type == 'uid':
-                response = tables['subscribers'].get_item(Key={'uid': query_value})
-                if 'Item' in response:
-                    results.append(response['Item'])
-            else:
-                # Scan with filter (not most efficient but works for demo)
-                response = tables['subscribers'].scan(
-                    FilterExpression=f"#{query_type} = :val",
-                    ExpressionAttributeNames={f'#{query_type}': query_type},
-                    ExpressionAttributeValues={':val': query_value},
-                    Limit=100
-                )
-                results = response.get('Items', [])
-        
-        elif source == 'legacy':
-            connection = get_legacy_db_connection()
-            if connection:
-                with connection.cursor() as cursor:
-                    query = f"SELECT * FROM subscribers WHERE {query_type} = %s AND status != 'DELETED' LIMIT 100"
-                    cursor.execute(query, (query_value,))
-                    results = cursor.fetchall()
-                connection.close()
+if data_source in ['cloud', 'both']:
+    # Query DynamoDB
+    if query_type == 'uid':
+        response = tables['subscribers'].get_item(Key={'uid': query_value})
+        if 'Item' in response:
+            response['Item']['_source'] = 'cloud'  # ✅ ADD source tag
+            results.append(response['Item'])
+    else:
+        response = tables['subscribers'].scan(
+            FilterExpression=f"#{query_type} = :val",
+            ExpressionAttributeNames={f'#{query_type}': query_type},
+            ExpressionAttributeValues={':val': query_value},
+            Limit=100
+        )
+        for item in response.get('Items', []):
+            item['_source'] = 'cloud'  # ✅ ADD source tag
+            results.extend(response.get('Items', []))
+
+if data_source in ['legacy', 'both']:  # ✅ CHANGE from elif to if
+    connection = get_legacy_db_connection()
+    if connection:
+        with connection.cursor() as cursor:
+            query = f"SELECT * FROM subscribers WHERE {query_type} = %s AND status != 'DELETED' LIMIT 100"
+            cursor.execute(query, (query_value,))
+            for row in cursor.fetchall():
+                row['_source'] = 'legacy'  # ✅ ADD source tag
+                results.append(row)
+        connection.close()
             else:
                 raise Exception("Legacy database connection not available")
         
@@ -1169,7 +1173,7 @@ def query_subscribers():
                 'results': results,
                 'count': len(results),
                 'query_type': query_type,
-                'source': source
+                'queried_source': data_source  # ✅ NEW parameter
             }
         )
         
@@ -1178,6 +1182,168 @@ def query_subscribers():
     except Exception as e:
         logger.error(f"Query error: {str(e)}")
         return create_secure_response(message="Query failed", status_code=500)
+
+@app.route("/api/migration/jobs/<job_id>/cancel", methods=["POST"])
+@require_auth(["write", "admin"])
+def cancel_migration_job(job_id):
+    """Cancel a running migration job."""
+    try:
+        response = tables['migration_jobs'].get_item(Key={'job_id': job_id})
+        
+        if 'Item' not in response:
+            return create_secure_response(message="Job not found", status_code=404)
+        
+        job = response['Item']
+        
+        if job.get('status') not in ['PENDING', 'IN_PROGRESS']:
+            return create_secure_response(
+                message=f"Cannot cancel job with status: {job.get('status')}", 
+                status_code=400
+            )
+        
+        tables['migration_jobs'].update_item(
+            Key={'job_id': job_id},
+            UpdateExpression='SET #status = :s, cancelled_at = :c, cancelled_by = :u',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':s': 'CANCELLED',
+                ':c': datetime.utcnow().isoformat(),
+                ':u': g.current_user['username']
+            }
+        )
+        
+        secure_audit_log('cancel_migration_job', 'migration', g.current_user['username'], {'job_id': job_id})
+        
+        return create_secure_response(message="Job cancelled successfully")
+        
+    except Exception as e:
+        logger.error(f"Cancel job error: {str(e)}")
+        return create_secure_response(message="Failed to cancel job", status_code=500)
+        
+        
+@app.route("/api/migration/bulk-delete", methods=["POST"])
+@require_auth(["admin"])  # Admin only
+@limiter.limit("5 per hour")
+def bulk_delete_subscribers():
+    """Bulk delete subscribers from DynamoDB via CSV."""
+    try:
+        data = request.get_json()
+        csv_data = data.get('csv_data', '')
+        
+        if not csv_data:
+            raise BadRequest("CSV data required")
+        
+        # Decode base64 CSV
+        import base64
+        csv_content = base64.b64decode(csv_data).decode('utf-8')
+        lines = csv_content.strip().split('\n')
+        
+        # Skip header, get UIDs
+        uids = [line.strip() for line in lines[1:] if line.strip()]
+        
+        if not uids:
+            raise BadRequest("No UIDs found in CSV")
+        
+        # Create deletion job
+        job_id = f"delete_{uuid.uuid4().hex[:12]}"
+        job = {
+            'job_id': job_id,
+            'job_type': 'bulk_delete',
+            'total_subscribers': len(uids),
+            'status': 'COMPLETED',  # Execute synchronously
+            'created_at': datetime.utcnow().isoformat(),
+            'created_by': g.current_user['username'],
+            'deleted_count': 0,
+            'failed_count': 0
+        }
+        
+        # Execute deletions
+        deleted = 0
+        failed = 0
+        for uid in uids:
+            try:
+                tables['subscribers'].delete_item(Key={'uid': uid})
+                deleted += 1
+            except Exception:
+                failed += 1
+        
+        job['deleted_count'] = deleted
+        job['failed_count'] = failed
+        
+        tables['migration_jobs'].put_item(Item=job)
+        
+        secure_audit_log('bulk_delete', 'subscribers', g.current_user['username'], 
+                        {'job_id': job_id, 'count': deleted})
+        
+        return create_secure_response(data={'job_id': job_id, 'deleted': deleted, 'failed': failed})
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"Bulk delete error: {str(e)}")
+        return create_secure_response(message="Bulk delete failed", status_code=500)
+
+
+@app.route("/api/migration/sql-export", methods=["POST"])
+@require_auth(["read"])
+@limiter.limit("10 per hour")
+def export_sql_query():
+    """Execute SQL query and export results to CSV."""
+    try:
+        data = request.get_json()
+        sql_query = data.get('sql_query', '').strip()
+        
+        if not sql_query or not sql_query.lower().startswith('select'):
+            raise BadRequest("Only SELECT queries allowed")
+        
+        connection = get_legacy_db_connection()
+        if not connection:
+            raise Exception("Legacy database not available")
+        
+        results = []
+        with connection.cursor() as cursor:
+            cursor.execute(sql_query)
+            results = cursor.fetchall()
+        connection.close()
+        
+        # Generate CSV
+        if not results:
+            raise BadRequest("Query returned no results")
+        
+        csv_lines = []
+        headers = list(results[0].keys())
+        csv_lines.append(','.join(headers))
+        
+        for row in results:
+            csv_lines.append(','.join([str(row.get(h, '')) for h in headers]))
+        
+        csv_content = '\n'.join(csv_lines)
+        
+        # Upload to S3
+        file_key = f"exports/sql_export_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        aws_clients['s3'].put_object(
+            Bucket=CONFIG['MIGRATION_UPLOAD_BUCKET_NAME'],
+            Key=file_key,
+            Body=csv_content,
+            ContentType='text/csv'
+        )
+        
+        # Generate pre-signed URL
+        download_url = aws_clients['s3'].generate_presigned_url(
+            'get_object',
+            Params={'Bucket': CONFIG['MIGRATION_UPLOAD_BUCKET_NAME'], 'Key': file_key},
+            ExpiresIn=3600
+        )
+        
+        secure_audit_log('sql_export', 'query', g.current_user['username'], {'rows': len(results)})
+        
+        return create_secure_response(data={'downloadurl': download_url, 'rowcount': len(results)})
+        
+    except (BadRequest, Unauthorized) as e:
+        return create_secure_response(message=str(e), status_code=e.code)
+    except Exception as e:
+        logger.error(f"SQL export error: {str(e)}")
+        return create_secure_response(message="SQL export failed", status_code=500)
 
 
 @app.route("/api/dashboard/performance", methods=["GET"])

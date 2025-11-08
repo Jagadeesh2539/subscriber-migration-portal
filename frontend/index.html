@@ -249,6 +249,66 @@
     .state-container .icon { font-size: 48px; margin-bottom: 16px; }
     .state-container h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
     .state-container p { color: var(--text-light); margin-bottom: 24px; }
+	
+	/* ADD THIS TO <style> SECTION */
+.health-indicator {
+  padding: 12px;
+  border: 2px solid #d1d5db;
+  border-radius: 8px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
+.health-indicator:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+.health-indicator.healthy {
+  border-color: var(--color-success);
+}
+
+.health-indicator.unhealthy {
+  border-color: var(--color-danger);
+}
+
+.health-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.health-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.health-status-text {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+
+/* ADD THESE BUTTON VARIANTS */
+.btn-danger {
+  background: linear-gradient(135deg, var(--color-danger), #dc2626);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.btn-success {
+  background: linear-gradient(135deg, var(--color-success), #16a34a);
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+}
+
+.btn-danger:hover {
+  background: linear-gradient(135deg, #dc2626, #b91c1c);
+}
+
+.btn-success:hover {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+}
+
+		
   </style>
 </head>
 <body>
@@ -283,6 +343,8 @@
         <div class="nav-item" data-page="migration"><span>🔄</span> Migration</div>
         <div class="nav-item" data-page="provisioning"><span>👥</span> Provisioning</div>
         <div class="nav-item" data-page="query"><span>🔍</span> Data Query</div>
+		<div class="nav-item" onclick="showPage('bulk-delete')"><span class="nav-icon">🗑️</span><span class="nav-label">Bulk Delete</span></div>
+		<div class="nav-item" onclick="showPage('sql-export')"><span class="nav-icon">📊</span><span class="nav-label">SQL Export</span></div>
         <div class="nav-item" data-page="monitoring"><span>📈</span> Monitoring</div>
         <div class="nav-item" data-page="settings"><span>⚙️</span> Settings</div>
       </div>
@@ -320,6 +382,21 @@
           <div id="api-status" class="alert info">Testing connection...</div>
           <button class="btn" onclick="testAPI()">Test Connection</button>
         </div>
+		
+		  <!-- HEALTH MONITORING - ADD THIS -->
+        <div class="card">
+          <h2>🏥 System Health</h2>
+          <div id="health-status" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 16px;">
+        <div style="padding: 12px; border: 2px solid #d1d5db; border-radius: 8px; text-align: center;">
+        <div style="font-size: 24px; margin-bottom: 8px;">⏳</div>
+        <div style="font-weight: 600; margin-bottom: 4px;">Loading...</div>
+        <div style="font-size: 13px; color: #6b7280;">Checking health</div>
+        </div>
+     </div>
+  </div>
+</section>
+
+		
       </section>
 
       <section id="migration" class="page-section">
@@ -355,6 +432,55 @@
           <div id="migration-jobs-container"></div>
         </div>
       </section>
+	  
+      <!-- BULK DELETE SECTION -->
+      <section id="bulk-delete" class="page-section">
+        <div class="page-header">
+          <h1>🗑️ Bulk Delete</h1>
+          <p>Delete multiple subscribers from Cloud (DynamoDB)</p>
+        </div>
+
+        <div class="card" style="border-left: 4px solid var(--color-danger);">
+          <h2>⚠️ Bulk Delete from DynamoDB</h2>
+          
+          <div class="alert" style="background: #fee; border-left: 4px solid var(--color-danger);">
+            <strong>⚠️ Warning:</strong> This will permanently delete subscribers from DynamoDB. Cannot be undone!
+          </div>
+          
+          <div class="form-group">
+            <label>Upload CSV File (UID column required)</label>
+            <input type="file" id="bulk-delete-file" accept=".csv" class="form-input">
+          </div>
+          
+          <button class="btn" style="background: var(--color-danger);" onclick="executeBulkDelete()">
+            🗑️ Execute Bulk Delete
+          </button>
+        </div>
+      </section>
+	  
+	        <!-- SQL EXPORT SECTION -->
+      <section id="sql-export" class="page-section">
+        <div class="page-header">
+          <h1>📊 SQL Export</h1>
+          <p>Execute SQL query and export results to CSV</p>
+        </div>
+
+        <div class="card" style="border-left: 4px solid var(--color-info);">
+          <h2>📝 SQL Query Export</h2>
+          
+          <div class="form-group">
+            <label>SQL Query (SELECT only)</label>
+            <textarea id="sql-query-input" class="form-input" rows="6" placeholder="SELECT * FROM subscribers WHERE status = 'ACTIVE' LIMIT 100"></textarea>
+          </div>
+          
+          <button class="btn" onclick="executeSQLExport()">
+            📥 Export to CSV
+          </button>
+          
+          <div id="sql-export-result" style="margin-top: 20px;"></div>
+        </div>
+      </section>
+
 
       <section id="provisioning" class="page-section">
         <div class="page-header">
@@ -478,13 +604,14 @@
             </div>
             
             <div class="form-group">
-              <label>Data Source</label>
-              <select id="query-source-select" class="form-input">
-                <option value="cloud">Cloud (DynamoDB)</option>
-                <option value="legacy">Legacy (MySQL)</option>
-              </select>
+               <label>Data Source (Independent Query)</label>
+               <select id="query-source-select" class="form-input">
+               <option value="cloud">☁️ Cloud (DynamoDB)</option>
+               <option value="legacy">🗄️ Legacy (MySQL)</option>
+               <option value="both">🔄 Both (Cloud + Legacy)</option>
+               </select>
             </div>
-          </div>
+
           
           <div class="form-group">
             <label>Query Value</label>
@@ -739,36 +866,49 @@ const APP_CONFIG = {
     }
 
     // === DASHBOARD ===
-    async function loadDashboard() {
-      try {
-        const { response, result } = await apiCall('/api/dashboard/stats');
-        
-        if (response.ok && result.data) {
-          document.getElementById('total-subscribers').textContent = 
-            result.data.totalSubscribers || '0';
-          
-          // Calculate success rate from performance metrics if available
-          try {
-            const perfResp = await apiCall('/api/dashboard/performance');
-            if (perfResp.response.ok && perfResp.result.data) {
-              const stats = perfResp.result.data.migration_stats;
-              const successRate = stats.total_jobs > 0 
-                ? Math.round((stats.completed_jobs / stats.total_jobs) * 100) 
-                : 0;
-              document.getElementById('success-rate').textContent = successRate + '%';
-            }
-          } catch (e) {
-            document.getElementById('success-rate').textContent = '-';
-          }
-        }
-      } catch (error) {
-        console.error('Dashboard load error:', error);
-        showNotification('Failed to load dashboard stats', 'error');
-      }
+  // HEALTH STATUS INDICATORS
+async function loadHealthStatus() {
+  try {
+    const { response, result } = await apiCall('/api/health');
+    if (!response.ok || !result.data) return;
+    
+    const health = result.data;
+    const container = document.getElementById('health-status');
+    
+    const components = {
+      'dynamodb_subscribers': '☁️ DynamoDB Subscribers',
+      'dynamodb_jobs': '☁️ DynamoDB Jobs',
+      'dynamodb_settings': '☁️ DynamoDB Settings',
+      'rds_mysql': '🗄️ RDS MySQL',
+      's3_uploads': '📦 S3 Uploads'
+    };
+    
+    let html = '';
+    for (const [key, label] of Object.entries(components)) {
+      const status = health.components?.[key] || 'unknown';
+      const isOk = status === 'OK' || status === 'healthy';
+      const color = isOk ? 'var(--color-success)' : 'var(--color-danger)';
+      const icon = isOk ? '✅' : '❌';
       
-      testAPI();
+      html += `
+        <div style="padding: 12px; border: 2px solid ${color}; border-radius: 8px; text-align: center;">
+          <div style="font-size: 24px; margin-bottom: 8px;">${icon}</div>
+          <div style="font-weight: 600; margin-bottom: 4px; font-size: 13px;">${label}</div>
+          <div style="color: ${color}; font-size: 12px; font-weight: 600;">${status}</div>
+        </div>
+      `;
     }
-
+    
+    container.innerHTML = html;
+  } catch (error) {
+    console.error('Health check failed:', error);
+    document.getElementById('health-status').innerHTML = `
+      <div style="padding: 12px; text-align: center; color: var(--text-light);">
+        Health check unavailable
+      </div>
+    `;
+  }
+}
     // === CSV UPLOAD ===
     async function uploadCSV() {
       const fileInput = document.getElementById('csv-file-input');
@@ -853,32 +993,43 @@ const APP_CONFIG = {
       html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Total</th><th>Success</th><th>Failed</th><th>Progress</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
       
-      jobs.forEach(job => {
-        const statusClass = job.status === 'COMPLETED' ? 'success' : 
-                            job.status === 'FAILED' ? 'error' : 'info';
-        
-        html += `<tr>
-          <td><strong>${job.job_id}</strong></td>
-          <td><span class="status-badge ${statusClass}">${job.status}</span></td>
-          <td>${job.identifier_type || 'N/A'}</td>
-          <td>${job.total_subscribers || 0}</td>
-          <td style="color: var(--color-success);">${job.migrated_count || 0}</td>
-          <td style="color: var(--color-danger);">${job.failed_count || 0}</td>
-          <td>
-            <div class="progress-bar" style="width: 100px;">
-              <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
-            </div>
-            <small>${job.progress || 0}%</small>
-          </td>
-          <td>${new Date(job.created_at).toLocaleString()}</td>
-          <td>
-            <button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job.job_id}')">View</button>
-            ${job.status === 'COMPLETED' ? 
-              `<button class="btn btn-sm" onclick="downloadReport('${job.job_id}')" style="margin-left: 8px;">📥 Report</button>` 
-              : ''}
-          </td>
-        </tr>`;
-      });
+ jobs.forEach(job => {
+  const statusClass = job.status === 'COMPLETED' ? 'success' : 
+                      job.status === 'FAILED' ? 'error' : 'info';
+  
+  html += `<tr>
+    <td><strong>${job.job_id}</strong></td>
+    <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+    <td>${job.identifier_type || 'N/A'}</td>
+    <td>${job.total_subscribers || 0}</td>
+    <td style="color: var(--color-success);">${job.migrated_count || 0}</td>
+    <td style="color: var(--color-danger);">${job.failed_count || 0}</td>
+    <td>
+      <div class="progress-bar" style="width: 100px;">
+        <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
+      </div>
+      <small>${job.progress || 0}%</small>
+    </td>
+    <td>${new Date(job.created_at).toLocaleString()}</td>
+    <td>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">`;
+  
+  // Add Cancel button conditionally
+  if (job.status === 'PENDING' || job.status === 'IN_PROGRESS') {
+    html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌ Cancel</button>`;
+  }
+  
+  // Add Download button conditionally
+  if (job.status === 'COMPLETED') {
+    html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥 Download</button>`;
+  }
+  
+  html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job.job_id}')">👁️ View</button>
+      </div>
+    </td>
+  </tr>`;
+});
+
       
       html += '</tbody></table>';
       container.innerHTML = html;
@@ -955,6 +1106,7 @@ const APP_CONFIG = {
     async function executeQuery() {
       const queryType = document.getElementById('query-type-select').value;
       const queryValue = document.getElementById('query-value-input').value.trim();
+	  const dataSource = document.getElementById('query-source-select').value;
       const source = document.getElementById('query-source-select').value;
       
       if (!queryValue) {
@@ -971,7 +1123,7 @@ const APP_CONFIG = {
           body: JSON.stringify({
             query_type: queryType,
             query_value: queryValue,
-            source: source
+            data_source: dataSource
           })
         });
         
@@ -1579,6 +1731,121 @@ const APP_CONFIG = {
       
       checkAuth();
     });
+	
+	
+    // CANCEL JOB
+    async function cancelJob(jobId) {
+      if (!confirm('Are you sure you want to cancel this job?')) return;
+      
+      try {
+        const { response, result } = await apiCall(`/api/migration/jobs/${jobId}/cancel`, { method: 'POST' });
+        showNotification('Job cancelled successfully', 'success');  // ✅ Correct function
+
+        refreshJobs();
+      } catch (error) {
+        showNotification('Failed to cancel job: ' + error.message, 'error');  // ✅
+      }
+    }
+
+    // DOWNLOAD JOB REPORT
+    async function downloadJobReport(jobId) {
+      try {
+        const { response, result } = await apiCall(`/api/migration/jobs/${jobId}/report`);
+        if (result.data && result.data.downloadurl) {
+        window.open(result.data.downloadurl, '_blank');
+        showNotification('Report download started', 'success');
+        } else {
+          showNotification('Report not available', 'warning');  // ✅
+        }
+      } catch (error) {
+        showNotification('Failed to download report: ' + error.message, 'error');  // ✅ Correct
+      }
+    }
+
+    // BULK DELETE
+    async function executeBulkDelete() {
+      const fileInput = document.getElementById('bulk-delete-file');
+      const file = fileInput.files[0];
+      
+      if (!file) {
+        alert('Please select a CSV file');
+        return;
+      }
+      
+      if (!confirm('⚠️ This will PERMANENTLY DELETE subscribers from DynamoDB. Continue?')) return;
+      
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const csvContent = e.target.result;
+        
+        try {
+         const { response, result } = await apiCall('/api/migration/bulk-delete', {
+         method: 'POST',
+         body: JSON.stringify({
+         csv_data: btoa(csvContent),
+         source: 'cloud'
+         })
+        });
+
+        showNotification(`Bulk delete job started: ${result.data.jobid}`, 'success');
+          
+          
+          showPage('migration');
+          refreshJobs();
+        } catch (error) {
+          showNotification('Bulk delete failed: ' + error.message, 'error');  // ✅ Correct
+        }
+      };
+      
+      reader.readAsText(file);
+    }
+
+    // SQL EXPORT
+    async function executeSQLExport() {
+      const query = document.getElementById('sql-query-input').value.trim();
+      const resultDiv = document.getElementById('sql-export-result');
+      
+      if (!query) {
+        alert('Please enter a SQL query');
+        return;
+      }
+      
+      if (!query.toLowerCase().startsWith('select')) {
+        alert('Only SELECT queries are allowed');
+        return;
+      }
+      
+      resultDiv.innerHTML = '<p style="text-align: center;">⏳ Executing query...</p>';
+      
+      try {
+       const { response, result } = await apiCall('/api/migration/sql-export', {
+       method: 'POST',
+       body: JSON.stringify({
+       sql_query: query
+       })
+       });
+
+      if (result.data && result.data.downloadurl) {
+       resultDiv.innerHTML = `
+    <div class="alert" style="background: #d4edda;">
+      ✅ Success! 
+      <a href="${result.data.downloadurl}" target="_blank" class="btn btn-sm">
+        📥 Download CSV
+      </a>
+    </div>
+    <p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
+  `;
+}
+
+      } catch (error) {
+        resultDiv.innerHTML = `
+          <div class="alert" style="background: #f8d7da; border-left: 4px solid var(--color-danger);">
+            ❌ Query failed: ${error.message}
+          </div>
+        `;
+      }
+    }
+
   </script>
 </body>
 </html>
