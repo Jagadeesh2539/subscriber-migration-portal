@@ -960,44 +960,43 @@ async function loadHealthStatus() {
   try {
     const { response, result } = await apiCall('/api/health');
     if (!response.ok || !result.data) return;
-    
-    const health = result.data;
+
+    const health = result.data; // object with { components: { dynamodb:{status}, legacy_rds:{status}, ... } }
     const container = document.getElementById('health-status');
-    
+
     const components = {
-      'dynamodb_subscribers': '☁️ DynamoDB Subscribers',
-      'dynamodb_jobs': '☁️ DynamoDB Jobs',
-      'dynamodb_settings': '☁️ DynamoDB Settings',
-      'rds_mysql': '🗄️ RDS MySQL',
-      's3_uploads': '📦 S3 Uploads'
+      dynamodb: '☁️ DynamoDB',
+      legacy_rds: '🗄️ RDS MySQL',
+      s3_uploads: '📦 S3 Uploads',
+      vpc: '🔐 VPC',
+      provisioning_mode: '⚙️ Provisioning Mode'
     };
-    
+
     let html = '';
     for (const [key, label] of Object.entries(components)) {
-      const status = health.components?.[key] || 'unknown';
-      const isOk = status === 'OK' || status === 'healthy';
-      const color = isOk ? 'var(--color-success)' : 'var(--color-danger)';
-      const icon = isOk ? '✅' : '❌';
-      
+      const comp = health.components?.[key];
+      const status = comp?.status || 'unknown';
+      const ok = status === 'healthy';
+      const color = ok ? 'var(--color-success)' : 'var(--color-danger)';
+      const icon = ok ? '✅' : '❌';
+
       html += `
-        <div style="padding: 12px; border: 2px solid ${color}; border-radius: 8px; text-align: center;">
-          <div style="font-size: 24px; margin-bottom: 8px;">${icon}</div>
-          <div style="font-weight: 600; margin-bottom: 4px; font-size: 13px;">${label}</div>
-          <div style="color: ${color}; font-size: 12px; font-weight: 600;">${status}</div>
-        </div>
-      `;
+        <div style="padding:12px;border:2px solid ${color};border-radius:8px;text-align:center;">
+          <div style="font-size:24px;margin-bottom:8px;">${icon}</div>
+          <div style="font-weight:600;margin-bottom:4px;font-size:13px;">${label}</div>
+          <div style="color:${color};font-size:12px;font-weight:600;">${status}</div>
+        </div>`;
     }
-    
     container.innerHTML = html;
-  } catch (error) {
-    console.error('Health check failed:', error);
-    document.getElementById('health-status').innerHTML = `
-      <div style="padding: 12px; text-align: center; color: var(--text-light);">
-        Health check unavailable
-      </div>
-    `;
+  } catch (err) {
+    console.error('Health check failed:', err);
+    document.getElementById('health-status').innerHTML =
+      `<div style="padding:12px;text-align:center;color:var(--text-light);">Health check unavailable</div>`;
   }
 }
+
+
+
     // === CSV UPLOAD ===
     async function uploadCSV() {
       const fileInput = document.getElementById('csv-file-input');
@@ -1107,12 +1106,14 @@ async function loadHealthStatus() {
     <div style="display: flex; gap: 8px; flex-wrap: wrap;">`;
 
 // Cancel button
-if (job.status === 'PENDING' || job.status === 'IN_PROGRESS') {
-  html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌</button>`;
+const canCancel = ['RUNNING','PENDING','IN_PROGRESS'].includes(job.status);
+if (canCancel) {
+  html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌ Cancel</button>`;
 }
 
+
 // Download button
-if (job.status === 'COMPLETED') {
+if (['COMPLETED','COMPLETED_WITH_ERRORS'].includes(job.status)) {
   html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
 }
 
@@ -1127,9 +1128,9 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       container.innerHTML = html;
     }
 
-    async function viewJobDetails(jobId) {
+    async function viewJobDetails(job_id) {
       try {
-        const { response, result } = await apiCall(`${APP_CONFIG.JOBS_API}/${jobId}`);
+        const { response, result } = await apiCall(`${APP_CONFIG.JOBS_API}/${job_id}`);
         
         if (response.ok && result.data) {
           const job = result.data;
@@ -1154,7 +1155,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
             content += `<button class="btn" onclick="downloadReport('${job.job_id}')" style="margin-top: 16px;">📥 Download Full Report</button>`;
           }
           
-          document.getElementById('modal-job-title').textContent = `Job Details: ${jobId}`;
+          document.getElementById('modal-job-title').textContent = `Job Details: ${job_id}`;
           document.getElementById('modal-job-content').innerHTML = content;
           document.getElementById('job-modal').style.display = 'flex';
         }
@@ -1163,10 +1164,10 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       }
     }
 
-    async function downloadReport(jobId) {
+    async function downloadReport(job_id) {
       try {
         // Use fetch directly for blob response
-        const response = await fetch(`${APP_CONFIG.JOBS_API}/${jobId}/report`, {
+        const response = await fetch(`${APP_CONFIG.JOBS_API}/${job_id}/report`, {
           headers: { 'Authorization': `Bearer ${authToken}` }
         });
         
@@ -1175,7 +1176,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = `migration_report_${jobId}.csv`;
+          a.download = `migration_report_${job_id}.csv`;
           document.body.appendChild(a);
           a.click();
           window.URL.revokeObjectURL(url);
@@ -1237,25 +1238,25 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       
       let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
       html += '<table class="results-table"><thead><tr>';
-      html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Created At</th>';
-      html += '</tr></thead><tbody>';
-      
-      results.forEach(sub => {
-        html += `<tr>
-          <td><strong>${sub.uid || '-'}</strong></td>
-          <td>${sub.imsi || '-'}</td>
-          <td>${sub.msisdn || '-'}</td>
-          <td>${sub.email || '-'}</td>
-          <td><span class="status-badge success">${sub.status || 'N/A'}</span></td>
-          <td>${sub.plan || '-'}</td>
-          <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
-        </tr>`;
-      });
-      
-      html += '</tbody></table>';
-      container.innerHTML = html;
-      showNotification(`Found ${results.length} subscriber(s)`, 'success');
-    }
+     html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
+
+results.forEach(sub => {
+  html += `<tr>
+    <td><strong>${sub.uid || '-'}</strong></td>
+    <td>${sub.imsi || '-'}</td>
+    <td>${sub.msisdn || '-'}</td>
+    <td>${sub.email || '-'}</td>
+    <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
+    <td>${sub.plan || sub.plan_id || '-'}</td>
+    <td>${sub._source || '-'}</td>
+    <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
+    <td>
+      <button class="btn btn-sm btn-secondary" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="provisioning.confirmDelete('${sub.uid}')" style="margin-left: 8px;">🗑️ Delete</button>
+    </td>
+  </tr>`;
+});
+
 
     // === PERFORMANCE DASHBOARD ===
     async function loadPerformance() {
@@ -1325,6 +1326,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     }
 
     // === UI NAVIGATION ===
+	function persistPage(pageId){ try{ sessionStorage.setItem('lastPage', pageId); }catch{} }
     function showPage(pageId) {
       document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
@@ -1334,7 +1336,10 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       
       const navItem = document.querySelector(`[data-page="${pageId}"]`);
       if (navItem) navItem.classList.add('active');
-      
+     
+	 // remember selection
+	  localStorage.setItem('last-page', pageId);
+	  
       // Load page-specific data
       if (pageId === 'dashboard') { loadDashboard(); }
       if (pageId === 'migration') { refreshJobs(); }
@@ -1343,6 +1348,9 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       if (pageId === 'monitoring') { loadPerformance(); }
       if (pageId === 'settings') { settings.load(); }
 	  if (pageId === 'bulk-delete') { refreshDeletionJobs(); }
+	  
+	  persistPage(pageId);
+	  
     }
     
     // === MODAL UTILITY ===
@@ -1503,12 +1511,14 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
           <h3>🔍 Search Results (${data.length} found)</h3>
           <table class="results-table">
             <thead>
-              <tr><th>Subscriber ID</th><th>Email</th><th>Plan</th><th>Status</th><th>Actions</th></tr>
+              <tr><th>Subscriber ID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Plan</th><th>Status</th><th>Actions</th></tr>
             </thead>
             <tbody>
               ${data.map(sub => `
                 <tr>
                   <td><strong>${sub.uid || 'N/A'}</strong></td>
+				  <td>${sub.imsi ?? sub.IMSI ?? '-'}</td>
+		    	  <td>${sub.msisdn ?? sub.MSISDN ?? '-'}</td>
                   <td>${sub.email || 'N/A'}</td>
                   <td><span class="status-badge info">${sub.plan_id || sub.plan || 'N/A'}</span></td>
                   <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
@@ -1689,48 +1699,47 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       }
     }
 
-    // === SEARCH FOR MODIFY (Global Function) ===
-    async function searchForModify(uidToSearch) {
-      // Allow function to be called with a UID (from edit button) or from the search box
-      const uid = uidToSearch || document.getElementById('modify-search-uid').value.trim();
-      
-      if (!uid) {
-        showNotification('Please enter UID', 'error');
-        return;
-      }
-      
-      try {
-        const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
-          method: 'POST',
-          body: JSON.stringify({
-            query_type: 'uid',
-            query_value: uid,
-            data_source: 'cloud' // Modify form only works on cloud records for simplicity
-          })
-        });
-        
-        if (response.ok && result.data && result.data.results && result.data.results.length > 0) {
-          const subscriber = result.data.results[0];
-          
-          // Populate modify form
-          document.getElementById('modify-uid').value = subscriber.uid || '';
-          document.getElementById('modify-imsi').value = subscriber.imsi || '';
-          document.getElementById('modify-msisdn').value = subscriber.msisdn || '';
-          document.getElementById('modify-email').value = subscriber.email || '';
-          document.getElementById('modify-status').value = subscriber.status || 'ACTIVE';
-          document.getElementById('modify-plan').value = subscriber.plan || '';
-          
-          // Show form
-          document.getElementById('modify-form-container').style.display = 'block';
-          showNotification('Subscriber found! Modify the fields below.', 'success');
-        } else {
-          showNotification('Subscriber not found in Cloud DB', 'error');
-          document.getElementById('modify-form-container').style.display = 'none';
-        }
-      } catch (error) {
-        showNotification('Search failed: ' + error.message, 'error');
-      }
+// === SEARCH FOR MODIFY (Global Function) ===
+async function searchForModify(uidToSearch) {
+  const uid = uidToSearch || document.getElementById('modify-search-uid').value.trim();
+  if (!uid) { showNotification('Please enter UID', 'error'); return; }
+
+  // derive data_source from provisioning mode
+  const mode = document.getElementById('provisioning-mode').value; // CLOUD | LEGACY | HYBRID
+  const data_source = (mode === 'HYBRID') ? 'both' : mode.toLowerCase();
+
+  try {
+    const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
+      method: 'POST',
+      body: JSON.stringify({ query_type: 'uid', query_value: uid, data_source })
+    });
+
+    if (response.ok && result.data && result.data.results && result.data.results.length > 0) {
+      const subscriber = result.data.results[0];
+
+      // remember which system this record came from so PUT goes to the right place
+      const source = subscriber._source || (mode === 'LEGACY' ? 'legacy' : 'cloud');
+      document.getElementById('modify-form-container').dataset.source = source;
+
+      // populate form
+      document.getElementById('modify-uid').value    = subscriber.uid    || '';
+      document.getElementById('modify-imsi').value   = subscriber.imsi   || '';
+      document.getElementById('modify-msisdn').value = subscriber.msisdn || '';
+      document.getElementById('modify-email').value  = subscriber.email  || '';
+      document.getElementById('modify-status').value = subscriber.status || 'ACTIVE';
+      document.getElementById('modify-plan').value   = subscriber.plan   || '';
+
+      document.getElementById('modify-form-container').style.display = 'block';
+      showNotification('Subscriber found! Modify the fields below.', 'success');
+    } else {
+      showNotification('Subscriber not found in selected source(s)', 'error');
+      document.getElementById('modify-form-container').style.display = 'none';
     }
+  } catch (error) {
+    showNotification('Search failed: ' + error.message, 'error');
+  }
+}
+
 
     // === MODIFY SUBSCRIBER (Global Function) ===
     async function modifySubscriber() {
@@ -1751,7 +1760,8 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       
       try {
         // FIXED: Call the correct /api/subscribers/:uid endpoint
-        const { response, result } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}`, {
+        const source = document.getElementById('modify-form-container').dataset.source || 'cloud';
+        const { response, result } = await apiCall(`${APP_CONFIG.SUBSCRIBERS_API}/${uid}?system=${source}`, {
           method: 'PUT',
           body: JSON.stringify({
             uid: uid,
@@ -1795,7 +1805,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     }
 
     // === INIT ===
-    document.addEventListener('DOMContentLoaded', function() {
+      document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('login-btn').addEventListener('click', login);
       document.getElementById('logout-btn').addEventListener('click', logout);
       
@@ -1822,16 +1832,19 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
         }
       }, APP_CONFIG.REFRESH_INTERVAL);
       
-      checkAuth();
+      
+	  const last = sessionStorage.getItem('lastPage') || 'dashboard';
+      showPage(last);
+	  
     });
 	
 	
     // CANCEL JOB
-    async function cancelJob(jobId) {
+    async function cancelJob(job_id) {
       if (!confirm('Are you sure you want to cancel this job?')) return;
       
       try {
-        const { response, result } = await apiCall(`/api/migration/jobs/${jobId}/cancel`, { method: 'POST' });
+        const { response, result } = await apiCall(`/api/migration/jobs/${job_id}/cancel`, { method: 'POST' });
         showNotification('Job cancelled successfully', 'success');  // ✅ Correct function
 
         refreshJobs();
@@ -1841,9 +1854,9 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     }
 
     // DOWNLOAD JOB REPORT
-    async function downloadJobReport(jobId) {
+    async function downloadJobReport(job_id) {
       try {
-        const { response, result } = await apiCall(`/api/migration/jobs/${jobId}/report`);
+        const { response, result } = await apiCall(`/api/migration/jobs/${job_id}/report`);
         if (result.data && result.data.download_url) {
         window.open(result.data.download_url, '_blank');
         showNotification('Report download started', 'success');
@@ -1872,13 +1885,10 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
         const csvContent = e.target.result;
         
         try {
-         const { response, result } = await apiCall('/api/migration/bulk-delete', {
-         method: 'POST',
-         body: JSON.stringify({
-         csv_data: btoa(csvContent),
-         source: 'cloud'
-         })
-        });
+           const { response, result } = await apiCall('/api/migration/bulk-delete', {
+           method: 'POST',
+           body: JSON.stringify({ file: csvContent })
+           });
 
         showNotification(`Bulk delete job started: ${result.data.job_id}`, 'success');
           
@@ -2008,26 +2018,22 @@ function loadQuickQuery(queryType) {
        })
        });
 
-      if (result.data && result.data.download_url) {
-       resultDiv.innerHTML = `
-    <div class="alert" style="background: #d4edda;">
-      ✅ Success! 
-      <a href="${result.data.download_url}" target="_blank" class="btn btn-sm">
-        📥 Download CSV
-      </a>
-    </div>
-    <p><strong>Rows:</strong> ${result.data.row_count || 0}</p>
+      if (result.data && (result.data.download_url || result.data.downloadurl)) {
+		const url = result.data.download_url || result.data.downloadurl;
+		// prefer in-page download (no redirect)
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = result.data.report_filename || 'export.csv';
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+
+		resultDiv.innerHTML = `
+		<div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
+			<p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
   `;
 }
 
-      } catch (error) {
-        resultDiv.innerHTML = `
-          <div class="alert" style="background: #f8d7da; border-left: 4px solid var(--color-danger);">
-            ❌ Query failed: ${error.message}
-          </div>
-        `;
-      }
-    }
 
   </script>
 </body>
