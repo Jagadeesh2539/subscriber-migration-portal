@@ -1257,7 +1257,7 @@ results.forEach(sub => {
   </tr>`;
 });
 
-
+}
     // === PERFORMANCE DASHBOARD ===
     async function loadPerformance() {
       const container = document.getElementById('performance-metrics-container');
@@ -1993,50 +1993,54 @@ function loadQuickQuery(queryType) {
   }
 }
   
-    // SQL EXPORT
-async function executeSQLExport() {
-  const query = document.getElementById('sql-query-input').value.trim();
-  const resultDiv = document.getElementById('sql-export-result');
-  
-  if (!query) {
-    alert('Please enter a SQL query');
-    return;
-  }
-  
-  if (!query.toLowerCase().startsWith('select')) {
-    alert('Only SELECT queries are allowed');
-    return;
-  }
-  
-  resultDiv.innerHTML = '<p style="text-align: center;">⏳ Executing query...</p>';
-  
-  try {
-    const { response, result } = await apiCall('/api/migration/sql-export', {
-      method: 'POST',
-      body: JSON.stringify({ query })
-    });
 
-    if (result.data && (result.data.download_url || result.data.downloadurl)) {
-      const url = result.data.download_url || result.data.downloadurl;
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = result.data.report_filename || 'export.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      resultDiv.innerHTML = `
-        <div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
-        <p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
-      `;
-    } else {
-      resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
-      showNotification('Export failed', 'error');
-    }
-  } catch (error) {
-    resultDiv.innerHTML = `<div class="alert error">❌ Error: ${error.message}</div>`;
-    showNotification('Export failed', 'error');
-  }
-}
+// SQL EXPORT
+    async function executeSQLExport() {
+      const query = document.getElementById('sql-query-input').value.trim();
+      const resultDiv = document.getElementById('sql-export-result');
+      
+      if (!query) {
+        alert('Please enter a SQL query');
+        return;
+      }
+      
+      if (!query.toLowerCase().startsWith('select')) {
+        alert('Only SELECT queries are allowed');
+        return;
+      }
+      
+      resultDiv.innerHTML = '<p style="text-align: center;">⏳ Executing query...</p>';
+      
+      try { // <-- TRY block starts here
+        const { response, result } = await apiCall('/api/migration/sql-export', {
+          method: 'POST',
+          body: JSON.stringify({
+            query
+          })
+        });
+
+        if (result.data && (result.data.download_url || result.data.downloadurl)) {
+          const url = result.data.download_url || result.data.downloadurl;
+          // prefer in-page download (no redirect)
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = result.data.report_filename || 'export.csv';
+a.click();
+          a.remove();
+
+          resultDiv.innerHTML = `
+		<div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
+			<p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
+  `;
+        } else { // <-- ELSE block is inside the TRY
+          resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
+          showNotification('Export failed', 'error');
+        }
+      } catch (error) { // <-- CATCH block is after the TRY
+        resultDiv.innerHTML = `<div class="alert error">❌ Error: ${error.message}</div>`;
+        showNotification('Export failed', 'error');
+      }
+    }
 
 </script>
 </body>
