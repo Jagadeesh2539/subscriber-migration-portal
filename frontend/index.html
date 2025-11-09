@@ -816,8 +816,8 @@ const APP_CONFIG = {
 
     // === AUTH ===
     function checkAuth() {
-      authToken = sessionStorage.getItem('authToken');
-      currentUser = sessionStorage.getItem('username');
+      authToken = localStorage.getItem('authToken');
+      currentUser = localStorage.getItem('username');
       
       if (authToken && currentUser) {
         document.getElementById('login-screen').style.display = 'none';
@@ -864,9 +864,9 @@ const APP_CONFIG = {
         if (response.ok && result.status === 'success' && result.data && result.data.token) {
           authToken = result.data.token;
           currentUser = result.data.user.username;
-          sessionStorage.setItem('authToken', authToken);
-          sessionStorage.setItem('username', result.data.user.username);
-          sessionStorage.setItem('userRole', result.data.user.role);
+          localStorage.setItem('authToken', authToken);
+          localStorage.setItem('username', result.data.user.username);
+          localStorage.setItem('userRole', result.data.user.role);
           
           console.log('Login successful, token saved:', authToken.substring(0, 20) + '...');
           
@@ -896,7 +896,7 @@ const APP_CONFIG = {
     }
 
     function logout() {
-      sessionStorage.clear();
+      localStorage.clear();
       authToken = null;
       currentUser = null;
       checkAuth();
@@ -1053,21 +1053,26 @@ async function loadHealthStatus() {
 
     // === MIGRATION JOBS ===
     async function refreshJobs() {
-      const container = document.getElementById('migration-jobs-container');
-      container.innerHTML = '<div class="alert info">Loading jobs...</div>';
-      
-      try {
-        const { response, result } = await apiCall(APP_CONFIG.JOBS_API);
-        
-        if (response.ok && result.data && result.data.jobs) {
-          displayJobs(result.data.jobs);
-        } else {
-          throw new Error(result.message || 'Failed to load jobs');
-        }
-      } catch (error) {
-        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
-      }
-    }
+      const container = document.getElementById('migration-jobs-container');
+      container.innerHTML = '<div class="alert info">Loading jobs...</div>';
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.JOBS_API);
+        
+        // --- THIS IS THE FIX ---
+        // You were missing this 'if' block
+        if (response.ok && result.data && result.data.jobs) {
+          const migrationJobs = result.data.jobs.filter(job => job.type === 'RDS_TO_DYNAMODB_MIGRATION' || !job.job_type);
+          displayJobs(migrationJobs);
+        } else {
+          throw new Error(result.message || 'Failed to load jobs');
+        }
+        // --- END OF FIX ---
+
+      } catch (error) {
+        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+      }
+    }
 
     function displayJobs(jobs) {
       const container = document.getElementById('migration-jobs-container');
@@ -1078,32 +1083,33 @@ async function loadHealthStatus() {
       }
       
       let html = '<table class="results-table"><thead><tr>';
-      html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Total</th><th>Success</th><th>Failed</th><th>Progress</th><th>Created</th><th>Actions</th>';
+      html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Summary</th><th>Progress</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
       
  jobs.forEach(job => {
-  const statusClass = job.status === 'COMPLETED' ? 'success' : 
-                      job.status === 'FAILED' ? 'error' : 'info';
-  
+  const statusClass = (job.status || '').startsWith('COMPLETED') ? 'success' :
+                      (job.status === 'FAILED' || (job.status || '').includes('ERROR')) ? 'error' : 'info';
+
   html += `<tr>
-  <td><strong>${job.job_id}</strong></td>
-  <td><span class="status-badge ${statusClass}">${job.status}</span></td>
-  <td>
-    <div style="font-size: 13px;">
-      <div>${job.total_subscribers || 0} total</div>
-      <div style="color: var(--color-success);">✓ ${job.migrated_count || 0}</div>
-      <div style="color: var(--color-danger);">✗ ${job.failed_count || 0}</div>
-    </div>
-  </td>
-  <td>
-    <div class="progress-bar" style="width: 100px;">
-      <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
-    </div>
-    <small>${job.progress || 0}%</small>
-  </td>
-  <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
-  <td>
-    <div style="display: flex; gap: 8px; flex-wrap: wrap;">`;
+    <td><strong>${job.job_id}</strong></td>
+    <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+    <td>${job.type || 'N/A'}</td>
+    <td>
+      <div style="font-size: 13px; white-space: nowrap;">
+        <div>${job.total_items || 0} total</div>
+        <div style="color: var(--color-success);">✓ ${job.successful_items || 0}</div>
+        <div style="color: var(--color-danger);">✗ ${job.failed_items || 0}</div>
+      </div>
+    </td>
+    <td>
+      <div class="progress-bar" style="width: 100px;">
+        <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
+      </div>
+      <small>${job.progress || 0}%</small>
+    </td>
+    <td style="font-size: 12px; white-space: nowrap;">${new Date(job.created_at).toLocaleDateString()}</td>
+    <td>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">`;
 
 // Cancel button
 const canCancel = ['RUNNING','PENDING','IN_PROGRESS'].includes(job.status);
@@ -1111,16 +1117,15 @@ if (canCancel) {
   html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌ Cancel</button>`;
 }
 
-
 // Download button
-if (['COMPLETED','COMPLETED_WITH_ERRORS'].includes(job.status)) {
+if ((job.status || '').startsWith('COMPLETED')) {
   html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
 }
 
 html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job.job_id}')">👁️</button>
-    </div>
-  </td>
-</tr>`;
+      </div>
+    </td>
+  </tr>`;
 });
 
       
@@ -1195,69 +1200,44 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       document.getElementById('job-modal').style.display = 'none';
     }
 
-    // === DATA QUERY ===
-    async function executeQuery() {
-      const queryType = document.getElementById('query-type-select').value;
-      const queryValue = document.getElementById('query-value-input').value.trim();
-	  const dataSource = document.getElementById('query-source-select').value;
-      const source = document.getElementById('query-source-select').value;
+ // === DATA QUERY ===
+   function displayQueryResults(results, container) {
+      if (!results || results.length === 0) {
+        container.innerHTML = '<div class="alert info">No results found</div>';
+        return;
+      }
+      
+      let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
+      html += '<table class="results-table"><thead><tr>';
+      html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
       
-      if (!queryValue) {
-        showNotification('Please enter a query value', 'error');
-        return;
-      }
-      
-      const container = document.getElementById('query-results-container');
-      container.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
-      
-      try {
-        const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
-          method: 'POST',
-          body: JSON.stringify({
-            query_type: queryType,
-            query_value: queryValue,
-            data_source: dataSource
-          })
-        });
-        
-        if (response.ok && result.data) {
-          displayQueryResults(result.data.results, container);
-        } else {
-          throw new Error(result.message || 'Query failed');
-        }
-      } catch (error) {
-        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
-      }
-    }
+      // THIS LINE WAS MISSING from your snippet:
+      html += '</tr></thead><tbody>'; 
 
-    function displayQueryResults(results, container) {
-      if (!results || results.length === 0) {
-        container.innerHTML = '<div class="alert info">No results found</div>';
-        return;
-      }
-      
-      let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
-      html += '<table class="results-table"><thead><tr>';
-     html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
+      results.forEach(sub => {
+        html += `<tr>
+    <td><strong>${sub.uid || '-'}</strong></td>
+    <td>${sub.imsi || '-'}</td>
+    <td>${sub.msisdn || '-'}</td>
+    <td>${sub.email || '-'}</td>
+    <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
+    <td>${sub.plan || sub.plan_id || '-'}</td>
+    <td>${sub._source || '-'}</td>
+    <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
+    <td>
+      <button class="btn btn-sm btn-secondary" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="provisioning.confirmDelete('${sub.uid}')" style="margin-left: 8px;">🗑️ Delete</button>
+    </td>
+    </tr>`;
+      });
 
-results.forEach(sub => {
-  html += `<tr>
-    <td><strong>${sub.uid || '-'}</strong></td>
-    <td>${sub.imsi || '-'}</td>
-    <td>${sub.msisdn || '-'}</td>
-    <td>${sub.email || '-'}</td>
-    <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
-    <td>${sub.plan || sub.plan_id || '-'}</td>
-    <td>${sub._source || '-'}</td>
-    <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
-    <td>
-      <button class="btn btn-sm btn-secondary" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
-      <button class="btn btn-sm btn-danger" onclick="provisioning.confirmDelete('${sub.uid}')" style="margin-left: 8px;">🗑️ Delete</button>
-    </td>
-  </tr>`;
-});
+      // THIS LINE WAS MISSING from your snippet (finishes the table):
+      html += '</tbody></table>'; 
 
-}
+      // THIS LINE WAS MISSING (updates the page):
+      container.innerHTML = html; 
+    }
+
     // === PERFORMANCE DASHBOARD ===
     async function loadPerformance() {
       const container = document.getElementById('performance-metrics-container');
@@ -1858,7 +1838,12 @@ async function searchForModify(uidToSearch) {
       try {
         const { response, result } = await apiCall(`/api/migration/jobs/${job_id}/report`);
         if (result.data && result.data.download_url) {
-        window.open(result.data.download_url, '_blank');
+        const a = document.createElement('a');
+        a.href = result.data.download_url;
+        a.download = result.data.report_filename || `report_${job_id}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
         showNotification('Report download started', 'success');
         } else {
           showNotification('Report not available', 'warning');  // ✅
@@ -1998,6 +1983,9 @@ function loadQuickQuery(queryType) {
     async function executeSQLExport() {
       const query = document.getElementById('sql-query-input').value.trim();
       const resultDiv = document.getElementById('sql-export-result');
+      
+      // 1. GET THE CURRENT MODE
+      const mode = document.getElementById('provisioning-mode').value; 
       
       if (!query) {
         alert('Please enter a SQL query');
@@ -2005,38 +1993,39 @@ function loadQuickQuery(queryType) {
       }
       
       if (!query.toLowerCase().startsWith('select')) {
-        alert('Only SELECT queries are allowed');
+        alert('Only SELECT queries are allowed (for both SQL and PartiQL)');
         return;
       }
       
-      resultDiv.innerHTML = '<p style="text-align: center;">⏳ Executing query...</p>';
+      resultDiv.innerHTML = `<p style="text-align: center;">⏳ Executing query in ${mode} mode...</p>`;
       
-      try { // <-- TRY block starts here
+      try {
         const { response, result } = await apiCall('/api/migration/sql-export', {
           method: 'POST',
           body: JSON.stringify({
-            query
+            query: query,
+            mode: mode  // 2. SEND THE MODE TO THE BACKEND
           })
         });
 
         if (result.data && (result.data.download_url || result.data.downloadurl)) {
           const url = result.data.download_url || result.data.downloadurl;
-          // prefer in-page download (no redirect)
           const a = document.createElement('a');
           a.href = url;
-          a.download = result.data.report_filename || 'export.csv';
-a.click();
-          a.remove();
+          a.download = result.data.filename || 'export.csv';
+          document.body.appendChild(a); // Add to body to be clickable
+          a.click();
+          a.remove(); // Clean up
 
           resultDiv.innerHTML = `
-		<div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
-			<p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
+		<div class="alert success">✅ Download started for ${mode} data. If it didn't, <a href="${url}" download>click here</a>.</div>
+			<p><strong>Rows:</strong> ${result.data.row_count || 0}</p>
   `;
-        } else { // <-- ELSE block is inside the TRY
+        } else {
           resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
           showNotification('Export failed', 'error');
         }
-      } catch (error) { // <-- CATCH block is after the TRY
+      } catch (error) {
         resultDiv.innerHTML = `<div class="alert error">❌ Error: ${error.message}</div>`;
         showNotification('Export failed', 'error');
       }
