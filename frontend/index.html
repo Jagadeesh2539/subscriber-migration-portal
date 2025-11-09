@@ -2033,7 +2033,15 @@ function loadQuickQuery(queryType) {
 			<p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
   `;
 }
-
+      } else {
+        resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
+        showNotification('Export failed', 'error');
+      }
+    } catch (error) {
+      resultDiv.innerHTML = `<div class="alert error">❌ Error: ${error.message}</div>`;
+      showNotification('Export failed', 'error');
+    }
+  }
 
   </script>
 </body>
