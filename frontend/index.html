@@ -675,7 +675,7 @@
             <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
           </div>
           
-          <button class="btn" onclick="executeQuery()">🔍 Execute Query</button>
+          <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
           
           <div id="query-results-container" style="margin-top: 24px;"></div>
         </div>
@@ -1030,12 +1030,12 @@ async function loadHealthStatus() {
         
         if (response.ok && result.data) {
           statusEl.innerHTML = `
-            <div class="alert success">
-              ✅ ${result.message}<br/>
-              <strong>Job ID:</strong> ${result.data.job_id}<br/>
-              <strong>Total Subscribers:</strong> ${result.data.total_subscribers}<br/>
-              <strong>Identifier Type:</strong> ${result.data.identifier_type}
-            </div>
+            <div class="alert success">
+              ✅ ${result.message}<br/>
+              <strong>Job ID:</strong> ${result.data.job_id}<br/>
+              <strong>Total Subscribers:</strong> ${result.data.total_items}<br/>
+              <strong>Identifier Type:</strong> uid
+            </div>
           `;
           showNotification('Migration started successfully!', 'success');
           fileInput.value = '';
@@ -1062,7 +1062,7 @@ async function loadHealthStatus() {
         // --- THIS IS THE FIX ---
         // You were missing this 'if' block
         if (response.ok && result.data && result.data.jobs) {
-          const migrationJobs = result.data.jobs.filter(job => job.type === 'RDS_TO_DYNAMODB_MIGRATION' || !job.job_type);
+          const migrationJobs = result.data.jobs.filter(job => job.type === 'MIGRATION' || !job.job_type);
           displayJobs(migrationJobs);
         } else {
           throw new Error(result.message || 'Failed to load jobs');
@@ -1082,7 +1082,7 @@ async function loadHealthStatus() {
         return;
       }
       
-      let html = '<table class="results-table"><thead><tr>';
+      let html = '<table class="results-table table"><thead><tr>';
       html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Summary</th><th>Progress</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
       
@@ -1201,7 +1201,40 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     }
 
  // === DATA QUERY ===
-   function displayQueryResults(results, container) {
+    async function executeQuery() {
+      const queryType = document.getElementById('query-type-select').value;
+      const queryValue = document.getElementById('query-value-input').value.trim();
+	  const dataSource = document.getElementById('query-source-select').value;
+      
+      if (!queryValue) {
+        showNotification('Please enter a query value', 'error');
+        return;
+      }
+      
+      const container = document.getElementById('query-results-container');
+      container.innerHTML = '<div class="alert info">🔍 Executing query...</div>';
+      
+      try {
+        const { response, result } = await apiCall(APP_CONFIG.QUERY_API, {
+          method: 'POST',
+          body: JSON.stringify({
+            query_type: queryType,
+            query_value: queryValue,
+            data_source: dataSource
+          })
+        });
+        
+        if (response.ok && result.data) {
+          displayQueryResults(result.data.results, container);
+        } else {
+          throw new Error(result.message || 'Query failed');
+        }
+      } catch (error) {
+        container.innerHTML = `<div class="alert error">❌ ${error.message}</div>`;
+      }
+    }
+
+    function displayQueryResults(results, container) {
       if (!results || results.length === 0) {
         container.innerHTML = '<div class="alert info">No results found</div>';
         return;
@@ -1210,9 +1243,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
       html += '<table class="results-table"><thead><tr>';
       html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
-      
-      // THIS LINE WAS MISSING from your snippet:
-      html += '</tr></thead><tbody>'; 
+      html += '</tr></thead><tbody>'; // <-- This was also missing
 
       results.forEach(sub => {
         html += `<tr>
@@ -1231,11 +1262,8 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     </tr>`;
       });
 
-      // THIS LINE WAS MISSING from your snippet (finishes the table):
-      html += '</tbody></table>'; 
-
-      // THIS LINE WAS MISSING (updates the page):
-      container.innerHTML = html; 
+      html += '</tbody></table>'; // <-- This was also missing
+      container.innerHTML = html; // <-- This was also missing
     }
 
     // === PERFORMANCE DASHBOARD ===
@@ -1296,7 +1324,6 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
           <h3>System Health</h3>
           <p><strong>Database:</strong> <span class="status-badge success">${metrics.system_health.database_status}</span></p>
           <p><strong>API:</strong> <span class="status-badge success">${metrics.system_health.api_status}</span></p>
-          <p><strong>Storage:</strong> <span class="status-badge success">${metrics.system_health.storage_status}</span></p>
         </div>
       `;
       
@@ -1785,38 +1812,41 @@ async function searchForModify(uidToSearch) {
     }
 
     // === INIT ===
-      document.addEventListener('DOMContentLoaded', function() {
-      document.getElementById('login-btn').addEventListener('click', login);
-      document.getElementById('logout-btn').addEventListener('click', logout);
-      
-      document.querySelectorAll('.nav-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-          const page = e.currentTarget.dataset.page;
-          if (page) showPage(page);
-        });
-      });
-      
-      // Enter key for login
-      document.getElementById('password').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') login();
-      });
-      
-      // Auto-refresh jobs every 30 seconds
-      setInterval(() => {
-        const token = sessionStorage.getItem('authToken');
-        if (token && document.getElementById('migration').classList.contains('active')) {
-          refreshJobs();
-        }
-        if (token && document.getElementById('monitoring').classList.contains('active')) {
-          loadPerformance();
-        }
-      }, APP_CONFIG.REFRESH_INTERVAL);
-      
-      
-	  const last = sessionStorage.getItem('lastPage') || 'dashboard';
-      showPage(last);
-	  
-    });
+      document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('login-btn').addEventListener('click', login);
+      document.getElementById('logout-btn').addEventListener('click', logout);
+      
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+          const page = e.currentTarget.dataset.page;
+          if (page) showPage(page);
+        });
+      });
+      
+      // Enter key for login
+      document.getElementById('password').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') login();
+      });
+      
+      // Auto-refresh jobs every 30 seconds
+      setInterval(() => {
+        // CORRECT: Uses localStorage
+        const token = localStorage.getItem('authToken'); 
+        if (token && document.getElementById('migration').classList.contains('active')) {
+          refreshJobs();
+        }
+        if (token && document.getElementById('monitoring').classList.contains('active')) {
+          loadPerformance();
+        }
+      }, APP_CONFIG.REFRESH_INTERVAL);
+      
+      // --- THIS IS THE FIX ---
+      // Change sessionStorage to localStorage
+	  const last = localStorage.getItem('lastPage') || 'dashboard';
+      showPage(last);
+      checkAuth(); // <-- Also add this to check auth on page load
+	  
+    });
 	
 	
     // CANCEL JOB
@@ -1921,11 +1951,11 @@ async function refreshDeletionJobs() {
                           job.status === 'FAILED' ? 'error' : 'info';
       
       html += `<tr>
-        <td><strong>${job.job_id}</strong></td>
-        <td><span class="status-badge ${statusClass}">${job.status}</span></td>
-        <td>${job.total_subscribers || 0}</td>
-        <td style="color: var(--color-success);">${job.migrated_count || 0}</td>
-        <td style="color: var(--color-danger);">${job.failed_count || 0}</td>
+        <td><strong>${job.job_id}</strong></td>
+        <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+        <td>${job.total_items || 0}</td>
+        <td style="color: var(--color-success);">${job.successful_items || 0}</td>
+        <td style="color: var(--color-danger);">${job.failed_items || 0}</td>
         <td>
           <div class="progress-bar" style="width: 80px;">
             <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
