@@ -1705,7 +1705,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
           body: JSON.stringify({
             query_type: 'uid',
             query_value: uid,
-            source: 'cloud' // Modify form only works on cloud records for simplicity
+            data_source: 'cloud' // Modify form only works on cloud records for simplicity
           })
         });
         
@@ -1844,8 +1844,8 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     async function downloadJobReport(jobId) {
       try {
         const { response, result } = await apiCall(`/api/migration/jobs/${jobId}/report`);
-        if (result.data && result.data.downloadurl) {
-        window.open(result.data.downloadurl, '_blank');
+        if (result.data && result.data.download_url) {
+        window.open(result.data.download_url, '_blank');
         showNotification('Report download started', 'success');
         } else {
           showNotification('Report not available', 'warning');  // ✅
@@ -1880,7 +1880,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
          })
         });
 
-        showNotification(`Bulk delete job started: ${result.data.jobid}`, 'success');
+        showNotification(`Bulk delete job started: ${result.data.job_id}`, 'success');
           
           
           showPage('migration');
@@ -2004,19 +2004,19 @@ function loadQuickQuery(queryType) {
        const { response, result } = await apiCall('/api/migration/sql-export', {
        method: 'POST',
        body: JSON.stringify({
-       sql_query: query
+       query
        })
        });
 
-      if (result.data && result.data.downloadurl) {
+      if (result.data && result.data.download_url) {
        resultDiv.innerHTML = `
     <div class="alert" style="background: #d4edda;">
       ✅ Success! 
-      <a href="${result.data.downloadurl}" target="_blank" class="btn btn-sm">
+      <a href="${result.data.download_url}" target="_blank" class="btn btn-sm">
         📥 Download CSV
       </a>
     </div>
-    <p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
+    <p><strong>Rows:</strong> ${result.data.row_count || 0}</p>
   `;
 }
 
