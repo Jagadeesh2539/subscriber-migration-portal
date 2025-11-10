@@ -771,46 +771,55 @@ const APP_CONFIG = {
 };
     // === UTILITY: API CALL WRAPPER ===
     async function apiCall(endpoint, options = {}) {
-      const defaultHeaders = {
-        'Content-Type': 'application/json'
-      };
-      
-      if (authToken) {
-        defaultHeaders['Authorization'] = `Bearer ${authToken}`;
-      }
-      
-      const config = {
-        ...options,
-        headers: {
-          ...defaultHeaders,
-          ...(options.headers || {})
-        }
-      };
-      
-      try {
-        const url = endpoint.startsWith('http') ? endpoint : (endpoint.startsWith('/') ? `${APP_CONFIG.API_BASE}${endpoint}` : `${APP_CONFIG.API_BASE}/${endpoint}`);
-        const response = await fetch(url, config);
-        
-        // Handle non-JSON responses (like file downloads)
-        if (response.headers.get("Content-Type")?.includes("text/csv")) {
-          return { response, result: await response.blob() };
-        }
-        
-        const result = await response.json();
-        
-        // Handle unauthorized
-        if (response.status === 401) {
-          console.warn('Session expired, logging out...');
-          logout();
-          throw new Error('Session expired. Please login again.');
-        }
-        
-        return { response, result };
-      } catch (error) {
-        console.error('API call error:', error);
-        throw error;
-      }
+  const defaultHeaders = {
+    'Content-Type': 'application/json'
+  };
+  
+  if (authToken) {
+    defaultHeaders['Authorization'] = `Bearer ${authToken}`;
+  }
+  
+  const isAbs = /^https?:\/\//i.test(endpoint);
+  const url = isAbs
+    ? endpoint
+    : `${APP_CONFIG.API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 4000;
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: options.method || 'GET',
+      headers: {
+        ...defaultHeaders,
+        ...(options.headers || {})
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal
+    });
+    
+    clearTimeout(t);
+    
+    if (response.headers.get("Content-Type")?.includes("text/csv")) {
+      return { response, result: await response.blob() };
     }
+    
+    const result = await response.json();
+    
+    if (response.status === 401) {
+      console.warn('Session expired');
+      logout();
+      throw new Error('Session expired');
+    }
+    
+    return { response, result };
+  } catch (error) {
+    clearTimeout(t);
+    throw error;
+  }
+}
+
 
     // === AUTH ===
     function checkAuth() {
@@ -925,7 +934,7 @@ const APP_CONFIG = {
 async function loadDashboard() {
   // 1. Run the FAST checks first
   await testAPI();
-  await loadHealthStatus();
+  loadHealthStatus().catch(err => console.warn('Health failed', err));
 
   // 2. Run the SLOW stat counts
   try {
@@ -958,7 +967,7 @@ async function loadDashboard() {
   // HEALTH STATUS INDICATORS
 async function loadHealthStatus() {
   try {
-    const { response, result } = await apiCall('/api/health');
+    const { response, result } = await apiCall(APP_CONFIG.HEALTH_API, { timeoutMs: 4000 });
     if (!response.ok || !result.data) return;
 
     const health = result.data; // object with { components: { dynamodb:{status}, legacy_rds:{status}, ... } }
