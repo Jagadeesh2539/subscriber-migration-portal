@@ -669,16 +669,98 @@
                </select>
             </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
-            <div class="form-group">
-              <label>Query Value</label>
-              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
-            </div>
-            
-            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
-            
-          </div> <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
-        </div> ```
+        I have found the critical errors in your index.html file.
+
+You have a JavaScript syntax error that is crashing the entire script. This is why your dashboard stats, health check, and the "Monitoring" and "Settings" pages are all failing or blank.
+
+Here is the plan to fix everything.
+
+1. Fix: The "Blank Screen" & "Dashboard Not Working" Error
+This is the most important fix. You have a single stray period . in your refreshDeletionJobs function that is crashing the page.
+
+File: index.html
+
+Location: refreshDeletionJobs function (around line 2990).
+
+Action: Find and delete the stray period.
+
+Change this (look at the . after </td>):
+
+JavaScript
+
+          <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
+          </div>
+          <small>${job.progress || 0}%</small>
+        </td>.
+        <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
+To this (remove the .):
+
+JavaScript
+
+          <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
+          </div>
+          <small>${job.progress || 0}%</small>
+        </td>
+        <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
+2. Fix: Dashboard Stats Not Loading
+After you fix the syntax error, your login function still has old logic that stops the stats from loading.
+
+File: index.html
+
+Location: login function (around line 872).
+
+Action: Replace the setTimeout block with a single call to checkAuth().
+
+Replace this block:
+
+JavaScript
+
+          // Load data after UI is shown
+          setTimeout(() => {
+            loadDashboard();
+            refreshJobs();
+            settings.load(); // Load settings on login
+          }, 100);
+With this:
+
+JavaScript
+
+          // Re-run checkAuth to load data and show the app
+          checkAuth();
+(Your checkAuth function already contains the logic to load the dashboard, so this one change fixes everything.)
+
+3. Fix: Global Data Query CSS ("half screen")
+This is an HTML layout bug. The results table is inside a grid it shouldn't be.
+
+File: index.html
+
+Location: Around line 680.
+
+Action: Your HTML structure is incorrect. You have a div that is unclosed and your results container is in the wrong place.
+
+Replace this block of HTML:
+
+HTML
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+            <div class="form-group">
+              <label>Query Value</label>
+              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
+            </div>
+            
+            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
+
+      </div> <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
+    </div>
+
+            <div class="form-group">
+              <label>Query Value</label>
+              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
+            </div>
+            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
+            
+        </div>           <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
+        </div> ```
 
       <section id="monitoring" class="page-section">
         <div class="page-header">
@@ -1086,12 +1168,7 @@ async function loadHealthStatus() {
       let html = '<table class="results-table table"><thead><tr>';
       html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Summary</th><th>Progress</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
-	  
-	  html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job_id}')">👁️</button>
-         <button class="btn btn-sm btn-danger" onclick="deleteJob('${job_id}')">🗑️</button>
-        </div>
-      </td>
-    </tr>`;
+	 
       
  jobs.forEach(job => {
   const statusClass = (job.status || '').startsWith('COMPLETED') ? 'success' :
@@ -2010,7 +2087,7 @@ deletionJobs.forEach(job => {
             <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
           </div>
           <small>${job.progress || 0}%</small>
-        </td>.
+        </td>
         <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
         <td>
           <div style="display: flex; gap: 8px;">`;
@@ -2020,21 +2097,14 @@ deletionJobs.forEach(job => {
         html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌</button>`;
       }
       
-	  // Download button
-  if ((job.status || '').startsWith('COMPLETED')) {
-    html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
-  }
+	 if ((job.status || '').startsWith('COMPLETED')) {
+        html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
+      }
 
-  html += `<button class="btn btn-sm btn-danger" onclick="deleteJob('${job_id}')">🗑️</button>
-           </div>
-    </td>
-  </tr>`;
-	  
-      // Download button
-      if ((job.status || '').startsWith('COMPLETED')) {
-        html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
-      }
-      
+      // Delete button
+      html += `<button class="btn btn-sm btn-danger" onclick="deleteJob('${job.job_id}')">🗑️</button>`;
+
+	
       html += `</div>
         </td>
       </tr>`;
