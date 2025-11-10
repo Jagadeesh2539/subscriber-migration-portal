@@ -668,100 +668,17 @@
                <option value="both">🔄 Both (Cloud + Legacy)</option>
                </select>
             </div>
+          
+            <div class="form-group">
+              <label>Query Value</label>
+              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
+            </div>
+            
+            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
+            
+          </div> <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
 
-        I have found the critical errors in your index.html file.
-
-You have a JavaScript syntax error that is crashing the entire script. This is why your dashboard stats, health check, and the "Monitoring" and "Settings" pages are all failing or blank.
-
-Here is the plan to fix everything.
-
-1. Fix: The "Blank Screen" & "Dashboard Not Working" Error
-This is the most important fix. You have a single stray period . in your refreshDeletionJobs function that is crashing the page.
-
-File: index.html
-
-Location: refreshDeletionJobs function (around line 2990).
-
-Action: Find and delete the stray period.
-
-Change this (look at the . after </td>):
-
-JavaScript
-
-          <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
-          </div>
-          <small>${job.progress || 0}%</small>
-        </td>.
-        <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
-To this (remove the .):
-
-JavaScript
-
-          <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
-          </div>
-          <small>${job.progress || 0}%</small>
-        </td>
-        <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
-2. Fix: Dashboard Stats Not Loading
-After you fix the syntax error, your login function still has old logic that stops the stats from loading.
-
-File: index.html
-
-Location: login function (around line 872).
-
-Action: Replace the setTimeout block with a single call to checkAuth().
-
-Replace this block:
-
-JavaScript
-
-          // Load data after UI is shown
-          setTimeout(() => {
-            loadDashboard();
-            refreshJobs();
-            settings.load(); // Load settings on login
-          }, 100);
-With this:
-
-JavaScript
-
-          // Re-run checkAuth to load data and show the app
-          checkAuth();
-(Your checkAuth function already contains the logic to load the dashboard, so this one change fixes everything.)
-
-3. Fix: Global Data Query CSS ("half screen")
-This is an HTML layout bug. The results table is inside a grid it shouldn't be.
-
-File: index.html
-
-Location: Around line 680.
-
-Action: Your HTML structure is incorrect. You have a div that is unclosed and your results container is in the wrong place.
-
-Replace this block of HTML:
-
-HTML
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
-            <div class="form-group">
-              <label>Query Value</label>
-              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
-            </div>
-            
-            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
-
-      </div> <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
-    </div>
-
-            <div class="form-group">
-              <label>Query Value</label>
-              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
-            </div>
-            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
-            
-        </div>           <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
-        </div> ```
-
+        </div> </section>
       <section id="monitoring" class="page-section">
         <div class="page-header">
           <h1>📈 System Monitoring</h1>
@@ -963,11 +880,7 @@ const APP_CONFIG = {
           showNotification('✅ Login successful!', 'success');
           
           // Load data after UI is shown
-          setTimeout(() => {
-            loadDashboard();
-            refreshJobs();
-            settings.load(); // Load settings on login
-          }, 100);
+           checkAuth();
         } else {
           console.error('Login failed:', result);
           throw new Error(result.message || result.error || 'Invalid credentials');
@@ -2009,6 +1922,7 @@ async function deleteJob(job_id) {
 }
 
 
+
     // BULK DELETE
     async function executeBulkDelete() {
       const fileInput = document.getElementById('bulk-delete-file');
@@ -2048,18 +1962,16 @@ async function deleteJob(job_id) {
 async function refreshDeletionJobs() {
   try {
     const { response, result } = await apiCall('/api/migration/jobs');
-    
     if (!response.ok) return;
-    
+
     // Filter only deletion jobs
     const deletionJobs = (result.data.jobs || []).filter(job => job.job_type === 'bulk_delete');
     const container = document.getElementById('deletion-jobs-list');
-    
     if (deletionJobs.length === 0) {
       container.innerHTML = '<p style="text-align: center; padding: 20px; color: var(--text-light);">No deletion jobs found</p>';
       return;
     }
-    
+
     let html = '<table class="table"><thead><tr>' +
       '<th>Job ID</th>' +
       '<th>Status</th>' +
@@ -2070,19 +1982,18 @@ async function refreshDeletionJobs() {
       '<th>Created</th>' +
       '<th>Actions</th>' +
       '</tr></thead><tbody>';
-    
-deletionJobs.forEach(job => {
+
+    deletionJobs.forEach(job => {
       const statusClass = (job.status || '').startsWith('COMPLETED') ? 'success' : 
                           (job.status === 'FAILED' || (job.status || '').includes('ERROR')) ? 'error' : 'info';
 
       html += `<tr>
-        <td><strong>${job.job_id}</strong></td>
-        <td><span class="status-badge ${statusClass}">${job.status}</span></td>
-        <td>${job.total_items || 0}</td>
-        <td style="color: var(--color-success);">${job.successful_items || 0}</td>
-        <td style="color: var(--color-danger);">${job.failed_items || 0}</td>
+        <td><strong>${job.job_id}</strong></td>
+        <td><span class="status-badge ${statusClass}">${job.status}</span></td>
+        <td>${job.total_items || 0}</td>
+        <td style="color: var(--color-success);">${job.successful_items || 0}</td>
+        <td style="color: var(--color-danger);">${job.failed_items || 0}</td>
         <td>
-
           <div class="progress-bar" style="width: 80px;">
             <div class="progress-fill" style="width: ${job.progress || 0}%;"></div>
           </div>
@@ -2091,33 +2002,34 @@ deletionJobs.forEach(job => {
         <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}</td>
         <td>
           <div style="display: flex; gap: 8px;">`;
-      
+
       // Cancel button
       if (job.status === 'IN_PROGRESS') {
         html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌</button>`;
       }
       
-	 if ((job.status || '').startsWith('COMPLETED')) {
-        html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
-      }
+      // Download button
+      if ((job.status || '').startsWith('COMPLETED')) {
+        html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
+      }
 
-      // Delete button
-      html += `<button class="btn btn-sm btn-danger" onclick="deleteJob('${job.job_id}')">🗑️</button>`;
-
-	
       html += `</div>
         </td>
       </tr>`;
     });
-    
+
     html += '</tbody></table>';
     container.innerHTML = html;
-    
+
   } catch (error) {
-    console.error('Failed to load deletion jobs:', error);
-    showNotification('Failed to load deletion jobs', 'error');
+    // Handle/display error
+    console.error('Error loading deletion jobs', error);
+    const container = document.getElementById('deletion-jobs-list');
+    if (container)
+      container.innerHTML = `<div class="alert error">❌ Error loading deletion jobs: ${error.message || error}</div>`;
   }
 }
+
 
 
 // === QUICK QUERY TEMPLATES ===
@@ -2166,58 +2078,42 @@ function loadQuickQuery(queryType) {
 
 // SQL EXPORT
 async function executeSQLExport() {
-  const inputEl = document.getElementById('sql-query-input');
+  const query = document.getElementById('sql-query-input').value.trim();
   const resultDiv = document.getElementById('sql-export-result');
-  const modeEl = document.getElementById('provisioning-mode');
-
-  if (!inputEl || !resultDiv || !modeEl) {
-    console.error('Missing required elements for export');
-    showNotification('Internal error: UI controls missing', 'error');
-    return;
-  }
-
-  const query = inputEl.value.trim();
-  const mode = String(modeEl.value || '').toUpperCase();
 
   if (!query) {
     alert('Please enter a SQL query');
     return;
   }
 
-  // Allow only SELECT (basic guard; backend must also validate!)
   if (!query.toLowerCase().startsWith('select')) {
-    alert('Only SELECT queries are allowed (for both SQL and PartiQL)');
+    alert('Only SELECT queries are allowed');
     return;
   }
 
-  resultDiv.innerHTML = `<p style="text-align: center;">⏳ Executing query in ${mode} mode...</p>`;
+  resultDiv.innerHTML = '<p style="text-align: center;">⏳ Executing query...</p>';
 
   try {
     const { response, result } = await apiCall('/api/migration/sql-export', {
       method: 'POST',
-      body: JSON.stringify({ query, mode })
+      body: JSON.stringify({ query })
     });
 
-    const data = result && result.data ? result.data : null;
-
-    if (data && (data.download_url || data.downloadurl)) {
-      const url = data.download_url || data.downloadurl;
-      const filename = data.filename || 'export.csv';
-
-      // start download
+    if (result.data && (result.data.download_url || result.data.downloadurl)) {
+      const url = result.data.download_url || result.data.downloadurl;
+      // prefer in-page download (no redirect)
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = result.data.report_filename || 'export.csv';
       document.body.appendChild(a);
       a.click();
       a.remove();
-
       resultDiv.innerHTML = `
-        <div class="alert success">✅ Download started for ${mode} data. If it didn't, <a href="${url}" download>click here</a>.</div>
-        <p><strong>Rows:</strong> ${data.row_count || 0}</p>
+        <div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
+        <p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
       `;
     } else {
-      resultDiv.innerHTML = `<div class="alert error">❌ ${result?.message || 'Export failed'}</div>`;
+      resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
       showNotification('Export failed', 'error');
     }
   } catch (error) {
@@ -2225,6 +2121,7 @@ async function executeSQLExport() {
     showNotification('Export failed', 'error');
   }
 }
+
 
 // Clear migration page status
 
@@ -2260,6 +2157,8 @@ function clearPageContext() {
   const queryResults = document.getElementById('query-results-container');
   if (queryResults) queryResults.innerHTML = '';
 }
+
+
 
 </script>
 </body>
