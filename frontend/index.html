@@ -908,7 +908,7 @@ const APP_CONFIG = {
       statusEl.textContent = 'Testing connection...';
       
       try {
-        const { response, result } = await apiCall(APP_CONFIG.HEALTH_API);
+        const { response, result } = await apiCall(`${APP_CONFIG.API_BASE}/api/health-ping`);
         
         if (response.ok) {
           statusEl.className = 'alert success';
@@ -1269,7 +1269,6 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     // === PERFORMANCE DASHBOARD ===
     async function loadPerformance() {
       const container = document.getElementById('performance-metrics-container');
-      container.innerHTML = '<div class="alert info">Loading performance metrics...</div>';
       
       try {
         const { response, result } = await apiCall('/api/dashboard/performance');
