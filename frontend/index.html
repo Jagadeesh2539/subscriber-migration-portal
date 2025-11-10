@@ -906,7 +906,7 @@ const APP_CONFIG = {
       statusEl.textContent = 'Testing connection...';
       
       try {
-        const { response, result } = await apiCall(`${APP_CONFIG.API_BASE}/api/health-ping`);
+        const { response, result } = await apiCall('/api/health-ping');
         
         if (response.ok) {
           statusEl.className = 'alert success';
@@ -1240,7 +1240,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
       html += '<table class="results-table">';
       html += '<thead><tr>';
-      html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
+      html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th>';
       html += '</tr></thead><tbody>';
 
       results.forEach(sub => {
@@ -1253,10 +1253,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     <td>${sub.plan || sub.plan_id || '-'}</td>
     <td>${sub._source || '-'}</td>
     <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
-    <td>
-      <button class="btn btn-sm btn-secondary" onclick="provisioning.edit('${sub.uid}')">✏️ Edit</button>
-      <button class="btn btn-sm btn-danger" onclick="provisioning.confirmDelete('${sub.uid}')" style="margin-left: 8px;">🗑️ Delete</button>
-    </td>
+   
     </tr>`;
       });
 
@@ -1655,6 +1652,12 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
            });
            if (!response.ok) throw new Error(result.message);
            showNotification('💾 Provisioning mode saved: ' + mode, 'success');
+		   
+		   // ✅ RELOAD DASHBOARD IF ON DASHBOARD PAGE
+		   if (document.getElementById('dashboard').classList.contains('active')) {
+           loadDashboard();
+          }
+		   
         } catch (e) {
            showNotification('💾 Mode saved locally (backend sync failed)', 'warning');
         }
@@ -2080,6 +2083,7 @@ function loadQuickQuery(queryType) {
 async function executeSQLExport() {
   const query = document.getElementById('sql-query-input').value.trim();
   const resultDiv = document.getElementById('sql-export-result');
+  const currentMode = document.getElementById('provisioning-mode').value;
 
   if (!query) {
     alert('Please enter a SQL query');
@@ -2096,8 +2100,11 @@ async function executeSQLExport() {
   try {
     const { response, result } = await apiCall('/api/migration/sql-export', {
       method: 'POST',
-      body: JSON.stringify({ query })
-    });
+      body: JSON.stringify({
+      query: query,
+      mode: currentMode  
+  })
+});
 
     if (result.data && (result.data.download_url || result.data.downloadurl)) {
       const url = result.data.download_url || result.data.downloadurl;
@@ -2110,7 +2117,7 @@ async function executeSQLExport() {
       a.remove();
       resultDiv.innerHTML = `
         <div class="alert success">✅ Download started. If it didn't, <a href="${url}" download>click here</a>.</div>
-        <p><strong>Rows:</strong> ${result.data.rowcount || 0}</p>
+        <p><strong>Rows:</strong> ${result.data.row_count || 0}</p>
       `;
     } else {
       resultDiv.innerHTML = `<div class="alert error">❌ ${result.message || 'Export failed'}</div>`;
