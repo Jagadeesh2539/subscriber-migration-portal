@@ -334,7 +334,7 @@
 </head>
 <body>
 
-  <div id="login-screen">
+  <div id="login-screen" style="display: none;">
     <div class="login-card">
       <div class="login-header">
         <div class="logo">🏢</div>
@@ -353,7 +353,7 @@
     </div>
   </div>
 
-  <div id="app-shell">
+  <div id="app-shell" style="display: none;">
     <nav class="sidebar">
       <div class="sidebar-header">
         <h2>Migration Portal</h2>
@@ -401,7 +401,7 @@
         <div class="card">
           <h2>API Status</h2>
           <div id="api-status" class="alert info">Testing connection...</div>
-          <button class="btn" onclick="testAPI()">Test Connection</button>
+          <button class="btn" onclick="testAPI(); loadHealthStatus();">Test Connection</button>
         </div>
 		
 		  <!-- HEALTH MONITORING - ADD THIS -->
@@ -669,17 +669,16 @@
                </select>
             </div>
 
-          
-          <div class="form-group">
-            <label>Query Value</label>
-            <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
-          </div>
-          
-          <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
-          
-          <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
-        </div>
-      </section>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+            <div class="form-group">
+              <label>Query Value</label>
+              <input type="text" id="query-value-input" class="form-input" placeholder="Enter identifier value...">
+            </div>
+            
+            <button class="btn btn-sm" onclick="executeQuery()">🔍 Execute Query</button>
+            
+          </div> <div id="query-results-container" style="margin-top: 24px; overflow-x: auto;"></div>
+        </div> ```
 
       <section id="monitoring" class="page-section">
         <div class="page-header">
@@ -719,10 +718,10 @@
         <div class="card">
           <h2>🔧 System Parameters</h2>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-            <div class="form-group"><label>Migration Batch Size</label><input type="number" class="form-input" value="1000" min="100" max="10000"></div>
-            <div class="form-group"><label>API Timeout (seconds)</label><input type="number" class="form-input" value="30" min="10" max="900"></div>
-            <div class="form-group"><label>Max Concurrent Jobs</label><input type="number" class="form-input" value="3" min="1" max="10"></div>
-            <div class="form-group"><label>Log Retention (days)</label><input type="number" class="form-input" value="30" min="1" max="365"></div>
+            <div class="form-group"><label>Migration Batch Size</label><input type="number" id="setting-batch-size" class="form-input" value="1000" min="100" max="10000"></div>
+			<div class="form-group"><label>API Timeout (seconds)</label><input type="number" id="setting-api-timeout" class="form-input" value="30" min="10" max="900"></div>
+			<div class="form-group"><label>Max Concurrent Jobs</label><input type="number" id="setting-max-jobs" class="form-input" value="3" min="1" max="10"></div>
+			<div class="form-group"><label>Log Retention (days)</label><input type="number" id="setting-log-retention" class="form-input" value="30" min="1" max="365"></div>
           </div>
           <button class="btn btn-success" onclick="settings.saveConfig()">💾 Save Settings</button>
         </div>
@@ -816,25 +815,29 @@ const APP_CONFIG = {
 
     // === AUTH ===
     function checkAuth() {
-      authToken = localStorage.getItem('authToken');
-      currentUser = localStorage.getItem('username');
-      
-      if (authToken && currentUser) {
-        document.getElementById('login-screen').style.display = 'none';
-        document.getElementById('app-shell').style.display = 'block';
-        document.getElementById('username-display').textContent = currentUser;
-        
-        // Load data after a brief delay to ensure token is set
-        setTimeout(() => {
-          loadDashboard();
-          refreshJobs();
-        }, 100);
-      } else {
-        document.getElementById('login-screen').style.display = 'flex';
-        document.getElementById('app-shell').style.display = 'none';
-      }
-    }
+  const wasLoggedIn = !!authToken; // Check if we were already logged in
+  authToken = localStorage.getItem('authToken');
+  currentUser = localStorage.getItem('username');
 
+  if (authToken && currentUser) {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app-shell').style.display = 'block'; // Show app
+    document.getElementById('username-display').textContent = currentUser;
+
+    // --- THIS IS THE FIX ---
+    // If we WEREN'T logged in, and now we are, load the dashboard.
+    if (!wasLoggedIn) {
+      loadDashboard(); // Load dashboard data *only once* on login
+      refreshJobs();
+      settings.load();
+    }
+    // --- END OF FIX ---
+
+  } else {
+    document.getElementById('login-screen').style.display = 'flex'; // Show login
+    document.getElementById('app-shell').style.display = 'none';
+  }
+}
     async function login() {
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
@@ -978,8 +981,8 @@ async function loadHealthStatus() {
     for (const [key, label] of Object.entries(components)) {
       const comp = health.components?.[key];
       const status = comp?.status || 'unknown';
-      const ok = status === 'healthy';
-      const color = ok ? 'var(--color-success)' : 'var(--color-danger)';
+      const ok = status === 'healthy' || status === 'info';
+      const color = status === 'healthy' ? 'var(--color-success)' : (status === 'info' ? 'var(--color-info)' : 'var(--color-danger)');
       const icon = ok ? '✅' : '❌';
 
       html += `
@@ -1062,7 +1065,7 @@ async function loadHealthStatus() {
         const { response, result } = await apiCall(APP_CONFIG.JOBS_API);
         
         if (response.ok && result.data && result.data.jobs) { // <-- This 'if' was missing
-          const migrationJobs = result.data.jobs.filter(job => job.type === 'RDS_TO_DYNAMODB_MIGRATION' || !job.job_type);
+          const migrationJobs = result.data.jobs.filter(job => job.type === 'MIGRATION' || !job.job_type);
           displayJobs(migrationJobs);
         } else {
           throw new Error(result.message || 'Failed to load jobs');
@@ -1083,6 +1086,12 @@ async function loadHealthStatus() {
       let html = '<table class="results-table table"><thead><tr>';
       html += '<th>Job ID</th><th>Status</th><th>Type</th><th>Summary</th><th>Progress</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
+	  
+	  html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job_id}')">👁️</button>
+         <button class="btn btn-sm btn-danger" onclick="deleteJob('${job_id}')">🗑️</button>
+        </div>
+      </td>
+    </tr>`;
       
  jobs.forEach(job => {
   const statusClass = (job.status || '').startsWith('COMPLETED') ? 'success' :
@@ -1348,7 +1357,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
 	  localStorage.setItem('last-page', pageId);
 	  
       // Load page-specific data
-      if (pageId === 'dashboard') { loadDashboard(); }
+      if (pageId === 'dashboard') { /* Data is now loaded on login */ }
       if (pageId === 'migration') { refreshJobs(); }
       if (pageId === 'provisioning') { settings.load(); } // Load mode for provisioning page
       if (pageId === 'query') { /* No auto-load */ }
@@ -1624,21 +1633,26 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     // === SETTINGS ===
     const settings = {
       async load() {
-        // Try to load from backend
-        try {
-          const { response, result } = await apiCall(`${APP_CONFIG.SETTINGS_API}/provisioning-mode`);
-          if (response.ok && result.data && result.data.mode) {
-             document.getElementById('provisioning-mode').value = result.data.mode;
-             localStorage.setItem('provisioning-mode', result.data.mode); // Sync local
-             return;
-          }
-        } catch (e) {
-          console.warn('Could not load settings from backend, using localStorage.');
-        }
-        // Fallback to localStorage
-        const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
-        document.getElementById('provisioning-mode').value = savedMode;
-      },
+  // Load provisioning mode from backend
+  try {
+    const { response, result } = await apiCall(`${APP_CONFIG.SETTINGS_API}/provisioning-mode`);
+    if (response.ok && result.data && result.data.mode) {
+       document.getElementById('provisioning-mode').value = result.data.mode;
+       localStorage.setItem('provisioning-mode', result.data.mode);
+    }
+  } catch (e) {
+    console.warn('Could not load settings from backend, using localStorage.');
+    const savedMode = localStorage.getItem('provisioning-mode') || 'CLOUD';
+    document.getElementById('provisioning-mode').value = savedMode;
+  }
+
+  // Load system parameters from localStorage
+  document.getElementById('setting-batch-size').value = localStorage.getItem('setting-batch-size') || '1000';
+  document.getElementById('setting-api-timeout').value = localStorage.getItem('setting-api-timeout') || '30';
+  document.getElementById('setting-max-jobs').value = localStorage.getItem('setting-max-jobs') || '3';
+  document.getElementById('setting-log-retention').value = localStorage.getItem('setting-log-retention') || '30';
+},
+
       async saveMode() {
         const mode = document.getElementById('provisioning-mode').value;
         localStorage.setItem('provisioning-mode', mode);
@@ -1656,7 +1670,11 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
         }
       },
       saveConfig() {
-        showNotification('💾 System parameters saved', 'success');
+	    localStorage.setItem('setting-batch-size', document.getElementById('setting-batch-size').value);
+        localStorage.setItem('setting-api-timeout', document.getElementById('setting-api-timeout').value);
+        localStorage.setItem('setting-max-jobs', document.getElementById('setting-max-jobs').value);
+        localStorage.setItem('setting-log-retention', document.getElementById('setting-log-retention').value);
+        showNotification('💾 System parameters saved (locally)', 'success');
       }
     }
 
@@ -1882,6 +1900,38 @@ async function searchForModify(uidToSearch) {
       }
     }
 
+// DELETE JOB
+async function deleteJob(job_id) {
+  // Use the confirmation modal
+  showConfirmationModal(
+    'Delete Job',
+    `Are you sure you want to permanently delete job ${job_id}? This cannot be undone.`,
+    async () => {
+      try {
+        const { response, result } = await apiCall(`/api/migration/jobs/${job_id}`, {
+          method: 'DELETE'
+        });
+
+        if (response.ok) {
+          showNotification(`Job ${job_id} deleted successfully`, 'success');
+
+          // Refresh the correct list
+          if (document.getElementById('migration').classList.contains('active')) {
+            refreshJobs();
+          } else if (document.getElementById('bulk-delete').classList.contains('active')) {
+            refreshDeletionJobs();
+          }
+        } else {
+          throw new Error(result.message || 'Failed to delete');
+        }
+      } catch (error) {
+        showNotification('Failed to delete job: ' + error.message, 'error');
+      }
+    }
+  );
+}
+
+
     // BULK DELETE
     async function executeBulkDelete() {
       const fileInput = document.getElementById('bulk-delete-file');
@@ -1970,6 +2020,16 @@ deletionJobs.forEach(job => {
         html += `<button onclick="cancelJob('${job.job_id}')" class="btn btn-sm btn-danger">❌</button>`;
       }
       
+	  // Download button
+  if ((job.status || '').startsWith('COMPLETED')) {
+    html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
+  }
+
+  html += `<button class="btn btn-sm btn-danger" onclick="deleteJob('${job_id}')">🗑️</button>
+           </div>
+    </td>
+  </tr>`;
+	  
       // Download button
       if ((job.status || '').startsWith('COMPLETED')) {
         html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
