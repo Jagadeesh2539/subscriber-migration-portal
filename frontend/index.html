@@ -925,13 +925,18 @@ const APP_CONFIG = {
     // === DASHBOARD ===
 	
 async function loadDashboard() {
+  // 1. Run the FAST checks first
+  await testAPI();
+  await loadHealthStatus();
+
+  // 2. Run the SLOW stat counts
   try {
     const { response, result } = await apiCall('/api/dashboard/stats');
-    
+
     if (response.ok && result.data) {
       document.getElementById('total-subscribers').textContent = 
         result.data.totalSubscribers || '0';
-      
+
       // Calculate success rate from performance metrics if available
       try {
         const perfResp = await apiCall('/api/dashboard/performance');
@@ -948,11 +953,8 @@ async function loadDashboard() {
     }
   } catch (error) {
     console.error('Dashboard load error:', error);
-    showNotification('Failed to load dashboard stats', 'error');
+    // Do not show a popup for this, as it's a background load
   }
-  
-  loadHealthStatus();
-  testAPI();
 }
 
   // HEALTH STATUS INDICATORS
@@ -1054,7 +1056,7 @@ async function loadHealthStatus() {
     // === MIGRATION JOBS ===
     async function refreshJobs() {
       const container = document.getElementById('migration-jobs-container');
-      container.innerHTML = '<div class="alert info">Loading jobs...</div>';
+
       
       try {
         const { response, result } = await apiCall(APP_CONFIG.JOBS_API);
@@ -1152,7 +1154,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
             </div>
           `;
           
-          if (job.status === 'COMPLETED') {
+          if ((job.status || '').startsWith('COMPLETED')) {
             content += `<button class="btn" onclick="downloadReport('${job.job_id}')" style="margin-top: 16px;">📥 Download Full Report</button>`;
           }
           
@@ -1237,7 +1239,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
       }
       
       let html = `<div class="alert success">✅ Found ${results.length} result(s)</div>`;
-      html += '<table class="results-table table">';
+      html += '<table class="results-table">';
       html += '<thead><tr>';
       html += '<th>UID</th><th>IMSI</th><th>MSISDN</th><th>Email</th><th>Status</th><th>Plan</th><th>Source</th><th>Created</th><th>Actions</th>';
       html += '</tr></thead><tbody>';
@@ -1331,8 +1333,9 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     }
 
     // === UI NAVIGATION ===
-	function persistPage(pageId){ try{ sessionStorage.setItem('lastPage', pageId); }catch{} }
+	function persistPage(pageId){ try{ localStorage.setItem('lastPage', pageId); }catch{} }
     function showPage(pageId) {
+	  clearPageContext();
       document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
       
@@ -1969,7 +1972,7 @@ deletionJobs.forEach(job => {
       }
       
       // Download button
-      if (job.status === 'COMPLETED') {
+      if ((job.status || '').startsWith('COMPLETED')) {
         html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
       }
       
@@ -2094,6 +2097,40 @@ async function executeSQLExport() {
   }
 }
 
+// Clear migration page status
+
+function clearPageContext() {
+  // Clear migration page status
+  const csvStatus = document.getElementById('csv-upload-status');
+  if (csvStatus) csvStatus.innerHTML = '';
+  const csvInput = document.getElementById('csv-file-input');
+  if (csvInput) csvInput.value = '';
+
+  // Clear bulk delete page status
+  const delStatus = document.getElementById('bulk-delete-result');
+  if (delStatus) delStatus.innerHTML = '';
+  const delInput = document.getElementById('bulk-delete-file');
+  if (delInput) delInput.value = '';
+
+  // Clear SQL export page
+  const sqlStatus = document.getElementById('sql-export-result');
+  if (sqlStatus) sqlStatus.innerHTML = '';
+  const sqlInput = document.getElementById('sql-query-input');
+  // --- THIS IS THE FIX ---
+  if (sqlInput) sqlInput.value = ""; 
+
+  // Clear provisioning page
+  const createStatus = document.getElementById('create-subscriber-status');
+  if (createStatus) createStatus.innerHTML = '';
+  const modifyStatus = document.getElementById('modify-subscriber-status');
+  if (modifyStatus) modifyStatus.innerHTML = '';
+  const searchResults = document.getElementById('search-results');
+  if (searchResults) searchResults.innerHTML = '';
+
+  // Clear query page
+  const queryResults = document.getElementById('query-results-container');
+  if (queryResults) queryResults.innerHTML = '';
+}
 
 </script>
 </body>
