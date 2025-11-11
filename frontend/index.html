@@ -465,7 +465,7 @@
 
   <!-- UPLOAD FORM -->
   <div class="card" style="border-left: 4px solid var(--color-danger);">
-    <h2>⚠️ Bulk Delete Subscribers</h2>
+    <h2>⚠️ Bulk Delete Subscribers [Cloud only]</h2>
     <p style="color: var(--color-danger); font-weight: 600;">WARNING: This action cannot be undone!</p>
     
     <div class="form-group">
@@ -497,6 +497,9 @@
         <div class="page-header">
           <h1>📊 Bulk Data Query</h1>
           <p>Execute Data query and export results to CSV</p>
+		  <p style="color: var(--color-info); font-weight: 500; margin-top: 8px;">
+      **Note:** Queries are executed against the database corresponding to the **Provisioning Mode** currently selected in the ⚙️ Settings tab.
+          </p>
         </div>
 
         <div class="card" style="border-left: 4px solid var(--color-info);">
@@ -1701,7 +1704,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
         localStorage.setItem('setting-api-timeout', document.getElementById('setting-api-timeout').value);
         localStorage.setItem('setting-max-jobs', document.getElementById('setting-max-jobs').value);
         localStorage.setItem('setting-log-retention', document.getElementById('setting-log-retention').value);
-        showNotification('💾 System parameters saved (locally)', 'success');
+        showNotification('💾 System parameters saved', 'success');
       }
     }
 
