@@ -1137,7 +1137,7 @@ async function loadDashboard() {
       </div>
       <small>${job.progress || 0}%</small>
     </td>
-    <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}<br>${new Date(job.created_at).toLocaleTimeString()}</td>
+    <td style="font-size: 12px; white-space: nowrap;">${new Date(job.created_at + 'Z').toLocaleString()}</td>
     <td>
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">`;
 
@@ -2041,7 +2041,7 @@ async function refreshDeletionJobs() {
           </div>
           <small>${job.progress || 0}%</small>
         </td>
-        <td style="font-size: 12px;">${new Date(job.created_at).toLocaleDateString()}<br>${new Date(job.created_at).toLocaleTimeString()}</td>
+        <td style="font-size: 12px;">${new Date(job.created_at + 'Z').toLocaleString()}</td>
         <td>
           <div style="display: flex; gap: 8px;">`;
 
