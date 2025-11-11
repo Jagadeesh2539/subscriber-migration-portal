@@ -813,30 +813,19 @@ const APP_CONFIG = {
     }
 
     // === AUTH ===
-    function checkAuth() {
-  const wasLoggedIn = !!authToken; // Check if we were already logged in
-  authToken = localStorage.getItem('authToken');
-  currentUser = localStorage.getItem('username');
+function checkAuth() {
+      authToken = localStorage.getItem('authToken');
+      currentUser = localStorage.getItem('username');
 
-  if (authToken && currentUser) {
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app-shell').style.display = 'block'; // Show app
-    document.getElementById('username-display').textContent = currentUser;
-
-    // --- THIS IS THE FIX ---
-    // If we WEREN'T logged in, and now we are, load the dashboard.
-    if (!wasLoggedIn) {
-      loadDashboard(); // Load dashboard data *only once* on login
-      refreshJobs();
-      settings.load();
+      if (authToken && currentUser) {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app-shell').style.display = 'block';
+        document.getElementById('username-display').textContent = currentUser;
+      } else {
+        document.getElementById('login-screen').style.display = 'flex';
+        document.getElementById('app-shell').style.display = 'none';
+      }
     }
-    // --- END OF FIX ---
-
-  } else {
-    document.getElementById('login-screen').style.display = 'flex'; // Show login
-    document.getElementById('app-shell').style.display = 'none';
-  }
-}
     async function login() {
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
@@ -881,6 +870,7 @@ const APP_CONFIG = {
           
           // Load data after UI is shown
            checkAuth();
+		   showPage('dashboard');
         } else {
           console.error('Login failed:', result);
           throw new Error(result.message || result.error || 'Invalid credentials');
@@ -900,19 +890,21 @@ const APP_CONFIG = {
       checkAuth();
     }
 
-    async function testAPI() {
+async function testAPI() {
       const statusEl = document.getElementById('api-status');
       statusEl.className = 'alert info';
       statusEl.textContent = 'Testing connection...';
       
       try {
-        const { response, result } = await apiCall('/api/health-ping');
+        // 1. CALL THE NEW FAST /api/ping
+        const { response, result } = await apiCall('/api/ping'); 
         
-        if (response.ok) {
+        if (response.ok && result.data) {
+          // 2. READ THE NEW RESPONSE
           statusEl.className = 'alert success';
-          statusEl.textContent = `✅ Connected! Version: ${result.version || result.data?.version || 'Unknown'}`;
+          statusEl.textContent = `✅ Connected! Version: ${result.data.version || 'Unknown'}`;
         } else {
-          throw new Error('Health check failed');
+          throw new Error(result.message || 'Health check failed');
         }
       } catch (error) {
         statusEl.className = 'alert error';
@@ -962,7 +954,8 @@ async function loadSuccessRate() {
 // REPLACED: This function now runs all checks in parallel
 async function loadDashboard() {
   // 1. Run the FAST API ping (and await it, it's quick)
-  // await testAPI(); [remved]
+   
+   testAPI();
 
   // 2. Run all other dashboard components CONCURRENTLY
   //    (We REMOVED 'await' so they all run in parallel)
@@ -1385,7 +1378,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
 	  localStorage.setItem('last-page', pageId);
 	  
       // Load page-specific data
-      if (pageId === 'dashboard') { /* Data is now loaded on login */ }
+      if (pageId === 'dashboard') { loadDashboard(); }
       if (pageId === 'migration') { refreshJobs(); }
       if (pageId === 'provisioning') { settings.load(); } // Load mode for provisioning page
       if (pageId === 'query') { /* No auto-load */ }
@@ -1681,7 +1674,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
   document.getElementById('setting-log-retention').value = localStorage.getItem('setting-log-retention') || '30';
 },
 
-      async saveMode() {
+    async saveMode() {
         const mode = document.getElementById('provisioning-mode').value;
         localStorage.setItem('provisioning-mode', mode);
         
@@ -1695,9 +1688,9 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
            showNotification('💾 Provisioning mode saved: ' + mode, 'success');
 		   
 		   // ✅ RELOAD DASHBOARD IF ON DASHBOARD PAGE
-		   if (document.getElementById('dashboard').classList.contains('active')) {
+		   
            loadDashboard();
-          }
+          
 		   
         } catch (e) {
            showNotification('💾 Mode saved locally (backend sync failed)', 'warning');
@@ -1893,10 +1886,15 @@ async function searchForModify(uidToSearch) {
       }, APP_CONFIG.REFRESH_INTERVAL);
       
       // --- THIS IS THE FIX ---
-      checkAuth(); // <-- This line loads your login token
-	  const last = localStorage.getItem('lastPage') || 'dashboard'; // Corrected
-      showPage(last); // This line now runs AFTER auth is checked
-	  
+      checkAuth(); // Check if we are logged in
+      
+      // If we are logged in, load the last page and all core data
+      if (authToken) { 
+        const last = localStorage.getItem('lastPage') || 'dashboard';
+        showPage(last);
+        refreshJobs(); // Load jobs
+        settings.load(); // Load settings
+      }
     });
 	
 	
