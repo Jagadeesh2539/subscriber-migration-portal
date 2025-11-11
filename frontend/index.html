@@ -962,7 +962,7 @@ async function loadSuccessRate() {
 // REPLACED: This function now runs all checks in parallel
 async function loadDashboard() {
   // 1. Run the FAST API ping (and await it, it's quick)
-  await testAPI(); 
+  // await testAPI(); [remved]
 
   // 2. Run all other dashboard components CONCURRENTLY
   //    (We REMOVED 'await' so they all run in parallel)
