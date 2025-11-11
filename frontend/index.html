@@ -1182,8 +1182,8 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
               <p><strong>Successfully Migrated:</strong> ${job.migrated_count}</p>
               <p><strong>Failed:</strong> ${job.failed_count}</p>
               <p><strong>Progress:</strong> ${job.progress}%</p>
-              <p><strong>Created At:</strong> ${new Date(job.created_at).toLocaleString()}</p>
-              ${job.completed_at ? `<p><strong>Completed At:</strong> ${new Date(job.completed_at).toLocaleString()}</p>` : ''}
+              <p><strong>Created At:</strong> ${new Date(job.created_at + 'Z').toLocaleString()}</p>
+              ${job.completed_at ? `<p><strong>Completed At:</strong> ${new Date(job.completed_at + 'Z').toLocaleString()}</p>` : ''}
             </div>
           `;
           
@@ -1286,7 +1286,7 @@ html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job
     <td><span class="status-badge ${sub.status === 'ACTIVE' ? 'success' : 'warning'}">${sub.status || 'N/A'}</span></td>
     <td>${sub.plan || sub.plan_id || '-'}</td>
     <td>${sub._source || '-'}</td>
-    <td>${sub.created_at ? new Date(sub.created_at).toLocaleString() : '-'}</td>
+    <td>${sub.created_at ? new Date(sub.created_at + 'Z').toLocaleString() : '-'}</td>
    
     </tr>`;
       });

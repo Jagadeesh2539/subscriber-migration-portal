@@ -1,0 +1,38 @@
+# --- 1. YOUR VARIABLES ---
+$SecretArn = "arn:aws:secretsmanager:us-east-1:144395889420:secret:LegacyDbSecret-qbHmkvXoIti1-nL7sif"
+$DbHost = "subscriber-migration-portal-prod-legacydb-lwych7vbqsup.cwd6wssgy4kr.us-east-1.rds.amazonaws.com"
+$DbName = "legacydb"
+$SqlFile = "insert_500_subscribers.sql"
+$MySqlExe = "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe"
+# ------------------------------------
+
+# 2. Fetch Credentials from AWS
+Write-Host "Fetching credentials from AWS..." -ForegroundColor Cyan
+$credsJson = aws secretsmanager get-secret-value --secret-id $SecretArn --query SecretString --output text
+$creds = $credsJson | ConvertFrom-Json
+
+# 3. Execute the SQL file
+Write-Host "Connecting to MySQL and running $SqlFile..." -ForegroundColor Cyan
+try {
+    # Set the password in an environment variable (this is secure)
+    $env:MYSQL_PWD = $creds.password
+    
+    # --- THIS IS THE FIX ---
+    # We must use $($creds.username) to pass the text, not the object
+    Get-Content $SqlFile | & $MySqlExe --host=$DbHost --user=$($creds.username) --database=$DbName
+    
+    # Check if the last command (mysql.exe) had an error
+    if ($LASTEXITCODE -ne 0) {
+        # Throw an error to stop the script
+        throw "MySQL command failed with exit code $LASTEXITCODE."
+    }
+    
+    Write-Host "✅ Success! 500 subscribers created." -ForegroundColor Green
+
+} catch {
+    # This will now correctly catch the connection error
+    Write-Error "❌ FAILED. The script stopped. Error: $($_.Exception.Message)"
+} finally {
+    # Clear the password from the environment
+    $env:MYSQL_PWD = $null
+}
