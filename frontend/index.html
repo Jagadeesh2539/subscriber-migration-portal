@@ -922,78 +922,118 @@ const APP_CONFIG = {
 
     // === DASHBOARD ===
 	
-async function loadDashboard() {
-  // 1. Run the FAST checks first
-  await testAPI();
-  await loadHealthStatus();
-
-  // 2. Run the SLOW stat counts
+// === DASHBOARD ===
+	
+// NEW: Function to load subscriber count
+async function loadSubscriberStats() {
   try {
     const { response, result } = await apiCall('/api/dashboard/stats');
-
     if (response.ok && result.data) {
       document.getElementById('total-subscribers').textContent = 
         result.data.totalSubscribers || '0';
-
-      // Calculate success rate from performance metrics if available
-      try {
-        const perfResp = await apiCall('/api/dashboard/performance');
-        if (perfResp.response.ok && perfResp.result.data) {
-          const stats = perfResp.result.data.migration_stats;
-          const successRate = stats.total_jobs > 0 
-            ? Math.round((stats.completed_jobs / stats.total_jobs) * 100) 
-            : 0;
-          document.getElementById('success-rate').textContent = successRate + '%';
-        }
-      } catch (e) {
-        document.getElementById('success-rate').textContent = '-';
-      }
+    } else {
+      document.getElementById('total-subscribers').textContent = 'N/A';
     }
   } catch (error) {
-    console.error('Dashboard load error:', error);
-    // Do not show a popup for this, as it's a background load
+     console.error('Dashboard stats load error:', error);
+     document.getElementById('total-subscribers').textContent = 'ERR';
   }
 }
 
-  // HEALTH STATUS INDICATORS
-async function loadHealthStatus() {
-  try {
-    const { response, result } = await apiCall('/api/health');
-    if (!response.ok || !result.data) return;
-
-    const health = result.data; // object with { components: { dynamodb:{status}, legacy_rds:{status}, ... } }
-    const container = document.getElementById('health-status');
-
-    const components = {
-      dynamodb: '☁️ DynamoDB',
-      legacy_rds: '🗄️ RDS MySQL',
-      s3_uploads: '📦 S3 Uploads',
-      vpc: '🔐 VPC',
-      provisioning_mode: '⚙️ Provisioning Mode'
-    };
-
-    let html = '';
-    for (const [key, label] of Object.entries(components)) {
-      const comp = health.components?.[key];
-      const status = comp?.status || 'unknown';
-      const ok = status === 'healthy' || status === 'info';
-      const color = status === 'healthy' ? 'var(--color-success)' : (status === 'info' ? 'var(--color-info)' : 'var(--color-danger)');
-      const icon = ok ? '✅' : '❌';
-
-      html += `
-        <div style="padding:12px;border:2px solid ${color};border-radius:8px;text-align:center;">
-          <div style="font-size:24px;margin-bottom:8px;">${icon}</div>
-          <div style="font-weight:600;margin-bottom:4px;font-size:13px;">${label}</div>
-          <div style="color:${color};font-size:12px;font-weight:600;">${status}</div>
-        </div>`;
+// NEW: Function to load success rate
+async function loadSuccessRate() {
+   try {
+    const perfResp = await apiCall('/api/dashboard/performance');
+    if (perfResp.response.ok && perfResp.result.data) {
+      const stats = perfResp.result.data.migration_stats;
+      const successRate = stats.total_jobs > 0 
+        ? Math.round((stats.completed_jobs / stats.total_jobs) * 100) 
+        : 0;
+      document.getElementById('success-rate').textContent = successRate + '%';
+    } else {
+       document.getElementById('success-rate').textContent = 'N/A';
     }
-    container.innerHTML = html;
-  } catch (err) {
-    console.error('Health check failed:', err);
-    document.getElementById('health-status').innerHTML =
-      `<div style="padding:12px;text-align:center;color:var(--text-light);">Health check unavailable</div>`;
+  } catch (e) {
+    console.error('Success rate load error:', e);
+    document.getElementById('success-rate').textContent = 'ERR';
   }
 }
+
+// REPLACED: This function now runs all checks in parallel
+async function loadDashboard() {
+  // 1. Run the FAST API ping (and await it, it's quick)
+  await testAPI(); 
+
+  // 2. Run all other dashboard components CONCURRENTLY
+  //    (We REMOVED 'await' so they all run in parallel)
+  loadHealthStatus();
+  loadSubscriberStats();
+  loadSuccessRate();
+}
+
+// HEALTH STATUS INDICATORS (NEW FAST VERSION)
+  async function loadHealthStatus() {
+    const container = document.getElementById('health-status');
+    try {
+      // 1. CALL THE NEW FAST PING
+      const { response, result } = await apiCall('/api/health-ping');
+      if (!response.ok || !result.data || !result.data.components) {
+        throw new Error(result.message || 'Invalid health ping response');
+      }
+
+      const components = result.data.components;
+      
+      // 2. DEFINE LABELS FOR THE *NEW* RESPONSE KEYS
+      const labels = {
+        dynamodb: '☁️ DynamoDB',
+        rds: '🗄️ RDS MySQL',
+        s3: '📦 S3 Uploads',
+        vpc: '🔐 VPC',
+        mode: '⚙️ Provisioning Mode'
+      };
+
+      let html = '';
+      
+      // 3. RENDER THE NEW RESPONSE
+      for (const [key, label] of Object.entries(labels)) {
+        const comp = components[key];
+        if (!comp) continue; // Skip if a component is missing from response
+
+        const status = comp.status || 'unknown'; // 'ok', 'degraded', 'info', 'skipped'
+        
+        // FIX: Treat 'ok' and 'info' as healthy (green border)
+        const isHealthy = (status === 'ok' || status === 'info');
+        
+        const color = isHealthy ? 'var(--color-success)' : 'var(--color-danger)';
+        const icon = isHealthy ? '✅' : '❌';
+        let statusText = status.toUpperCase();
+        
+        // Make status text more readable
+        if (status === 'ok') statusText = 'HEALTHY';
+        if (status === 'info') statusText = comp.details?.enabled ? 'ENABLED' : 'DISABLED';
+        if (status === 'degraded') statusText = 'ERROR';
+        if (key === 'mode') statusText = comp.details?.provisioningMode || 'UNKNOWN';
+
+
+        html += `
+          <div style="padding:12px;border:2px solid ${color};border-radius:8px;text-align:center;">
+            <div style="font-size:24px;margin-bottom:8px;">${icon}</div>
+            <div style="font-weight:600;margin-bottom:4px;font-size:13px;">${label}</div>
+            <div style="color:${color};font-size:12px;font-weight:600;">${statusText}</div>
+          </div>`;
+      }
+      container.innerHTML = html;
+
+    } catch (err) {
+      console.error('Fast health check failed:', err);
+      container.innerHTML =
+        `<div style="padding: 12px; border: 2px solid var(--color-danger); border-radius: 8px; text-align: center;">
+          <div style="font-size: 24px; margin-bottom: 8px;">❌</div>
+          <div style="font-weight: 600; margin-bottom: 4px; font-size: 13px;">Health Check Failed</div>
+          <div style="color:var(--color-danger);font-size:12px;font-weight:600;">${err.message}</div>
+         </div>`;
+    }
+  }
 
 
 
@@ -1120,6 +1160,7 @@ if ((job.status || '').startsWith('COMPLETED')) {
 }
 
 html += `<button class="btn btn-sm btn-secondary" onclick="viewJobDetails('${job.job_id}')">👁️</button>
+         <button class="btn btn-sm btn-danger" onclick="deleteJob('${job.job_id}')" title="Delete Job">🗑️</button>
       </div>
     </td>
   </tr>`;
@@ -2016,6 +2057,9 @@ async function refreshDeletionJobs() {
         html += `<button onclick="downloadJobReport('${job.job_id}')" class="btn btn-sm btn-success">📥</button>`;
       }
 
+      // ADDED DELETE BUTTON
+      html += `<button class="btn btn-sm btn-danger" onclick="deleteJob('${job.job_id}')" title="Delete Job">🗑️</button>`;
+
       html += `</div>
         </td>
       </tr>`;
@@ -2032,7 +2076,6 @@ async function refreshDeletionJobs() {
       container.innerHTML = `<div class="alert error">❌ Error loading deletion jobs: ${error.message || error}</div>`;
   }
 }
-
 
 
 // === QUICK QUERY TEMPLATES ===
