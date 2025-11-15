@@ -7,6 +7,9 @@
 [![React](https://img.shields.io/badge/React-18.3.1-blue.svg)](#frontend)
 [![Python](https://img.shields.io/badge/Python-3.11-green.svg)](#backend)
 
+
+Deployed project LIVE webbsite : http://subscriber-migration-portal-prod-frontend.s3-website-us-east-1.amazonaws.com/
+
 ## 📋 Overview
 
 **Production-ready enterprise solution** with **100% automated CI/CD pipeline** for migrating and managing subscriber data using **pure AWS serverless services**. Zero Flask dependencies, complete GitHub Actions automation from code to productionw.
@@ -70,15 +73,9 @@
 🚀 Deployment: GitHub Actions + Blue-Green
 ```
 
-### **Frontend (React 18.3.1)**
+### **Frontend Static**
 ```yaml
-⚙️ Framework: React with hooks and context
-🎨 UI Library: Material-UI 6.x with theming
-📊 State Management: React Query + Context API
-🌐 HTTP Client: Axios with interceptors
-🚀 Build Tool: Create React App with optimization
-📱 PWA: Service worker and offline support
-🏠 Hosting: S3 + CloudFront CDN
+HTML/CSS/JS
 ```
 
 ## 🚀 Automated Deployment
@@ -280,21 +277,7 @@ aws cloudformation validate-template --template-body file://template.yaml
 
 ### **Multi-Region Setup**
 
-```yaml
-Primary Region (us-east-1):
-  - Main application stack
-  - Primary DynamoDB tables
-  - CloudFront origin
 
-Secondary Region (us-west-2):
-  - Disaster recovery stack
-  - DynamoDB global tables
-  - Backup and replication
-
-Edge Locations:
-  - CloudFront CDN (200+ locations)
-  - Lambda@Edge functions
-  - Global content delivery
 ```
 
 ### **Disaster Recovery**
