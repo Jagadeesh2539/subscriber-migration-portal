@@ -18,14 +18,14 @@ Deployed project LIVE webbsite : http://subscriber-migration-portal-prod-fronten
 
 ```
 ┌─────────────────────────┐    ┌─────────────────────────┐    ┌─────────────────────────┐
-│      GitHub Actions       │    │      AWS Services        │    │      React Frontend      │
-│                           │    │                           │    │                           │
+│      GitHub Actions       │    │      AWS Services        │    │      Frontend        │
+│                           │    │                           │    │                      │
 │ ✅ Template Validation   │    │ ✅ Lambda Functions      │    │ ✅ Material-UI Design   │
-│ ✅ Stack Management      │◄──►│ ✅ API Gateway          │◄──►│ ✅ React Query State    │
+│ ✅ Stack Management      │◄──►│ ✅ API Gateway          │◄──►│ ✅  Query State    │
 │ ✅ Lambda Deployment     │    │ ✅ DynamoDB Tables      │    │ ✅ PWA Capabilities     │
 │ ✅ Database Init         │    │ ✅ S3 File Storage      │    │ ✅ Performance Optimized│
-│ ✅ CORS Configuration    │    │ ✅ Secrets Manager      │    │ ✅ Mobile Responsive    │
-│ ✅ Smoke Tests           │    │ ✅ CloudWatch Monitor   │    │ ✅ Dark/Light Theme     │
+│ ✅ CORS Configuration    │    │ ✅ Secrets Manager      │    │ ✅ pc     Responsive    │
+│ ✅ Smoke Tests           │    │ ✅ CloudWatch Monitor   │    │     │
 │ ✅ Blue-Green Deploy     │    │ ✅ Auto-scaling         │    │ ✅ Error Boundaries     │
 │ ✅ Production Gates      │    │ ✅ Security Hardened    │    │ ✅ Code Splitting       │
 └─────────────────────────┘    └─────────────────────────┘    └─────────────────────────┘
